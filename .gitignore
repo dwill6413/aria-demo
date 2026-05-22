@@ -1,26 +1,23 @@
-﻿# Environment variables
+﻿# Environment variables - NEVER COMMIT THESE
 .env
 .env.local
-.env.production
+.env.*.local
 
 # Dependencies
 node_modules/
+.pnp
+.pnp.js
 
-# Next.js build output
+# Next.js
 .next/
-
-# Data folders
-receipts/
-messages/
-reviews/
-calendars/
-
-# Walrus binary
-walrus.exe
-
-# OS files
-.DS_Store
-Thumbs.db
+out/
+build/
 
 # Logs
 *.log
+logs
+
+# Misc
+.DS_Store
+*.swp
+Thumbs.db
