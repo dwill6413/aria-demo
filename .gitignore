@@ -21,3 +21,8 @@ logs
 .DS_Store
 *.swp
 Thumbs.db
+receipts/
+messages/
+reviews/
+walrus.exe
+*.exe
