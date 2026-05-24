@@ -422,6 +422,22 @@ async function executeTool(toolName, toolInput, session) {
       }
       writeFileSync(filePath, JSON.stringify(booking, null, 2));
 
+      // ── Walrus cancellation receipt ───────────────────────────────────────
+      try {
+        const walrusRes  = await fetch('https://publisher.walrus-testnet.walrus.space/v1/blobs?epochs=3', {
+          method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' },
+          body: Buffer.from(JSON.stringify({ ...booking, walrusReceiptType: 'cancellation', cancellationTimestamp: booking.cancelledAt }))
+        });
+        const walrusData = await walrusRes.json();
+        const cancellationWalrusBlobId = walrusData?.newlyCreated?.blobObject?.blobId ?? walrusData?.alreadyCertified?.blobId ?? null;
+        if (cancellationWalrusBlobId) {
+          booking.cancellationWalrusBlobId = cancellationWalrusBlobId;
+          writeFileSync(filePath, JSON.stringify(booking, null, 2));
+        }
+      } catch (walrusErr) {
+        console.warn('AI cancellation Walrus push failed:', walrusErr.message);
+      }
+
       // ── Cancellation email ────────────────────────────────────────────────
       try {
         const { Resend } = await import('resend');
