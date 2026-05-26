@@ -1,11 +1,9 @@
-import { CoreClient as SuiClient } from '@mysten/sui/client';
 import { generateNonce, generateRandomness, jwtToAddress } from '@mysten/sui/zklogin';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { dotenvConfig } from './config.mjs';
 
 dotenvConfig();
 
-const suiClient = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
 
 // In-memory session store (fine for demo)
 const sessions = new Map();

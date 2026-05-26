@@ -2,6 +2,7 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
+import Stripe from 'stripe';
 import { writeFileSync, mkdirSync, existsSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { dotenvConfig } from './config.mjs';
@@ -9,10 +10,12 @@ import { getSuiUSDLiquidity, calculateHostPayout } from './deepbook.mjs';
 import { generateICal, saveExternalCalendar, checkAvailability } from './ical.mjs';
 import { Resend } from 'resend';
 import { registerAIRoute } from './ai_route.mjs';
+import { getZkLoginUrl, handleZkLoginCallback, getSession } from './auth.mjs';
 
 dotenvConfig();
 
 const resend = new Resend(process.env.RESEND_API_KEY);
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const fastify = Fastify({ logger: true });
 
 await fastify.register(cors, {
@@ -24,9 +27,6 @@ await fastify.register(cookie, {
   secret: process.env.SESSION_SECRET
 });
 
-// ── Global rate limit ─────────────────────────────────────────────────────────
-// Every IP is limited to 100 requests per minute across the whole app.
-// Real users never hit this — it only stops bots and accidental request floods.
 await fastify.register(rateLimit, {
   global: true,
   max: 100,
@@ -36,7 +36,6 @@ await fastify.register(rateLimit, {
   })
 });
 
-// ── Native AI Agent route (Grok via xAI) ─────────────────────────────────────
 await registerAIRoute(fastify);
 
 // ─── Health ───────────────────────────────────────────────────────────────────
@@ -48,19 +47,16 @@ fastify.get('/health', async () => {
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 
 fastify.get('/auth/zklogin/init', async (request, reply) => {
-  const { getZkLoginUrl } = await import('./auth.mjs');
   return getZkLoginUrl(request, reply);
 });
 
 fastify.get('/auth/zklogin/callback', async (request, reply) => {
-  const { handleZkLoginCallback } = await import('./auth.mjs');
   return handleZkLoginCallback(request, reply);
 });
 
 fastify.get('/auth/me', async (request, reply) => {
   const sessionId = request.cookies.aria_session;
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const { getSession } = await import('./auth.mjs');
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
   return { address: session.suiAddress, email: session.email, name: session.name };
@@ -76,13 +72,10 @@ fastify.get('/auth/logout', async (request, reply) => {
 fastify.post('/payment/create-intent', async (request, reply) => {
   const sessionId = request.cookies.aria_session;
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const { getSession } = await import('./auth.mjs');
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
 
   const { amount, propertyTitle } = request.body;
-  const Stripe = (await import('stripe')).default;
-  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
   const paymentIntent = await stripe.paymentIntents.create({
     amount: amount * 100,
     currency: 'usd',
@@ -92,8 +85,6 @@ fastify.post('/payment/create-intent', async (request, reply) => {
 });
 
 // ─── Booking Create ───────────────────────────────────────────────────────────
-// Rate limit: 5 bookings per 15 minutes per IP
-// Validation: propertyId, checkIn, checkOut, nights, totalAmount all required and valid
 
 fastify.post('/booking/create', {
   config: {
@@ -106,48 +97,32 @@ fastify.post('/booking/create', {
 }, async (request, reply) => {
   const sessionId = request.cookies.aria_session;
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const { getSession } = await import('./auth.mjs');
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
 
-  // ── Input validation ──────────────────────────────────────────────────────
   const { propertyId, propertyTitle, nights, totalAmount } = request.body;
   const checkInRaw  = request.body.checkIn;
   const checkOutRaw = request.body.checkOut;
 
-  // Required fields
-  if (!propertyId || !checkInRaw || !checkOutRaw) {
+  if (!propertyId || !checkInRaw || !checkOutRaw)
     return reply.code(400).send({ error: 'propertyId, checkIn, and checkOut are required' });
-  }
-  // propertyId must be 1–6
-  if (![1,2,3,4,5,6].includes(Number(propertyId))) {
+  if (![1,2,3,4,5,6].includes(Number(propertyId)))
     return reply.code(400).send({ error: 'propertyId must be between 1 and 6' });
-  }
-  // Dates must be valid
-  if (isNaN(new Date(checkInRaw)) || isNaN(new Date(checkOutRaw))) {
+  if (isNaN(new Date(checkInRaw)) || isNaN(new Date(checkOutRaw)))
     return reply.code(400).send({ error: 'checkIn and checkOut must be valid dates (YYYY-MM-DD)' });
-  }
-  // checkOut must be after checkIn
-  if (new Date(checkOutRaw) <= new Date(checkInRaw)) {
+  if (new Date(checkOutRaw) <= new Date(checkInRaw))
     return reply.code(400).send({ error: 'checkOut must be after checkIn' });
-  }
-  // nights must be 1–90
-  if (!nights || nights < 1 || nights > 90) {
+  if (!nights || nights < 1 || nights > 90)
     return reply.code(400).send({ error: 'nights must be between 1 and 90' });
-  }
-  // totalAmount must be positive
-  if (!totalAmount || totalAmount <= 0) {
+  if (!totalAmount || totalAmount <= 0)
     return reply.code(400).send({ error: 'totalAmount must be a positive number' });
-  }
-  // ── End validation ────────────────────────────────────────────────────────
 
-  const checkIn = new Date(checkInRaw);
-  const checkOut = new Date(checkOutRaw);
-
+  const checkIn    = new Date(checkInRaw);
+  const checkOut   = new Date(checkOutRaw);
   const checkInStr  = checkIn.toISOString().split('T')[0];
   const checkOutStr = checkOut.toISOString().split('T')[0];
 
-  // ── Double-booking guard ──────────────────────────────────────────────────
+  // Double-booking guard
   try {
     const receiptsDir = join(process.cwd(), 'receipts');
     if (existsSync(receiptsDir)) {
@@ -209,8 +184,8 @@ fastify.post('/booking/create', {
 
   try {
     const emailRows = [['Booking Ref',bookingRef],['Check-in',checkInStr],['Check-out',checkOutStr],['Nights',nights],['Price per night',receipt.breakdown.pricePerNight],['Subtotal',receipt.breakdown.subtotal],['ARIA Fee (3%)',receipt.breakdown.ariaFee],['Taxes (8%)',receipt.breakdown.taxes]];
-    const rowsHtml   = emailRows.map(([l,v]) => `<tr><td style="color:#888;padding:6px 0">${l}</td><td style="text-align:right">${v}</td></tr>`).join('');
-    const totalRow   = `<tr style="border-top:1px solid #333"><td style="padding:10px 0;font-weight:700">Total Paid</td><td style="text-align:right;font-weight:700;color:#00ff44">${receipt.breakdown.totalPaid}</td></tr>`;
+    const rowsHtml  = emailRows.map(([l,v]) => `<tr><td style="color:#888;padding:6px 0">${l}</td><td style="text-align:right">${v}</td></tr>`).join('');
+    const totalRow  = `<tr style="border-top:1px solid #333"><td style="padding:10px 0;font-weight:700">Total Paid</td><td style="text-align:right;font-weight:700;color:#00ff44">${receipt.breakdown.totalPaid}</td></tr>`;
     const walrusHtml = walrusBlobId ? `<div style="background:#111;border:1px solid #222;border-radius:8px;padding:16px;margin-bottom:20px"><p style="margin:0 0 8px;font-size:12px;color:#555">WALRUS RECEIPT — PERMANENT ON-CHAIN RECORD</p><p style="margin:0;font-size:11px;color:#00ff44;word-break:break-all;font-family:monospace">${walrusBlobId}</p></div>` : '';
     await resend.emails.send({ from: 'ARIA <onboarding@resend.dev>', to: session.email, subject: `Booking Confirmed — ${propertyTitle} | Ref: ${bookingRef}`, html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px"><h1 style="color:#00ff44;font-size:24px;margin:0 0 8px">✅ Booking Confirmed</h1><p style="color:#888;margin:0 0 24px">Your ARIA booking receipt — ${session.name}</p><div style="background:#111;border:1px solid #222;border-radius:8px;padding:20px;margin-bottom:20px"><h2 style="margin:0 0 16px;font-size:18px">${propertyTitle}</h2><table style="width:100%;border-collapse:collapse">${rowsHtml}${totalRow}</table></div>${walrusHtml}<p style="color:#555;font-size:12px;text-align:center;margin:0">Powered by ARIA — Built on Sui | The Airbnb killer</p></div>` });
   } catch (err) { fastify.log.warn({ err }, 'Booking confirmation email failed'); }
@@ -219,8 +194,6 @@ fastify.post('/booking/create', {
 });
 
 // ─── Booking Cancel ───────────────────────────────────────────────────────────
-// Rate limit: 10 cancellations per hour per IP
-// Validation: bookingRef must exist and start with "ARIA-"
 
 fastify.post('/booking/cancel', {
   config: {
@@ -233,16 +206,12 @@ fastify.post('/booking/cancel', {
 }, async (request, reply) => {
   const sessionId = request.cookies.aria_session;
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const { getSession } = await import('./auth.mjs');
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
 
-  // ── Input validation ──────────────────────────────────────────────────────
   const { bookingRef } = request.body;
-  if (!bookingRef || typeof bookingRef !== 'string' || !bookingRef.startsWith('ARIA-')) {
+  if (!bookingRef || typeof bookingRef !== 'string' || !bookingRef.startsWith('ARIA-'))
     return reply.code(400).send({ error: 'A valid bookingRef is required (e.g. ARIA-1-1234567890)' });
-  }
-  // ── End validation ────────────────────────────────────────────────────────
 
   try {
     const filePath = join(process.cwd(), 'receipts', bookingRef + '.json');
@@ -286,8 +255,6 @@ fastify.post('/booking/cancel', {
 });
 
 // ─── Release Deposit ──────────────────────────────────────────────────────────
-// Rate limit: 10 releases per hour per IP
-// Validation: bookingRef must exist and start with "ARIA-"
 
 fastify.post('/booking/release-deposit', {
   config: {
@@ -300,16 +267,12 @@ fastify.post('/booking/release-deposit', {
 }, async (request, reply) => {
   const sessionId = request.cookies.aria_session;
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const { getSession } = await import('./auth.mjs');
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
 
-  // ── Input validation ──────────────────────────────────────────────────────
   const { bookingRef } = request.body;
-  if (!bookingRef || typeof bookingRef !== 'string' || !bookingRef.startsWith('ARIA-')) {
+  if (!bookingRef || typeof bookingRef !== 'string' || !bookingRef.startsWith('ARIA-'))
     return reply.code(400).send({ error: 'A valid bookingRef is required (e.g. ARIA-1-1234567890)' });
-  }
-  // ── End validation ────────────────────────────────────────────────────────
 
   try {
     const filePath = join(process.cwd(), 'receipts', bookingRef + '.json');
@@ -347,7 +310,6 @@ async function pushToWalrus(data) {
 fastify.get('/bookings/history', async (request, reply) => {
   const sessionId = request.cookies.aria_session;
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const { getSession } = await import('./auth.mjs');
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
   try {
@@ -364,7 +326,6 @@ fastify.get('/bookings/history', async (request, reply) => {
 fastify.get('/bookings/all', async (request, reply) => {
   const sessionId = request.cookies.aria_session;
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const { getSession } = await import('./auth.mjs');
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
   try {
@@ -381,7 +342,6 @@ fastify.get('/bookings/all', async (request, reply) => {
 fastify.get('/deepbook/payout/:amount', async (request, reply) => {
   const sessionId = request.cookies.aria_session;
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const { getSession } = await import('./auth.mjs');
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
   const amount = parseFloat(request.params.amount);
@@ -405,7 +365,6 @@ fastify.get('/ical/:propertyId', async (request, reply) => {
 fastify.post('/ical/import', async (request, reply) => {
   const sessionId = request.cookies.aria_session;
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const { getSession } = await import('./auth.mjs');
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
   const { propertyId, platform, icalUrl } = request.body;
@@ -427,7 +386,6 @@ fastify.get('/availability/:propertyId', async (request, reply) => {
 fastify.post('/messages/send', async (request, reply) => {
   const sessionId = request.cookies.aria_session;
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const { getSession } = await import('./auth.mjs');
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
   const { bookingRef, message } = request.body;
@@ -446,7 +404,6 @@ fastify.post('/messages/send', async (request, reply) => {
 fastify.get('/messages/:bookingRef', async (request, reply) => {
   const sessionId = request.cookies.aria_session;
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const { getSession } = await import('./auth.mjs');
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
   const { bookingRef } = request.params;
@@ -460,7 +417,6 @@ fastify.get('/messages/:bookingRef', async (request, reply) => {
 fastify.post('/messages/:bookingRef/read', async (request, reply) => {
   const sessionId = request.cookies.aria_session;
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const { getSession } = await import('./auth.mjs');
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
   const { bookingRef } = request.params;
@@ -476,7 +432,6 @@ fastify.post('/messages/:bookingRef/read', async (request, reply) => {
 fastify.get('/messages/:bookingRef/count', async (request, reply) => {
   const sessionId = request.cookies.aria_session;
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const { getSession } = await import('./auth.mjs');
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
   const { bookingRef } = request.params;
@@ -500,7 +455,6 @@ fastify.get('/messages/:bookingRef/count', async (request, reply) => {
 fastify.post('/reviews/submit', async (request, reply) => {
   const sessionId = request.cookies.aria_session;
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const { getSession } = await import('./auth.mjs');
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
   const { propertyId, bookingRef, rating, review } = request.body;
@@ -532,7 +486,6 @@ fastify.get('/reviews/:propertyId', async (request, reply) => {
 fastify.get('/reviews/all', async (request, reply) => {
   const sessionId = request.cookies.aria_session;
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const { getSession } = await import('./auth.mjs');
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
   try {
