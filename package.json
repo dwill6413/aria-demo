@@ -11,14 +11,7 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "devEngines": {
-    "packageManager": {
-      "name": "pnpm",
-      "version": "^11.1.2",
-      "onFail": "download"
-    }
-  },
-  "type": "module",
+    "type": "module",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.96.0",
     "@fastify/cookie": "^11.0.2",
