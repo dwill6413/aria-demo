@@ -319,6 +319,7 @@ fastify.get('/bookings/history', async (request, reply) => {
       checkIn: b.check_in, checkOut: b.check_out, nights: b.nights,
       totalAmount: b.total_amount, paymentStatus: b.payment_status,
       depositStatus: b.deposit_status, walrusBlobId: b.walrus_blob_id,
+      cancellationWalrusBlobId: b.cancellation_walrus_blob_id,
       timestamp: b.created_at, walletAddress: b.wallet_address,
       breakdown: {
         pricePerNight: `$${b.price_per_night}`, nights: b.nights,
@@ -343,6 +344,7 @@ fastify.get('/bookings/all', async (request, reply) => {
       checkIn: b.check_in, checkOut: b.check_out, nights: b.nights,
       totalAmount: b.total_amount, paymentStatus: b.payment_status,
       depositStatus: b.deposit_status, walrusBlobId: b.walrus_blob_id,
+      cancellationWalrusBlobId: b.cancellation_walrus_blob_id,
       guestName: b.guest_name, guestEmail: b.guest_email,
       walletAddress: b.wallet_address, timestamp: b.created_at,
       breakdown: {
