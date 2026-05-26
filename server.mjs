@@ -11,8 +11,10 @@ import { generateICal, saveExternalCalendar, checkAvailability } from './ical.mj
 import { Resend } from 'resend';
 import { registerAIRoute } from './ai_route.mjs';
 import { getZkLoginUrl, handleZkLoginCallback, getSession } from './auth.mjs';
+import { initDB, pool } from './db.mjs';
 
 dotenvConfig();
+await initDB();
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
