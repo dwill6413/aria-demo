@@ -41,7 +41,7 @@ const maxEpoch = parseInt(epochData.result.epoch) + 10;
   const params = new URLSearchParams({
     client_id: process.env.GOOGLE_CLIENT_ID,
     response_type: 'id_token',
-    redirect_uri: 'http://localhost:3000/auth/zklogin/callback',
+    redirect_uri: process.env.GOOGLE_CALLBACK_URL || 'http://localhost:3000/auth/zklogin/callback',
     scope: 'openid email profile',
     nonce,
     state: nonceId
