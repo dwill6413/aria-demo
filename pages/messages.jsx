@@ -14,7 +14,7 @@ export default function Messages() {
 
   // Load user session first
   useEffect(() => {
-    fetch('http://localhost:3001/auth/me', { credentials: 'include' })
+    fetch('https://aria-demo-production-e590.up.railway.app/auth/me', { credentials: 'include' })
       .then(res => res.json())
       .then(data => {
         if (!data.address) { router.push('/'); return; }
@@ -40,11 +40,11 @@ export default function Messages() {
   const fetchMessages = async () => {
     if (!bookingRef) return;
     try {
-      const res  = await fetch(`http://localhost:3001/messages/${bookingRef}`, { credentials: 'include' });
+      const res  = await fetch(`https://aria-demo-production-e590.up.railway.app/messages/${bookingRef}`, { credentials: 'include' });
       const data = await res.json();
       setMessages(data.messages || []);
       // Mark thread as read
-      fetch(`http://localhost:3001/messages/${bookingRef}/read`, { method: 'POST', credentials: 'include' });
+      fetch(`https://aria-demo-production-e590.up.railway.app/messages/${bookingRef}/read`, { method: 'POST', credentials: 'include' });
     } catch (err) {
       console.error('Failed to fetch messages:', err);
     }
@@ -55,7 +55,7 @@ export default function Messages() {
     setSending(true);
     setSendError('');
     try {
-      const res  = await fetch('http://localhost:3001/messages/send', {
+      const res  = await fetch('https://aria-demo-production-e590.up.railway.app/messages/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',

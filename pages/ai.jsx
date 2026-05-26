@@ -155,7 +155,7 @@ export default function AI() {
     const storedMode = sessionStorage.getItem('aria_ai_mode');
     if (storedMode === 'host') setIsHost(true);
 
-    fetch('http://localhost:3001/auth/me', { credentials: 'include' })
+    fetch('https://aria-demo-production-e590.up.railway.app/auth/me', { credentials: 'include' })
       .then(r => r.json())
       .then(data => {
         if (!data.address) { router.push('/'); return; }
@@ -185,7 +185,7 @@ export default function AI() {
     setSending(true);
 
     try {
-      const res = await fetch('http://localhost:3001/api/ai/chat', {
+      const res = await fetch('https://aria-demo-production-e590.up.railway.app/api/ai/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',

@@ -25,25 +25,25 @@ export default function Host() {
   const [messageCounts, setMessageCounts] = useState({});
 
   useEffect(() => {
-    fetch('http://localhost:3001/auth/me', { credentials: 'include' })
+    fetch('https://aria-demo-production-e590.up.railway.app/auth/me', { credentials: 'include' })
       .then(res => res.json())
       .then(async data => {
         if (!data.address) { router.push('/'); return; }
         setUser(data);
-        const bkRes = await fetch('http://localhost:3001/bookings/all', { credentials: 'include' });
+        const bkRes = await fetch('https://aria-demo-production-e590.up.railway.app/bookings/all', { credentials: 'include' });
         const bkData = await bkRes.json();
         const bks = bkData.bookings || [];
         setBookings(bks);
         const counts = {};
         await Promise.all(bks.filter(b => b.paymentStatus !== 'cancelled').map(async b => {
           try {
-            const r = await fetch(`http://localhost:3001/messages/${b.bookingRef}/count`, { credentials: 'include' });
+            const r = await fetch(`https://aria-demo-production-e590.up.railway.app/messages/${b.bookingRef}/count`, { credentials: 'include' });
             const d = await r.json();
             counts[b.bookingRef] = d.count || 0;
           } catch { counts[b.bookingRef] = 0; }
         }));
         setMessageCounts(counts);
-        const rvRes = await fetch('http://localhost:3001/reviews/all', { credentials: 'include' });
+        const rvRes = await fetch('https://aria-demo-production-e590.up.railway.app/reviews/all', { credentials: 'include' });
         const rvData = await rvRes.json();
         setReviews(rvData.reviews || []);
         setLoading(false);
@@ -52,7 +52,7 @@ export default function Host() {
   }, []);
 
   const copyICal = (propertyId) => {
-    const url = `http://localhost:3001/ical/${propertyId}`;
+    const url = `https://aria-demo-production-e590.up.railway.app/ical/${propertyId}`;
     navigator.clipboard.writeText(url);
     setCopiedId(propertyId);
     setTimeout(() => setCopiedId(null), 2000);
@@ -62,7 +62,7 @@ export default function Host() {
     const url = icalInputs[propertyId];
     if (!url) return;
     setIcalSaving(prev => ({ ...prev, [propertyId]: true }));
-    const res = await fetch('http://localhost:3001/ical/import', {
+    const res = await fetch('https://aria-demo-production-e590.up.railway.app/ical/import', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -79,7 +79,7 @@ export default function Host() {
   const handleReleaseDeposit = async (bookingRef) => {
     if (!confirm('Release deposit back to guest? This cannot be undone.')) return;
     setReleasingId(bookingRef);
-    const res = await fetch('http://localhost:3001/booking/release-deposit', {
+    const res = await fetch('https://aria-demo-production-e590.up.railway.app/booking/release-deposit', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -88,7 +88,7 @@ export default function Host() {
     const data = await res.json();
     if (data.success) {
       // Refresh from server to get depositReleaseWalrusBlobId
-      const bkRes = await fetch('http://localhost:3001/bookings/all', { credentials: 'include' });
+      const bkRes = await fetch('https://aria-demo-production-e590.up.railway.app/bookings/all', { credentials: 'include' });
       const bkData = await bkRes.json();
       setBookings(bkData.bookings || []);
     }

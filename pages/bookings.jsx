@@ -16,7 +16,7 @@ export default function Bookings() {
   const handleSubmitReview = async () => {
     if (!reviewText.trim()) return;
     setReviewSubmitting(true);
-    const res = await fetch('http://localhost:3001/reviews/submit', {
+    const res = await fetch('https://aria-demo-production-e590.up.railway.app/reviews/submit', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -40,7 +40,7 @@ export default function Bookings() {
   const handleCancel = async (bookingRef) => {
     if (!confirm('Cancel this booking? You will receive a full refund within 24 hours.')) return;
     setCancellingId(bookingRef);
-    const res = await fetch('http://localhost:3001/booking/cancel', {
+    const res = await fetch('https://aria-demo-production-e590.up.railway.app/booking/cancel', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -49,7 +49,7 @@ export default function Bookings() {
     const data = await res.json();
     if (data.success) {
       // Refresh bookings from server to get updated Walrus blob IDs
-      const updated = await fetch('http://localhost:3001/bookings/history', { credentials: 'include' });
+      const updated = await fetch('https://aria-demo-production-e590.up.railway.app/bookings/history', { credentials: 'include' });
       const updatedData = await updated.json();
       setBookings(updatedData.bookings || []);
     }
@@ -57,12 +57,12 @@ export default function Bookings() {
   };
 
   useEffect(() => {
-    fetch('http://localhost:3001/auth/me', { credentials: 'include' })
+    fetch('https://aria-demo-production-e590.up.railway.app/auth/me', { credentials: 'include' })
       .then(res => res.json())
       .then(data => {
         if (!data.address) { router.push('/'); return; }
         setUser(data);
-        return fetch('http://localhost:3001/bookings/history', { credentials: 'include' });
+        return fetch('https://aria-demo-production-e590.up.railway.app/bookings/history', { credentials: 'include' });
       })
       .then(res => res.json())
       .then(data => {
