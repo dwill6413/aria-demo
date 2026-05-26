@@ -14,7 +14,7 @@ import { getZkLoginUrl, handleZkLoginCallback, getSession } from './auth.mjs';
 import { initDB, pool } from './db.mjs';
 
 dotenvConfig();
-await initDB();
+try { await initDB(); } catch (err) { console.error('DB init failed:', err.message); }
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
