@@ -142,7 +142,7 @@ export default function Home() {
   };
 
   useEffect(() => {
-    fetch('http://localhost:3001/auth/me', { credentials: 'include' })
+    fetch('https://aria-demo-production-e590.up.railway.app/auth/me', { credentials: 'include' })
       .then(res => res.json())
       .then(data => {
         if (data.address) setUser(data);
@@ -151,7 +151,7 @@ export default function Home() {
       .catch(() => setLoading(false));
 
     Promise.all(PROPERTIES.map(p =>
-      fetch(`http://localhost:3001/reviews/${p.id}`)
+      fetch(`https://aria-demo-production-e590.up.railway.app/reviews/${p.id}`)
         .then(r => r.json())
         .then(d => ({ id: p.id, rating: d.averageRating, count: d.count }))
         .catch(() => ({ id: p.id, rating: 0, count: 0 }))
@@ -169,13 +169,13 @@ export default function Home() {
   };
 
   const handleLogin = async () => {
-    const res = await fetch('http://localhost:3001/auth/zklogin/init');
+    const res = await fetch('https://aria-demo-production-e590.up.railway.app/auth/zklogin/init');
     const { url } = await res.json();
     window.location.href = url;
   };
 
   const handleLogout = async () => {
-    await fetch('http://localhost:3001/auth/logout', { credentials: 'include' });
+    await fetch('https://aria-demo-production-e590.up.railway.app/auth/logout', { credentials: 'include' });
     setUser(null);
   };
 
@@ -183,7 +183,7 @@ export default function Home() {
     if (!checkIn || !checkOut) { alert('Please select check-in and check-out dates'); return; }
     if (nights < 1) { alert('Check-out must be after check-in'); return; }
     setBookingLoading(true);
-    const res = await fetch('http://localhost:3001/booking/create', {
+    const res = await fetch('https://aria-demo-production-e590.up.railway.app/booking/create', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -210,7 +210,7 @@ export default function Home() {
   const handleCardPayment = async () => {
     if (!checkIn || !checkOut) { alert('Please select check-in and check-out dates'); return; }
     setBookingLoading(true);
-    const res = await fetch('http://localhost:3001/payment/create-intent', {
+    const res = await fetch('https://aria-demo-production-e590.up.railway.app/payment/create-intent', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
