@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
+  "type": "module",
   "scripts": {
     "dev": "next dev",
     "dev:api": "node server.mjs",
@@ -12,7 +13,6 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-    "type": "module",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.96.0",
     "@fastify/cookie": "^11.0.2",
@@ -27,14 +27,12 @@
     "ical-generator": "^10.2.0",
     "ical.js": "^2.2.1",
     "node-fetch": "^3.3.2",
+    "next": "^16.2.6",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
     "react-datepicker": "^9.1.0",
     "resend": "^6.12.3",
     "stripe": "^22.1.1",
     "zod": "^4.4.3"
-  },
-  "devDependencies": {
-    "next": "^16.2.6",
-    "react": "^19.2.6",
-    "react-dom": "^19.2.6"
   }
 }
