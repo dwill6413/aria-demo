@@ -15,7 +15,7 @@ export default function Callback() {
       return;
     }
 
-    fetch(`http://localhost:3001/auth/zklogin/callback?state=${state}&id_token=${id_token}`, {
+    fetch(`https://aria-demo-production-e590.up.railway.app/auth/zklogin/callback?state=${state}&id_token=${id_token}`, {
   credentials: 'include',
   redirect: 'manual'
 })
