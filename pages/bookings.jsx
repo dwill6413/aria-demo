@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 
+const fmtDate = (d) => new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
 export default function Bookings() {
   const router = useRouter();
   const [user, setUser] = useState(null);
@@ -48,7 +50,6 @@ export default function Bookings() {
     });
     const data = await res.json();
     if (data.success) {
-      // Refresh bookings from server to get updated Walrus blob IDs
       const updated = await fetch('https://aria-demo-production-e590.up.railway.app/bookings/history', { credentials: 'include' });
       const updatedData = await updated.json();
       setBookings(updatedData.bookings || []);
@@ -149,7 +150,7 @@ export default function Bookings() {
                   </div>
                   <div style={{ textAlign: 'right' }}>
                     <div style={{ fontSize: '20px', fontWeight: '700', color: b.paymentStatus === 'cancelled' ? '#555' : '#00ff44', textDecoration: b.paymentStatus === 'cancelled' ? 'line-through' : 'none' }}>
-                      {b.breakdown?.totalPaid || `$${b.totalAmount}`}
+                      {b.chargeAmount ? `$${b.chargeAmount} SuiUSD` : b.breakdown?.totalPaid || `$${b.totalAmount}`}
                     </div>
                     <div style={{ fontSize: '11px', color: '#555', marginTop: '2px' }}>{b.paymentMethod || 'SuiUSD'}</div>
                   </div>
@@ -159,11 +160,11 @@ export default function Bookings() {
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '12px', marginBottom: '16px' }}>
                   <div style={{ background: '#1a1a1a', borderRadius: '8px', padding: '12px' }}>
                     <div style={{ fontSize: '10px', color: '#555', marginBottom: '4px' }}>CHECK-IN</div>
-                    <div style={{ fontSize: '14px', fontWeight: '600' }}>{b.checkIn}</div>
+                    <div style={{ fontSize: '14px', fontWeight: '600' }}>{fmtDate(b.checkIn)}</div>
                   </div>
                   <div style={{ background: '#1a1a1a', borderRadius: '8px', padding: '12px' }}>
                     <div style={{ fontSize: '10px', color: '#555', marginBottom: '4px' }}>CHECK-OUT</div>
-                    <div style={{ fontSize: '14px', fontWeight: '600' }}>{b.checkOut}</div>
+                    <div style={{ fontSize: '14px', fontWeight: '600' }}>{fmtDate(b.checkOut)}</div>
                   </div>
                   <div style={{ background: '#1a1a1a', borderRadius: '8px', padding: '12px' }}>
                     <div style={{ fontSize: '10px', color: '#555', marginBottom: '4px' }}>NIGHTS</div>
@@ -171,7 +172,7 @@ export default function Bookings() {
                   </div>
                   <div style={{ background: '#1a1a1a', borderRadius: '8px', padding: '12px' }}>
                     <div style={{ fontSize: '10px', color: '#555', marginBottom: '4px' }}>BOOKED ON</div>
-                    <div style={{ fontSize: '14px', fontWeight: '600' }}>{new Date(b.timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</div>
+                    <div style={{ fontSize: '14px', fontWeight: '600' }}>{fmtDate(b.timestamp)}</div>
                   </div>
                 </div>
 
@@ -185,14 +186,25 @@ export default function Bookings() {
                       <span style={{ color: '#888' }}>Subtotal</span><span>{b.breakdown.subtotal}</span>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                      <span style={{ color: '#888' }}>ARIA fee</span><span style={{ color: '#00ff44' }}>{b.breakdown.ariaFee}</span>
+                      <span style={{ color: '#888' }}>ARIA fee (stay only)</span><span style={{ color: '#00ff44' }}>{b.breakdown.ariaFee}</span>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', paddingBottom: '8px', borderBottom: '1px solid #333' }}>
                       <span style={{ color: '#888' }}>Taxes</span><span>{b.breakdown.taxes}</span>
                     </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: '700' }}>
-                      <span>Total Paid</span><span style={{ color: '#00ff44' }}>{b.breakdown.totalPaid}</span>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px', fontWeight: '600' }}>
+                      <span>Stay total</span><span style={{ color: '#00ff44' }}>{b.breakdown.totalPaid}</span>
                     </div>
+                    {b.depositAmount && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', paddingBottom: '8px', borderBottom: '1px solid #333' }}>
+                        <span style={{ color: '#4a9eff' }}>🔒 Refundable deposit (no ARIA fee)</span>
+                        <span style={{ color: '#4a9eff' }}>${b.depositAmount}</span>
+                      </div>
+                    )}
+                    {b.chargeAmount && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: '700' }}>
+                        <span>Total charged</span><span style={{ color: '#fff' }}>${b.chargeAmount} SuiUSD</span>
+                      </div>
+                    )}
                   </div>
                 )}
 

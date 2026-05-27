@@ -99,36 +99,23 @@ export default function Home() {
     ? Math.round((checkOut - checkIn) / (1000 * 60 * 60 * 24))
     : 0;
 
-  // ── Pricing helpers — single source of truth, matches server exactly ──────────
-  const getSubtotal  = (p, n) => p.price * n;
-  const getAriaFee   = (p, n) => Math.round(getSubtotal(p, n) * 0.03);
-  const getTax       = (p, n) => Math.round(getSubtotal(p, n) * 0.08);
-  const getTotal     = (p, n) => getSubtotal(p, n) + getAriaFee(p, n) + getTax(p, n);
-  const getDeposit   = (p, n) => Math.round(getTotal(p, n) * 0.20);
-  const getCardTotal = (p, n) => (getTotal(p, n) * 1.029 + 0.30).toFixed(2);
-  const getCardFee   = (p, n) => (getTotal(p, n) * 0.029 + 0.30).toFixed(2);
+  // Pricing helpers — single source of truth, matches server exactly
+  // ARIA fee on subtotal only, never on deposit
+  const getSubtotal    = (p, n) => p.price * n;
+  const getAriaFee     = (p, n) => Math.round(getSubtotal(p, n) * 0.03);
+  const getTax         = (p, n) => Math.round(getSubtotal(p, n) * 0.08);
+  const getBookingTotal= (p, n) => getSubtotal(p, n) + getAriaFee(p, n) + getTax(p, n);
+  const getDeposit     = (p, n) => Math.round(getBookingTotal(p, n) * 0.20);
+  const getChargeTotal = (p, n) => getBookingTotal(p, n) + getDeposit(p, n);
+  const getCardTotal   = (p, n) => (getChargeTotal(p, n) * 1.029 + 0.30).toFixed(2);
+  const getCardFee     = (p, n) => (getChargeTotal(p, n) * 0.029 + 0.30).toFixed(2);
 
-  const openModal = (p) => {
-    setSelected(p);
-    setBooking(null);
-    setCheckIn(null);
-    setCheckOut(null);
-    setPhotoIndex(0);
-  };
-
-  const closeModal = () => {
-    setSelected(null);
-    setBooking(null);
-    setCheckIn(null);
-    setCheckOut(null);
-    setPhotoIndex(0);
-  };
+  const openModal = (p) => { setSelected(p); setBooking(null); setCheckIn(null); setCheckOut(null); setPhotoIndex(0); };
+  const closeModal = () => { setSelected(null); setBooking(null); setCheckIn(null); setCheckOut(null); setPhotoIndex(0); };
 
   const handleSearch = () => {
     let results = PROPERTIES;
-    if (searchLocation !== 'All Locations') {
-      results = results.filter(p => p.location === searchLocation);
-    }
+    if (searchLocation !== 'All Locations') results = results.filter(p => p.location === searchLocation);
     setFilteredProperties(results);
     setSearched(true);
   };
@@ -144,10 +131,7 @@ export default function Home() {
   useEffect(() => {
     fetch('https://aria-demo-production-e590.up.railway.app/auth/me', { credentials: 'include' })
       .then(res => res.json())
-      .then(data => {
-        if (data.address) setUser(data);
-        setLoading(false);
-      })
+      .then(data => { if (data.address) setUser(data); setLoading(false); })
       .catch(() => setLoading(false));
 
     Promise.all(PROPERTIES.map(p =>
@@ -192,7 +176,7 @@ export default function Home() {
         propertyTitle: selected.title,
         pricePerNight: selected.price,
         nights,
-        totalAmount:   getTotal(selected, nights),
+        totalAmount:   getBookingTotal(selected, nights),
         checkIn:       checkIn.toISOString().split('T')[0],
         checkOut:      checkOut.toISOString().split('T')[0]
       })
@@ -214,7 +198,7 @@ export default function Home() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ amount: getTotal(selected, nights), propertyTitle: selected.title })
+      body: JSON.stringify({ amount: getChargeTotal(selected, nights), propertyTitle: selected.title })
     });
     const data = await res.json();
     if (data.clientSecret) { setBooking({ bookingRef: 'STRIPE-' + Date.now(), stripeIntent: true }); }
@@ -222,9 +206,7 @@ export default function Home() {
   };
 
   if (loading) return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#0a0a0a', color: '#fff' }}>
-      Loading...
-    </div>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#0a0a0a', color: '#fff' }}>Loading...</div>
   );
 
   if (!user) return (
@@ -462,7 +444,7 @@ export default function Home() {
 
                   {/* ARIA fee */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                    <span style={{ color: '#888', fontSize: '14px' }}>ARIA fee (3%)</span>
+                    <span style={{ color: '#888', fontSize: '14px' }}>ARIA fee (3% of stay cost)</span>
                     <span style={{ fontSize: '14px', color: '#00ff44' }}>${getAriaFee(selected, nights)}</span>
                   </div>
 
@@ -472,22 +454,30 @@ export default function Home() {
                     <span style={{ fontSize: '14px', color: '#888' }}>${getTax(selected, nights)}</span>
                   </div>
 
+                  {/* Booking total */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
+                    <span style={{ fontSize: '14px', fontWeight: '600', color: '#fff' }}>Stay total</span>
+                    <span style={{ fontSize: '14px', fontWeight: '700', color: '#00ff44' }}>${getBookingTotal(selected, nights)}</span>
+                  </div>
+
                   {/* Security deposit */}
                   <div style={{ background: '#0a0a1a', border: '1px solid #1a1a3a', borderRadius: '6px', padding: '10px', marginBottom: '12px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                      <span style={{ fontSize: '13px', color: '#4a9eff', fontWeight: '600' }}>🔒 Security deposit</span>
+                      <span style={{ fontSize: '13px', color: '#4a9eff', fontWeight: '600' }}>🔒 Refundable security deposit</span>
                       <span style={{ fontSize: '13px', color: '#4a9eff', fontWeight: '700' }}>${getDeposit(selected, nights)}</span>
                     </div>
-                    <p style={{ color: '#555', fontSize: '11px', margin: 0, lineHeight: '1.5' }}>Held in Sui escrow. Fully refundable after checkout. Not included in payment total.</p>
+                    <p style={{ color: '#555', fontSize: '11px', margin: 0, lineHeight: '1.5' }}>
+                      Held in Sui escrow until checkout. Returned in full — no ARIA fee on deposit.
+                    </p>
                   </div>
 
-                  {/* Grand total */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', padding: '10px 0', borderTop: '1px solid #333' }}>
+                  {/* Grand total charged */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#0d0d0d', border: '1px solid #333', borderRadius: '6px', padding: '12px', marginBottom: '12px' }}>
                     <div>
-                      <span style={{ fontSize: '14px', fontWeight: '700', color: '#fff' }}>Total due at checkout</span>
-                      <div style={{ fontSize: '11px', color: '#555', marginTop: '2px' }}>Booking + refundable deposit</div>
+                      <div style={{ fontSize: '14px', fontWeight: '700', color: '#fff' }}>Total charged today</div>
+                      <div style={{ fontSize: '11px', color: '#555', marginTop: '2px' }}>Stay + refundable deposit</div>
                     </div>
-                    <span style={{ fontSize: '18px', fontWeight: '700', color: '#fff' }}>${getTotal(selected, nights) + getDeposit(selected, nights)}</span>
+                    <span style={{ fontSize: '20px', fontWeight: '700', color: '#fff' }}>${getChargeTotal(selected, nights)}</span>
                   </div>
 
                   {/* SuiUSD */}
@@ -499,7 +489,7 @@ export default function Home() {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <span style={{ color: '#666', fontSize: '12px' }}>Gas fee ~$0.02</span>
                       <span style={{ fontWeight: '700', fontSize: '16px', color: '#00ff44' }}>
-                        ${getTotal(selected, nights)}<span style={{ fontSize: '11px', color: '#555' }}>.02</span>
+                        ${getChargeTotal(selected, nights)}<span style={{ fontSize: '11px', color: '#555' }}>.02</span>
                       </span>
                     </div>
                   </div>
@@ -539,7 +529,7 @@ export default function Home() {
 
               <button onClick={handleBooking} disabled={bookingLoading || !checkIn || !checkOut}
                 style={{ width: '100%', background: bookingLoading ? '#444' : (!checkIn || !checkOut) ? '#1a2a1a' : '#00ff44', color: (!checkIn || !checkOut) ? '#555' : '#000', border: 'none', borderRadius: '8px', padding: '14px', fontWeight: '700', fontSize: '15px', cursor: (!checkIn || !checkOut) ? 'not-allowed' : 'pointer', marginBottom: '8px' }}>
-                {bookingLoading ? 'Processing on Sui...' : (!checkIn || !checkOut) ? 'Select dates to book' : `Book Now – Pay $${getTotal(selected, nights)} SuiUSD`}
+                {bookingLoading ? 'Processing on Sui...' : (!checkIn || !checkOut) ? 'Select dates to book' : `Book Now – Pay $${getChargeTotal(selected, nights)} SuiUSD`}
               </button>
               <button onClick={handleCardPayment} disabled={bookingLoading || !checkIn || !checkOut}
                 style={{ width: '100%', background: 'transparent', color: (!checkIn || !checkOut) ? '#444' : '#fff', border: '1px solid #444', borderRadius: '8px', padding: '14px', fontWeight: '600', fontSize: '15px', cursor: (!checkIn || !checkOut) ? 'not-allowed' : 'pointer' }}>
@@ -549,6 +539,11 @@ export default function Home() {
               {booking && (
                 <div style={{ marginTop: '16px', background: '#0a1a0a', border: '1px solid #00ff44', borderRadius: '8px', padding: '16px', fontSize: '12px', color: '#00ff44', textAlign: 'center' }}>
                   ✅ Booking confirmed! Ref: {booking.bookingRef}
+                  {booking.depositAmount && (
+                    <div style={{ marginTop: '8px', color: '#4a9eff', fontSize: '11px' }}>
+                      🔒 ${booking.depositAmount} deposit held in Sui escrow — returned after checkout
+                    </div>
+                  )}
                   {booking.walrusBlobId && (
                     <div style={{ marginTop: '10px', background: '#050f05', borderRadius: '6px', padding: '10px' }}>
                       <div style={{ color: '#555', fontSize: '10px', marginBottom: '4px' }}>RECEIPT STORED ON WALRUS</div>

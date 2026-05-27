@@ -39,14 +39,12 @@ await fastify.register(rateLimit, {
 
 await registerAIRoute(fastify);
 
-// ─── Health ───────────────────────────────────────────────────────────────────
-
+// Health
 fastify.get('/health', async () => {
   return { status: 'ok', app: 'ARIA Demo', network: process.env.SUI_NETWORK };
 });
 
-// ─── Auth ─────────────────────────────────────────────────────────────────────
-
+// Auth
 fastify.get('/auth/zklogin/init', async (request, reply) => {
   return getZkLoginUrl(request, reply);
 });
@@ -68,8 +66,7 @@ fastify.get('/auth/logout', async (request, reply) => {
   return { success: true };
 });
 
-// ─── Stripe ───────────────────────────────────────────────────────────────────
-
+// Stripe
 fastify.post('/payment/create-intent', async (request, reply) => {
   const sessionId = request.cookies.aria_session;
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
@@ -84,8 +81,7 @@ fastify.post('/payment/create-intent', async (request, reply) => {
   return { clientSecret: paymentIntent.client_secret };
 });
 
-// ─── Booking Create ───────────────────────────────────────────────────────────
-
+// Booking Create
 fastify.post('/booking/create', {
   config: {
     rateLimit: {
@@ -120,7 +116,6 @@ fastify.post('/booking/create', {
   const checkInStr  = new Date(checkInRaw).toISOString().split('T')[0];
   const checkOutStr = new Date(checkOutRaw).toISOString().split('T')[0];
 
-  // Double-booking guard
   try {
     const conflict = await pool.query(
       `SELECT booking_ref FROM bookings
@@ -133,18 +128,17 @@ fastify.post('/booking/create', {
     }
   } catch (err) { fastify.log.warn({ err }, 'Availability check failed'); }
 
-  // ── All pricing calculated server-side — never trust client totals ──────────
+  // All pricing server-side. ARIA fee on subtotal only — never on deposit.
   const pricePerNight = request.body.pricePerNight || Math.round(totalAmount / nights / 1.03 / 1.08);
   const subtotal      = pricePerNight * nights;
   const ariaFee       = Math.round(subtotal * 0.03);
   const taxes         = Math.round(subtotal * 0.08);
-  const total         = subtotal + ariaFee + taxes;
-  const depositAmount = Math.round(total * 0.20); // FIX: use server-calculated total, not client totalAmount
+  const bookingTotal  = subtotal + ariaFee + taxes;
+  const depositAmount = Math.round(bookingTotal * 0.20);
+  const chargeAmount  = bookingTotal + depositAmount;
   const hostPayout    = calculateHostPayout(subtotal);
+  const bookingRef    = `ARIA-${propertyId}-${Date.now()}`;
 
-  const bookingRef = `ARIA-${propertyId}-${Date.now()}`;
-
-  // Save to database
   try {
     await pool.query(
       `INSERT INTO bookings (booking_ref, property_id, property_title, wallet_address, guest_name, guest_email,
@@ -152,11 +146,10 @@ fastify.post('/booking/create', {
         deposit_amount, payment_status, payment_method)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'confirmed','SuiUSD')`,
       [bookingRef, propertyId, propertyTitle, session.suiAddress, session.name, session.email,
-       checkInStr, checkOutStr, nights, pricePerNight, subtotal, ariaFee, taxes, total, depositAmount]
+       checkInStr, checkOutStr, nights, pricePerNight, subtotal, ariaFee, taxes, bookingTotal, depositAmount]
     );
   } catch (err) { fastify.log.warn({ err }, 'DB booking save failed'); }
 
-  // Walrus storage
   let walrusBlobId = null;
   try {
     const receipt = {
@@ -165,13 +158,17 @@ fastify.post('/booking/create', {
       checkIn: checkInStr, checkOut: checkOutStr, nights,
       breakdown: {
         pricePerNight: `$${pricePerNight}`, nights,
-        subtotal: `$${subtotal}`, ariaFee: `$${ariaFee} (3%)`,
-        taxes: `$${taxes} (8% occupancy tax)`, totalPaid: `$${total} SuiUSD`,
-        depositAmount: `$${depositAmount} (refundable, held in Sui escrow)`
+        subtotal: `$${subtotal}`,
+        ariaFee: `$${ariaFee} (3% of subtotal — not charged on deposit)`,
+        taxes: `$${taxes} (8% occupancy tax)`,
+        bookingTotal: `$${bookingTotal} SuiUSD`,
+        depositAmount: `$${depositAmount} (refundable, held in Sui escrow — no ARIA fee)`,
+        chargeAmount: `$${chargeAmount} SuiUSD (total charged at booking)`
       },
       hostPayout: { amount: `$${hostPayout.hostPayout} SuiUSD`, ariaFee: `$${hostPayout.ariaFee} SuiUSD`, settlementMethod: hostPayout.settlementMethod },
       walletAddress: session.suiAddress, guestName: session.name, guestEmail: session.email,
-      paymentMethod: 'SuiUSD', paymentStatus: 'confirmed', depositAmount, depositStatus: 'held'
+      paymentMethod: 'SuiUSD', paymentStatus: 'confirmed',
+      depositAmount, depositStatus: 'held', chargeAmount
     };
     const walrusRes  = await fetch('https://publisher.walrus-testnet.walrus.space/v1/blobs?epochs=3', {
       method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' },
@@ -184,9 +181,8 @@ fastify.post('/booking/create', {
     }
   } catch (err) { fastify.log.warn({ err }, 'Walrus storage failed'); }
 
-  // Confirmation email — includes deposit line item
   try {
-    const walrusHtml = walrusBlobId ? `<div style="background:#111;border:1px solid #222;border-radius:8px;padding:16px;margin-bottom:20px"><p style="margin:0 0 8px;font-size:12px;color:#555">WALRUS RECEIPT — PERMANENT ON-CHAIN RECORD</p><p style="margin:0;font-size:11px;color:#00ff44;word-break:break-all;font-family:monospace">${walrusBlobId}</p></div>` : '';
+    const walrusHtml = walrusBlobId ? `<div style="background:#111;border:1px solid #222;border-radius:8px;padding:16px;margin-bottom:20px"><p style="margin:0 0 8px;font-size:12px;color:#555">WALRUS RECEIPT</p><p style="margin:0;font-size:11px;color:#00ff44;word-break:break-all;font-family:monospace">${walrusBlobId}</p></div>` : '';
     await resend.emails.send({
       from: 'ARIA <onboarding@resend.dev>', to: session.email,
       subject: `Booking Confirmed — ${propertyTitle} | Ref: ${bookingRef}`,
@@ -201,12 +197,13 @@ fastify.post('/booking/create', {
             <tr><td style="color:#888;padding:6px 0">Check-out</td><td style="text-align:right">${checkOutStr}</td></tr>
             <tr><td style="color:#888;padding:6px 0">Nights</td><td style="text-align:right">${nights}</td></tr>
             <tr><td style="color:#888;padding:6px 0">Subtotal</td><td style="text-align:right">$${subtotal}</td></tr>
-            <tr><td style="color:#888;padding:6px 0">ARIA Fee (3%)</td><td style="text-align:right;color:#00ff44">$${ariaFee}</td></tr>
+            <tr><td style="color:#888;padding:6px 0">ARIA Fee (3% of subtotal only)</td><td style="text-align:right;color:#00ff44">$${ariaFee}</td></tr>
             <tr><td style="color:#888;padding:6px 0">Taxes (8%)</td><td style="text-align:right">$${taxes}</td></tr>
-            <tr style="border-top:1px solid #333"><td style="padding:10px 0;font-weight:700">Total Charged</td><td style="text-align:right;font-weight:700;color:#00ff44">$${total} SuiUSD</td></tr>
-            <tr><td style="color:#4a9eff;padding:6px 0">Refundable Security Deposit</td><td style="text-align:right;color:#4a9eff">$${depositAmount} SuiUSD</td></tr>
+            <tr style="border-top:1px solid #333"><td style="padding:8px 0;font-weight:700">Booking Total</td><td style="text-align:right;font-weight:700;color:#00ff44">$${bookingTotal} SuiUSD</td></tr>
+            <tr><td style="color:#4a9eff;padding:6px 0">🔒 Refundable Security Deposit</td><td style="text-align:right;color:#4a9eff">$${depositAmount} SuiUSD</td></tr>
+            <tr style="border-top:1px solid #444"><td style="padding:10px 0;font-weight:700;font-size:15px">Total Charged</td><td style="text-align:right;font-weight:700;font-size:15px;color:#fff">$${chargeAmount} SuiUSD</td></tr>
           </table>
-          <p style="color:#555;font-size:12px;margin:12px 0 0;line-height:1.6">The security deposit is held in Sui escrow and will be automatically returned after your checkout.</p>
+          <p style="color:#555;font-size:12px;margin:12px 0 0;line-height:1.6">The $${depositAmount} deposit is held in Sui escrow and returned after checkout. ARIA's 3% fee applies to your stay cost only — never to your deposit.</p>
         </div>
         ${walrusHtml}
         <p style="color:#555;font-size:12px;text-align:center;margin:0">Powered by ARIA — Built on Sui | The Airbnb killer</p>
@@ -214,14 +211,16 @@ fastify.post('/booking/create', {
     });
   } catch (err) { fastify.log.warn({ err }, 'Booking confirmation email failed'); }
 
-  return { success: true, bookingRef, property: propertyTitle, nights, totalAmount: total,
-    depositAmount, depositNote: 'Refundable security deposit held in Sui escrow — returned after checkout',
+  return {
+    success: true, bookingRef, property: propertyTitle, nights,
+    bookingTotal, depositAmount, chargeAmount,
+    depositNote: 'Refundable security deposit held in Sui escrow — no ARIA fee charged on deposit',
     walletAddress: session.suiAddress, network: 'sui:testnet',
-    message: 'Booking confirmed on Sui testnet', walrusBlobId };
+    message: 'Booking confirmed on Sui testnet', walrusBlobId
+  };
 });
 
-// ─── Booking Cancel ───────────────────────────────────────────────────────────
-
+// Booking Cancel
 fastify.post('/booking/cancel', {
   config: {
     rateLimit: {
@@ -262,8 +261,8 @@ fastify.post('/booking/cancel', {
 
     try {
       const depositNote = depositAutoReleased
-        ? `<div style="background:#0a1a0a;border:1px solid #1a4a1a;border-radius:6px;padding:10px;margin-top:10px"><p style="color:#00ff44;font-size:12px;font-weight:600;margin:0 0 4px">🔓 Security deposit auto-released</p><p style="color:#888;font-size:12px;margin:0">Your damage deposit has been automatically returned since you cancelled before check-in.</p></div>`
-        : `<div style="background:#0a0a1a;border:1px solid #1a1a3a;border-radius:6px;padding:10px;margin-top:10px"><p style="color:#4a9eff;font-size:12px;font-weight:600;margin:0 0 4px">🔒 Security deposit pending release</p><p style="color:#888;font-size:12px;margin:0">Your deposit will be reviewed and released by the host.</p></div>`;
+        ? `<div style="background:#0a1a0a;border:1px solid #1a4a1a;border-radius:6px;padding:10px;margin-top:10px"><p style="color:#00ff44;font-size:12px;font-weight:600;margin:0 0 4px">🔓 Security deposit auto-released</p><p style="color:#888;font-size:12px;margin:0">Your $${booking.deposit_amount} deposit has been automatically returned since you cancelled before check-in.</p></div>`
+        : `<div style="background:#0a0a1a;border:1px solid #1a1a3a;border-radius:6px;padding:10px;margin-top:10px"><p style="color:#4a9eff;font-size:12px;font-weight:600;margin:0 0 4px">🔒 Security deposit pending release</p><p style="color:#888;font-size:12px;margin:0">Your $${booking.deposit_amount} deposit will be reviewed and released by the host.</p></div>`;
       await resend.emails.send({
         from: 'ARIA <onboarding@resend.dev>', to: booking.guest_email,
         subject: `Booking Cancelled — ${booking.property_title} | Ref: ${bookingRef}`,
@@ -278,8 +277,7 @@ fastify.post('/booking/cancel', {
   }
 });
 
-// ─── Release Deposit ──────────────────────────────────────────────────────────
-
+// Release Deposit
 fastify.post('/booking/release-deposit', {
   config: {
     rateLimit: {
@@ -307,14 +305,13 @@ fastify.post('/booking/release-deposit', {
 
     const depositReleaseWalrusBlobId = await pushToWalrus({ ...booking, walrusReceiptType: 'deposit_release', depositReleaseTimestamp: new Date().toISOString() });
 
-    return { success: true, bookingRef, depositReleaseWalrusBlobId, message: 'Deposit released to guest.' };
+    return { success: true, bookingRef, depositReleaseWalrusBlobId, message: `Deposit of $${booking.deposit_amount} released to guest.` };
   } catch (err) {
     return reply.code(500).send({ error: 'Failed to release deposit' });
   }
 });
 
-// ─── Walrus helper ────────────────────────────────────────────────────────────
-
+// Walrus helper
 async function pushToWalrus(data) {
   try {
     const res  = await fetch('https://publisher.walrus-testnet.walrus.space/v1/blobs?epochs=3', {
@@ -326,8 +323,7 @@ async function pushToWalrus(data) {
   } catch (err) { fastify.log.warn({ err }, 'Walrus push failed'); return null; }
 }
 
-// ─── Bookings History (guest) ─────────────────────────────────────────────────
-
+// Bookings History (guest)
 fastify.get('/bookings/history', async (request, reply) => {
   const sessionId = request.cookies.aria_session;
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
@@ -338,26 +334,33 @@ fastify.get('/bookings/history', async (request, reply) => {
       'SELECT * FROM bookings WHERE wallet_address = $1 ORDER BY created_at DESC',
       [session.suiAddress]
     );
-    return { bookings: result.rows.map(b => ({
-      bookingRef: b.booking_ref, property: b.property_title, propertyId: b.property_id,
-      checkIn: b.check_in, checkOut: b.check_out, nights: b.nights,
-      totalAmount: b.total_amount, paymentStatus: b.payment_status,
-      depositAmount: b.deposit_amount, // FIX: now included
-      depositStatus: b.deposit_status, walrusBlobId: b.walrus_blob_id,
-      cancellationWalrusBlobId: b.cancellation_walrus_blob_id,
-      timestamp: b.created_at, walletAddress: b.wallet_address,
-      breakdown: {
-        pricePerNight: `$${b.price_per_night}`, nights: b.nights,
-        subtotal: `$${b.subtotal}`, ariaFee: `$${b.aria_fee} (3%)`,
-        taxes: `$${b.taxes} (8% occupancy tax)`, totalPaid: `$${b.total_amount} SuiUSD`,
-        depositAmount: `$${b.deposit_amount} (refundable security deposit)`
-      }
-    }))};
+    return { bookings: result.rows.map(b => {
+      const chargeAmount = (b.total_amount || 0) + (b.deposit_amount || 0);
+      return {
+        bookingRef: b.booking_ref, property: b.property_title, propertyId: b.property_id,
+        checkIn: b.check_in, checkOut: b.check_out, nights: b.nights,
+        totalAmount: b.total_amount, chargeAmount,
+        paymentStatus: b.payment_status,
+        depositAmount: b.deposit_amount, depositStatus: b.deposit_status,
+        walrusBlobId: b.walrus_blob_id,
+        cancellationWalrusBlobId: b.cancellation_walrus_blob_id,
+        timestamp: b.created_at, walletAddress: b.wallet_address,
+        breakdown: {
+          pricePerNight: `$${b.price_per_night}`, nights: b.nights,
+          subtotal: `$${b.subtotal}`,
+          ariaFee: `$${b.aria_fee} (3% of subtotal only)`,
+          taxes: `$${b.taxes} (8% occupancy tax)`,
+          bookingTotal: `$${b.total_amount} SuiUSD`,
+          depositAmount: `$${b.deposit_amount} (refundable — no ARIA fee)`,
+          totalCharged: `$${chargeAmount} SuiUSD`,
+          totalPaid: `$${b.total_amount} SuiUSD`
+        }
+      };
+    })};
   } catch (err) { return { bookings: [] }; }
 });
 
-// ─── Bookings All (host) ──────────────────────────────────────────────────────
-
+// Bookings All (host)
 fastify.get('/bookings/all', async (request, reply) => {
   const sessionId = request.cookies.aria_session;
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
@@ -365,27 +368,34 @@ fastify.get('/bookings/all', async (request, reply) => {
   if (!session) return reply.code(401).send({ error: 'Session expired' });
   try {
     const result = await pool.query('SELECT * FROM bookings ORDER BY created_at DESC');
-    return { bookings: result.rows.map(b => ({
-      bookingRef: b.booking_ref, property: b.property_title, propertyId: b.property_id,
-      checkIn: b.check_in, checkOut: b.check_out, nights: b.nights,
-      totalAmount: b.total_amount, paymentStatus: b.payment_status,
-      depositAmount: b.deposit_amount, // FIX: now included
-      depositStatus: b.deposit_status, walrusBlobId: b.walrus_blob_id,
-      cancellationWalrusBlobId: b.cancellation_walrus_blob_id,
-      guestName: b.guest_name, guestEmail: b.guest_email,
-      walletAddress: b.wallet_address, timestamp: b.created_at,
-      breakdown: {
-        pricePerNight: `$${b.price_per_night}`, nights: b.nights,
-        subtotal: `$${b.subtotal}`, ariaFee: `$${b.aria_fee} (3%)`,
-        taxes: `$${b.taxes} (8% occupancy tax)`, totalPaid: `$${b.total_amount} SuiUSD`,
-        depositAmount: `$${b.deposit_amount} (refundable security deposit)`
-      }
-    }))};
+    return { bookings: result.rows.map(b => {
+      const chargeAmount = (b.total_amount || 0) + (b.deposit_amount || 0);
+      return {
+        bookingRef: b.booking_ref, property: b.property_title, propertyId: b.property_id,
+        checkIn: b.check_in, checkOut: b.check_out, nights: b.nights,
+        totalAmount: b.total_amount, chargeAmount,
+        paymentStatus: b.payment_status,
+        depositAmount: b.deposit_amount, depositStatus: b.deposit_status,
+        walrusBlobId: b.walrus_blob_id,
+        cancellationWalrusBlobId: b.cancellation_walrus_blob_id,
+        guestName: b.guest_name, guestEmail: b.guest_email,
+        walletAddress: b.wallet_address, timestamp: b.created_at,
+        breakdown: {
+          pricePerNight: `$${b.price_per_night}`, nights: b.nights,
+          subtotal: `$${b.subtotal}`,
+          ariaFee: `$${b.aria_fee} (3% of subtotal only)`,
+          taxes: `$${b.taxes} (8% occupancy tax)`,
+          bookingTotal: `$${b.total_amount} SuiUSD`,
+          depositAmount: `$${b.deposit_amount} (refundable — no ARIA fee)`,
+          totalCharged: `$${chargeAmount} SuiUSD`,
+          totalPaid: `$${b.total_amount} SuiUSD`
+        }
+      };
+    })};
   } catch (err) { return { bookings: [] }; }
 });
 
-// ─── DeepBook ─────────────────────────────────────────────────────────────────
-
+// DeepBook
 fastify.get('/deepbook/payout/:amount', async (request, reply) => {
   const sessionId = request.cookies.aria_session;
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
@@ -398,8 +408,7 @@ fastify.get('/deepbook/payout/:amount', async (request, reply) => {
   return { ...payout, liquidity, timestamp: new Date().toISOString() };
 });
 
-// ─── iCal ─────────────────────────────────────────────────────────────────────
-
+// iCal
 fastify.get('/ical/:propertyId', async (request, reply) => {
   const { propertyId } = request.params;
   const propertyTitles = { '1': 'Oceanfront Villa', '2': 'Downtown Loft', '3': 'Mountain Cabin', '4': 'Desert Retreat', '5': 'Lake House', '6': 'Historic Brownstone' };
@@ -428,8 +437,7 @@ fastify.get('/availability/:propertyId', async (request, reply) => {
   return { propertyId, checkIn, checkOut, ...availability };
 });
 
-// ─── Messages ─────────────────────────────────────────────────────────────────
-
+// Messages
 fastify.post('/messages/send', async (request, reply) => {
   const sessionId = request.cookies.aria_session;
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
@@ -484,8 +492,7 @@ fastify.get('/messages/:bookingRef/count', async (request, reply) => {
   } catch (err) { return { count: 0 }; }
 });
 
-// ─── Reviews ──────────────────────────────────────────────────────────────────
-
+// Reviews
 fastify.post('/reviews/submit', async (request, reply) => {
   const sessionId = request.cookies.aria_session;
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
@@ -529,8 +536,7 @@ fastify.get('/reviews/all', async (request, reply) => {
   } catch (err) { return { reviews: [] }; }
 });
 
-// ─── Start ────────────────────────────────────────────────────────────────────
-
+// Start
 const port = parseInt(process.env.PORT || '3001');
 await fastify.listen({ port, host: '0.0.0.0' });
 console.log('ARIA API running on port ' + port);
