@@ -4,7 +4,6 @@ import { dotenvConfig } from './config.mjs';
 
 dotenvConfig();
 
-
 // In-memory session store (fine for demo)
 const sessions = new Map();
 
@@ -26,10 +25,8 @@ export async function getZkLoginUrl(request, reply) {
   const nonce = generateNonce(ephemeralKeypair.getPublicKey(), maxEpoch, randomness);
   const privateKey = ephemeralKeypair.getSecretKey();
 
-  // Encode all state into the state param — no server memory needed
   const stateData = Buffer.from(JSON.stringify({
-    privateKey,
-    maxEpoch,
+    privateKey, maxEpoch,
     randomness: randomness.toString(),
     nonce: nonce.toString(),
     createdAt: Date.now()
@@ -94,7 +91,9 @@ export async function handleZkLoginCallback(request, reply) {
       path: '/'
     });
 
-    return reply.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3000'}?auth=success`);
+    // Pass sid in URL so cross-domain frontends can store it in localStorage
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    return reply.redirect(`${frontendUrl}?auth=success&sid=${sessionId}`);
 
   } catch (err) {
     console.error('zkLogin callback error:', err);

@@ -5,6 +5,19 @@ import 'react-datepicker/dist/react-datepicker.css';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
+// Helper to get session ID from localStorage (for cross-domain production auth)
+const getStoredSid = () => {
+  try { return localStorage.getItem('aria_sid') || ''; } catch { return ''; }
+};
+
+// Helper to build fetch options with session header when needed
+const authFetch = (url, options = {}) => {
+  const sid = getStoredSid();
+  const headers = { ...(options.headers || {}) };
+  if (sid) headers['x-session-id'] = sid;
+  return fetch(url, { ...options, credentials: 'include', headers });
+};
+
 const PROPERTIES = [
   {
     id: 1, title: 'Oceanfront Villa', location: 'Miami Beach, FL', price: 285, rating: 4.97, reviews: 124,
@@ -129,7 +142,15 @@ export default function Home() {
   };
 
   useEffect(() => {
-    fetch(`${API}/auth/me`, { credentials: 'include' })
+    // Read sid from URL (set by Railway after OAuth) and store in localStorage
+    const params = new URLSearchParams(window.location.search);
+    const sid = params.get('sid');
+    if (sid) {
+      try { localStorage.setItem('aria_sid', sid); } catch {}
+      window.history.replaceState({}, '', '/');
+    }
+
+    authFetch(`${API}/auth/me`)
       .then(res => res.json())
       .then(data => { if (data.address) setUser(data); setLoading(false); })
       .catch(() => setLoading(false));
@@ -159,7 +180,8 @@ export default function Home() {
   };
 
   const handleLogout = async () => {
-    await fetch(`${API}/auth/logout`, { credentials: 'include' });
+    await authFetch(`${API}/auth/logout`);
+    try { localStorage.removeItem('aria_sid'); } catch {}
     setUser(null);
   };
 
@@ -167,10 +189,9 @@ export default function Home() {
     if (!checkIn || !checkOut) { alert('Please select check-in and check-out dates'); return; }
     if (nights < 1) { alert('Check-out must be after check-in'); return; }
     setBookingLoading(true);
-    const res = await fetch(`${API}/booking/create`, {
+    const res = await authFetch(`${API}/booking/create`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
       body: JSON.stringify({
         propertyId:    selected.id,
         propertyTitle: selected.title,
@@ -194,10 +215,9 @@ export default function Home() {
   const handleCardPayment = async () => {
     if (!checkIn || !checkOut) { alert('Please select check-in and check-out dates'); return; }
     setBookingLoading(true);
-    const res = await fetch(`${API}/payment/create-intent`, {
+    const res = await authFetch(`${API}/payment/create-intent`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
       body: JSON.stringify({ amount: getChargeTotal(selected, nights), propertyTitle: selected.title })
     });
     const data = await res.json();
@@ -368,8 +388,6 @@ export default function Home() {
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '24px' }}
           onClick={e => { if (e.target === e.currentTarget) closeModal(); }}>
           <div style={{ background: '#111', border: '1px solid #333', borderRadius: '16px', width: '100%', maxWidth: '500px', maxHeight: '92vh', overflowY: 'auto' }}>
-
-            {/* Photo Gallery */}
             <div style={{ borderRadius: '16px 16px 0 0', position: 'relative', background: '#000' }}>
               <div style={{ height: '260px', overflow: 'hidden', position: 'relative' }}>
                 <img src={selected.images[photoIndex]} alt={selected.title}
@@ -409,7 +427,6 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Booking form */}
             <div style={{ padding: '24px' }}>
               <div style={{ marginBottom: '20px' }}>
                 <div style={{ fontSize: '13px', color: '#888', marginBottom: '8px', fontWeight: '600' }}>SELECT YOUR DATES</div>

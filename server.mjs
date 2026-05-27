@@ -15,6 +15,13 @@ dotenvConfig();
 
 try { await initDB(); } catch (err) { console.error('DB init failed:', err.message); }
 
+// ─── Role-Based Access Control ────────────────────────────────────────────────
+const HOST_ADDRESSES = (process.env.HOST_ADDRESSES || '').split(',').map(e => e.trim().toLowerCase());
+function isHost(session) {
+  if (!session?.email) return false;
+  return HOST_ADDRESSES.includes(session.email.toLowerCase());
+}
+
 const resend = new Resend(process.env.RESEND_API_KEY);
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const fastify = Fastify({ logger: true });
@@ -54,11 +61,11 @@ fastify.get('/auth/zklogin/callback', async (request, reply) => {
 });
 
 fastify.get('/auth/me', async (request, reply) => {
-  const sessionId = request.cookies.aria_session;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
-  return { address: session.suiAddress, email: session.email, name: session.name };
+  return { address: session.suiAddress, email: session.email, name: session.name, isHost: isHost(session) };
 });
 
 fastify.get('/auth/logout', async (request, reply) => {
@@ -128,7 +135,6 @@ fastify.post('/booking/create', {
     }
   } catch (err) { fastify.log.warn({ err }, 'Availability check failed'); }
 
-  // All pricing server-side. ARIA fee on subtotal only — never on deposit.
   const pricePerNight = request.body.pricePerNight || Math.round(totalAmount / nights / 1.03 / 1.08);
   const subtotal      = pricePerNight * nights;
   const ariaFee       = Math.round(subtotal * 0.03);
@@ -277,7 +283,7 @@ fastify.post('/booking/cancel', {
   }
 });
 
-// Release Deposit
+// Release Deposit — HOST ONLY
 fastify.post('/booking/release-deposit', {
   config: {
     rateLimit: {
@@ -290,6 +296,7 @@ fastify.post('/booking/release-deposit', {
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
+  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
 
   const { bookingRef } = request.body;
   if (!bookingRef || typeof bookingRef !== 'string' || !bookingRef.startsWith('ARIA-'))
@@ -323,7 +330,7 @@ async function pushToWalrus(data) {
   } catch (err) { fastify.log.warn({ err }, 'Walrus push failed'); return null; }
 }
 
-// Bookings History (guest)
+// Bookings History — guest (own bookings only)
 fastify.get('/bookings/history', async (request, reply) => {
   const sessionId = request.cookies.aria_session;
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
@@ -360,12 +367,13 @@ fastify.get('/bookings/history', async (request, reply) => {
   } catch (err) { return { bookings: [] }; }
 });
 
-// Bookings All (host)
+// Bookings All — HOST ONLY
 fastify.get('/bookings/all', async (request, reply) => {
   const sessionId = request.cookies.aria_session;
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
+  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
   try {
     const result = await pool.query('SELECT * FROM bookings ORDER BY created_at DESC');
     return { bookings: result.rows.map(b => {
@@ -525,18 +533,20 @@ fastify.get('/reviews/:propertyId', async (request, reply) => {
   } catch (err) { return { reviews: [], averageRating: 0, count: 0 }; }
 });
 
+// Reviews All — HOST ONLY
 fastify.get('/reviews/all', async (request, reply) => {
   const sessionId = request.cookies.aria_session;
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
+  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
   try {
     const result = await pool.query('SELECT * FROM reviews ORDER BY created_at DESC');
     return { reviews: result.rows };
   } catch (err) { return { reviews: [] }; }
 });
 
-// Start
+// ─── Start ────────────────────────────────────────────────────────────────────
 const port = parseInt(process.env.PORT || '3001');
 await fastify.listen({ port, host: '0.0.0.0' });
 console.log('ARIA API running on port ' + port);
