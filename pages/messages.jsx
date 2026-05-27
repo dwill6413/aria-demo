@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/router';
 
+const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+
 export default function Messages() {
   const router = useRouter();
   const { bookingRef, property } = router.query;
@@ -12,9 +14,8 @@ export default function Messages() {
   const [sendError, setSendError] = useState('');
   const bottomRef = useRef(null);
 
-  // Load user session first
   useEffect(() => {
-    fetch('https://aria-demo-production-e590.up.railway.app/auth/me', { credentials: 'include' })
+    fetch(`${API}/auth/me`, { credentials: 'include' })
       .then(res => res.json())
       .then(data => {
         if (!data.address) { router.push('/'); return; }
@@ -24,8 +25,6 @@ export default function Messages() {
       .catch(() => router.push('/'));
   }, []);
 
-  // Wait for BOTH bookingRef (from URL) and user (from session) before fetching
-  // Next.js query params aren't available on first render — this prevents a race condition
   useEffect(() => {
     if (!bookingRef || !user) return;
     fetchMessages();
@@ -40,11 +39,10 @@ export default function Messages() {
   const fetchMessages = async () => {
     if (!bookingRef) return;
     try {
-      const res  = await fetch(`https://aria-demo-production-e590.up.railway.app/messages/${bookingRef}`, { credentials: 'include' });
+      const res  = await fetch(`${API}/messages/${bookingRef}`, { credentials: 'include' });
       const data = await res.json();
       setMessages(data.messages || []);
-      // Mark thread as read
-      fetch(`https://aria-demo-production-e590.up.railway.app/messages/${bookingRef}/read`, { method: 'POST', credentials: 'include' });
+      fetch(`${API}/messages/${bookingRef}/read`, { method: 'POST', credentials: 'include' });
     } catch (err) {
       console.error('Failed to fetch messages:', err);
     }
@@ -55,7 +53,7 @@ export default function Messages() {
     setSending(true);
     setSendError('');
     try {
-      const res  = await fetch('https://aria-demo-production-e590.up.railway.app/messages/send', {
+      const res  = await fetch(`${API}/messages/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -75,10 +73,7 @@ export default function Messages() {
   };
 
   const handleKeyDown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
   };
 
   if (loading) return (
@@ -109,8 +104,6 @@ export default function Messages() {
 
       {/* Messages area */}
       <div style={{ flex: 1, maxWidth: '700px', width: '100%', margin: '0 auto', padding: '24px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-
-        {/* Info box */}
         <div style={{ background: '#0a0a1a', border: '1px solid #1a1a3a', borderRadius: '8px', padding: '12px', marginBottom: '8px' }}>
           <p style={{ color: '#4a9eff', fontSize: '12px', margin: 0, textAlign: 'center' }}>
             🔒 Messages are private and tied to booking ref {bookingRef}. Only the guest and host can view this thread.
@@ -132,8 +125,7 @@ export default function Messages() {
                   {isMe ? 'You' : m.from} · {new Date(m.timestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })} {new Date(m.timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                 </div>
                 <div style={{
-                  background: isMe ? '#00ff44' : '#1a1a1a',
-                  color: isMe ? '#000' : '#fff',
+                  background: isMe ? '#00ff44' : '#1a1a1a', color: isMe ? '#000' : '#fff',
                   padding: '10px 14px',
                   borderRadius: isMe ? '12px 12px 2px 12px' : '12px 12px 12px 2px',
                   maxWidth: '80%', fontSize: '14px', lineHeight: '1.5',
@@ -146,13 +138,11 @@ export default function Messages() {
           })
         )}
 
-        {/* Send error */}
         {sendError && (
           <div style={{ background: '#1a0a0a', border: '1px solid #3a1a1a', borderRadius: '8px', padding: '10px 14px', fontSize: '13px', color: '#ff4444', textAlign: 'center' }}>
             {sendError}
           </div>
         )}
-
         <div ref={bottomRef} />
       </div>
 
@@ -165,28 +155,16 @@ export default function Messages() {
             onKeyDown={handleKeyDown}
             placeholder="Type a message... (Enter to send)"
             rows={2}
-            style={{
-              flex: 1, background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px',
-              padding: '10px 14px', color: '#fff', fontSize: '14px', outline: 'none',
-              resize: 'none', fontFamily: 'inherit', lineHeight: '1.5'
-            }}
+            style={{ flex: 1, background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '10px 14px', color: '#fff', fontSize: '14px', outline: 'none', resize: 'none', fontFamily: 'inherit', lineHeight: '1.5' }}
           />
           <button
             onClick={handleSend}
             disabled={sending || !newMessage.trim()}
-            style={{
-              background: sending || !newMessage.trim() ? '#1a2a1a' : '#00ff44',
-              color: sending || !newMessage.trim() ? '#555' : '#000',
-              border: 'none', borderRadius: '8px', padding: '0 20px',
-              fontWeight: '700', fontSize: '14px',
-              cursor: sending || !newMessage.trim() ? 'not-allowed' : 'pointer',
-              whiteSpace: 'nowrap'
-            }}>
+            style={{ background: sending || !newMessage.trim() ? '#1a2a1a' : '#00ff44', color: sending || !newMessage.trim() ? '#555' : '#000', border: 'none', borderRadius: '8px', padding: '0 20px', fontWeight: '700', fontSize: '14px', cursor: sending || !newMessage.trim() ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}>
             {sending ? 'Sending...' : 'Send →'}
           </button>
         </div>
       </div>
-
     </div>
   );
 }

@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/router';
 
+const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+
 const GUEST_SUGGESTIONS = [
   'Show me my bookings',
   'Book the Mountain Cabin for June 10–13',
@@ -19,14 +21,8 @@ const HOST_SUGGESTIONS = [
   'What are guests saying in reviews?',
 ];
 
-// ─── Simple markdown renderer ─────────────────────────────────────────────────
-// Converts Grok's markdown to clean HTML without any npm packages.
-// Handles: ### headings, **bold**, *italic*, - bullet lists, numbered lists,
-//          `inline code`, horizontal rules, and blank line paragraph breaks.
-
 function renderMarkdown(text) {
   if (!text) return '';
-
   const lines   = text.split('\n');
   const output  = [];
   let inList    = false;
@@ -48,98 +44,35 @@ function renderMarkdown(text) {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-
-    // Horizontal rule
-    if (/^---+$/.test(line.trim())) {
-      flushList();
-      output.push('<hr style="border:none;border-top:1px solid #333;margin:12px 0"/>');
-      continue;
-    }
-
-    // ### H3 heading
-    if (line.startsWith('### ')) {
-      flushList();
-      output.push(`<div style="font-size:15px;font-weight:700;color:#fff;margin:14px 0 6px">${inlineFormat(line.slice(4))}</div>`);
-      continue;
-    }
-
-    // ## H2 heading
-    if (line.startsWith('## ')) {
-      flushList();
-      output.push(`<div style="font-size:16px;font-weight:700;color:#fff;margin:16px 0 6px">${inlineFormat(line.slice(3))}</div>`);
-      continue;
-    }
-
-    // # H1 heading
-    if (line.startsWith('# ')) {
-      flushList();
-      output.push(`<div style="font-size:18px;font-weight:700;color:#fff;margin:16px 0 8px">${inlineFormat(line.slice(2))}</div>`);
-      continue;
-    }
-
-    // Bullet list item (- or *)
-    if (/^[-*] /.test(line)) {
-      inList = true;
-      listItems.push(`<li style="margin:3px 0;color:#ccc">${inlineFormat(line.slice(2))}</li>`);
-      continue;
-    }
-
-    // Numbered list item
-    if (/^\d+\. /.test(line)) {
-      inList = true;
-      listItems.push(`<li style="margin:3px 0;color:#ccc">${inlineFormat(line.replace(/^\d+\. /, ''))}</li>`);
-      continue;
-    }
-
-    // Empty line — flush list and add paragraph spacing
-    if (line.trim() === '') {
-      flushList();
-      output.push('<div style="height:6px"></div>');
-      continue;
-    }
-
-    // Normal line
+    if (/^---+$/.test(line.trim())) { flushList(); output.push('<hr style="border:none;border-top:1px solid #333;margin:12px 0"/>'); continue; }
+    if (line.startsWith('### ')) { flushList(); output.push(`<div style="font-size:15px;font-weight:700;color:#fff;margin:14px 0 6px">${inlineFormat(line.slice(4))}</div>`); continue; }
+    if (line.startsWith('## '))  { flushList(); output.push(`<div style="font-size:16px;font-weight:700;color:#fff;margin:16px 0 6px">${inlineFormat(line.slice(3))}</div>`); continue; }
+    if (line.startsWith('# '))   { flushList(); output.push(`<div style="font-size:18px;font-weight:700;color:#fff;margin:16px 0 8px">${inlineFormat(line.slice(2))}</div>`); continue; }
+    if (/^[-*] /.test(line))     { inList = true; listItems.push(`<li style="margin:3px 0;color:#ccc">${inlineFormat(line.slice(2))}</li>`); continue; }
+    if (/^\d+\. /.test(line))    { inList = true; listItems.push(`<li style="margin:3px 0;color:#ccc">${inlineFormat(line.replace(/^\d+\. /, ''))}</li>`); continue; }
+    if (line.trim() === '')      { flushList(); output.push('<div style="height:6px"></div>'); continue; }
     flushList();
     output.push(`<div>${inlineFormat(line)}</div>`);
   }
-
   flushList();
   return output.join('');
 }
 
-// ─── Markdown bubble component ────────────────────────────────────────────────
-
 function MessageBubble({ message, isHost }) {
   const isUser = message.role === 'user';
-
   if (isUser) {
     return (
-      <div style={{
-        background: isHost ? '#ff8800' : '#aa44ff',
-        color: '#fff', padding: '12px 16px',
-        borderRadius: '12px 12px 2px 12px',
-        maxWidth: '85%', fontSize: '14px', lineHeight: '1.6',
-        whiteSpace: 'pre-wrap'
-      }}>
+      <div style={{ background: isHost ? '#ff8800' : '#aa44ff', color: '#fff', padding: '12px 16px', borderRadius: '12px 12px 2px 12px', maxWidth: '85%', fontSize: '14px', lineHeight: '1.6', whiteSpace: 'pre-wrap' }}>
         {message.content}
       </div>
     );
   }
-
-  // Assistant message — render markdown
   return (
-    <div style={{
-      background: '#1a1a1a', color: '#ccc', padding: '12px 16px',
-      borderRadius: '12px 12px 12px 2px',
-      maxWidth: '85%', fontSize: '14px', lineHeight: '1.6',
-      border: '1px solid #333'
-    }}
+    <div style={{ background: '#1a1a1a', color: '#ccc', padding: '12px 16px', borderRadius: '12px 12px 12px 2px', maxWidth: '85%', fontSize: '14px', lineHeight: '1.6', border: '1px solid #333' }}
       dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content) }}
     />
   );
 }
-
-// ─── Main component ───────────────────────────────────────────────────────────
 
 export default function AI() {
   const router = useRouter();
@@ -155,11 +88,13 @@ export default function AI() {
     const storedMode = sessionStorage.getItem('aria_ai_mode');
     if (storedMode === 'host') setIsHost(true);
 
-    fetch('https://aria-demo-production-e590.up.railway.app/auth/me', { credentials: 'include' })
+    fetch(`${API}/auth/me`, { credentials: 'include' })
       .then(r => r.json())
       .then(data => {
         if (!data.address) { router.push('/'); return; }
         setUser(data);
+        // Auto-set host mode if user is a host
+        if (data.isHost && !storedMode) setIsHost(true);
         setLoading(false);
       })
       .catch(() => router.push('/'));
@@ -177,32 +112,24 @@ export default function AI() {
 
   const sendMessage = async () => {
     if (!input.trim() || sending) return;
-
     const userMsg     = { role: 'user', content: input.trim() };
     const newMessages = [...messages, userMsg];
     setMessages(newMessages);
     setInput('');
     setSending(true);
-
     try {
-      const res = await fetch('https://aria-demo-production-e590.up.railway.app/api/ai/chat', {
+      const res = await fetch(`${API}/api/ai/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({ messages: newMessages, mode: isHost ? 'host' : 'guest' })
       });
-
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Request failed');
       setMessages(prev => [...prev, { role: 'assistant', content: data.response }]);
-
     } catch (err) {
-      setMessages(prev => [...prev, {
-        role: 'assistant',
-        content: `Sorry, something went wrong: ${err.message}. Please try again.`
-      }]);
+      setMessages(prev => [...prev, { role: 'assistant', content: `Sorry, something went wrong: ${err.message}. Please try again.` }]);
     }
-
     setSending(false);
   };
 
@@ -251,14 +178,10 @@ export default function AI() {
 
       {/* Chat area */}
       <div style={{ flex: 1, maxWidth: '800px', width: '100%', margin: '0 auto', padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-
-        {/* Empty state */}
         {messages.length === 0 && (
           <div style={{ textAlign: 'center', padding: '40px 24px' }}>
             <div style={{ fontSize: '48px', marginBottom: '16px' }}>{isHost ? '🏡' : '🤖'}</div>
-            <h2 style={{ fontSize: '22px', fontWeight: '700', margin: '0 0 8px' }}>
-              {isHost ? 'ARIA Host Agent' : 'ARIA AI Agent'}
-            </h2>
+            <h2 style={{ fontSize: '22px', fontWeight: '700', margin: '0 0 8px' }}>{isHost ? 'ARIA Host Agent' : 'ARIA AI Agent'}</h2>
             <p style={{ color: '#666', fontSize: '14px', margin: '0 0 4px' }}>Powered by Grok — built into ARIA</p>
             <p style={{ color: isHost ? '#ff8800' : '#aa44ff', fontSize: '13px', margin: '0 0 24px', fontWeight: '600' }}>
               {isHost ? '⚡ Check messages, view revenue, release deposits, manage bookings' : '⚡ Book, cancel, message hosts, and manage your reservations'}
@@ -275,7 +198,6 @@ export default function AI() {
           </div>
         )}
 
-        {/* Message bubbles */}
         {messages.map((m, i) => (
           <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: m.role === 'user' ? 'flex-end' : 'flex-start' }}>
             <div style={{ fontSize: '11px', color: '#555', marginBottom: '4px' }}>
@@ -285,15 +207,9 @@ export default function AI() {
           </div>
         ))}
 
-        {/* Thinking indicator */}
         {sending && (
           <div style={{ display: 'flex', alignItems: 'flex-start' }}>
-            <div style={{
-              background: isHost ? '#1a0f00' : '#0a0a1a',
-              border: `1px solid ${isHost ? '#3a2000' : '#1a1a3a'}`,
-              borderRadius: '12px 12px 12px 2px', padding: '10px 14px',
-              fontSize: '13px', color: isHost ? '#ff8800' : '#aa44ff'
-            }}>
+            <div style={{ background: isHost ? '#1a0f00' : '#0a0a1a', border: `1px solid ${isHost ? '#3a2000' : '#1a1a3a'}`, borderRadius: '12px 12px 12px 2px', padding: '10px 14px', fontSize: '13px', color: isHost ? '#ff8800' : '#aa44ff' }}>
               {isHost ? '🏡 Thinking...' : '🤖 Thinking...'}
             </div>
           </div>
@@ -323,7 +239,6 @@ export default function AI() {
           ⚡ Powered by Grok · Agent can take real actions on ARIA
         </div>
       </div>
-
     </div>
   );
 }

@@ -1,6 +1,10 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 
+const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+
+const fmtDate = (d) => new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
 const PROPERTIES = [
   { id: 1, title: 'Oceanfront Villa', location: 'Miami Beach, FL', price: 285, beds: 4, baths: 3, tag: 'Beachfront', image: 'https://images.unsplash.com/photo-1499793983690-e29da59ef1c2?w=600&q=80' },
   { id: 2, title: 'Downtown Loft', location: 'Austin, TX', price: 145, beds: 2, baths: 1, tag: 'City View', image: 'https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?w=600&q=80' },
@@ -25,25 +29,26 @@ export default function Host() {
   const [messageCounts, setMessageCounts] = useState({});
 
   useEffect(() => {
-    fetch('https://aria-demo-production-e590.up.railway.app/auth/me', { credentials: 'include' })
+    fetch(`${API}/auth/me`, { credentials: 'include' })
       .then(res => res.json())
       .then(async data => {
         if (!data.address) { router.push('/'); return; }
+        if (!data.isHost) { router.push('/?error=access_denied'); return; }
         setUser(data);
-        const bkRes = await fetch('https://aria-demo-production-e590.up.railway.app/bookings/all', { credentials: 'include' });
+        const bkRes = await fetch(`${API}/bookings/all`, { credentials: 'include' });
         const bkData = await bkRes.json();
         const bks = bkData.bookings || [];
         setBookings(bks);
         const counts = {};
         await Promise.all(bks.filter(b => b.paymentStatus !== 'cancelled').map(async b => {
           try {
-            const r = await fetch(`https://aria-demo-production-e590.up.railway.app/messages/${b.bookingRef}/count`, { credentials: 'include' });
+            const r = await fetch(`${API}/messages/${b.bookingRef}/count`, { credentials: 'include' });
             const d = await r.json();
             counts[b.bookingRef] = d.count || 0;
           } catch { counts[b.bookingRef] = 0; }
         }));
         setMessageCounts(counts);
-        const rvRes = await fetch('https://aria-demo-production-e590.up.railway.app/reviews/all', { credentials: 'include' });
+        const rvRes = await fetch(`${API}/reviews/all`, { credentials: 'include' });
         const rvData = await rvRes.json();
         setReviews(rvData.reviews || []);
         setLoading(false);
@@ -52,7 +57,7 @@ export default function Host() {
   }, []);
 
   const copyICal = (propertyId) => {
-    const url = `https://aria-demo-production-e590.up.railway.app/ical/${propertyId}`;
+    const url = `${API}/ical/${propertyId}`;
     navigator.clipboard.writeText(url);
     setCopiedId(propertyId);
     setTimeout(() => setCopiedId(null), 2000);
@@ -62,7 +67,7 @@ export default function Host() {
     const url = icalInputs[propertyId];
     if (!url) return;
     setIcalSaving(prev => ({ ...prev, [propertyId]: true }));
-    const res = await fetch('https://aria-demo-production-e590.up.railway.app/ical/import', {
+    const res = await fetch(`${API}/ical/import`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -79,7 +84,7 @@ export default function Host() {
   const handleReleaseDeposit = async (bookingRef) => {
     if (!confirm('Release deposit back to guest? This cannot be undone.')) return;
     setReleasingId(bookingRef);
-    const res = await fetch('https://aria-demo-production-e590.up.railway.app/booking/release-deposit', {
+    const res = await fetch(`${API}/booking/release-deposit`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -87,32 +92,31 @@ export default function Host() {
     });
     const data = await res.json();
     if (data.success) {
-      // Refresh from server to get depositReleaseWalrusBlobId
-      const bkRes = await fetch('https://aria-demo-production-e590.up.railway.app/bookings/all', { credentials: 'include' });
+      const bkRes = await fetch(`${API}/bookings/all`, { credentials: 'include' });
       const bkData = await bkRes.json();
       setBookings(bkData.bookings || []);
     }
     setReleasingId(null);
   };
 
-  const activeBookings  = bookings.filter(b => b.paymentStatus !== 'cancelled');
+  const activeBookings    = bookings.filter(b => b.paymentStatus !== 'cancelled');
   const cancelledBookings = bookings.filter(b => b.paymentStatus === 'cancelled');
-  const totalRevenue    = activeBookings.reduce((sum, b) => {
+  const totalRevenue      = activeBookings.reduce((sum, b) => {
     const amt = b.breakdown?.totalPaid ? parseInt(b.breakdown.totalPaid.split(' ')[0].replace(/[^0-9]/g, '')) : (b.totalAmount || 0);
     return sum + amt;
   }, 0);
-  const totalAriaFees   = activeBookings.reduce((sum, b) => {
+  const totalAriaFees = activeBookings.reduce((sum, b) => {
     const fee = b.breakdown?.ariaFee ? parseInt(b.breakdown.ariaFee.split(' ')[0].replace(/[^0-9]/g, '')) : 0;
     return sum + fee;
   }, 0);
-  const totalTaxes      = activeBookings.reduce((sum, b) => {
+  const totalTaxes    = activeBookings.reduce((sum, b) => {
     const t = b.breakdown?.taxes ? parseInt(b.breakdown.taxes.split(' ')[0].replace(/[^0-9]/g, '')) : 0;
     return sum + t;
   }, 0);
-  const hostEarnings    = totalRevenue - totalAriaFees - totalTaxes;
-  const depositsHeld    = activeBookings.filter(b => b.depositAmount && b.depositStatus === 'held').length;
-  const totalUnread     = Object.values(messageCounts).reduce((sum, c) => sum + c, 0);
-  const avgRating       = reviews.length ? (reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length).toFixed(1) : 0;
+  const hostEarnings  = totalRevenue - totalAriaFees - totalTaxes;
+  const depositsHeld  = activeBookings.filter(b => b.depositAmount && b.depositStatus === 'held').length;
+  const totalUnread   = Object.values(messageCounts).reduce((sum, c) => sum + c, 0);
+  const avgRating     = reviews.length ? (reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length).toFixed(1) : 0;
 
   const bookingsByProperty = PROPERTIES.map(p => ({
     ...p,
@@ -134,7 +138,6 @@ export default function Host() {
 
   const stars = (rating) => '⭐'.repeat(rating) + '☆'.repeat(5 - rating);
 
-  // Walrus receipt buttons — shows all available receipts for a booking
   const WalrusReceipts = ({ b }) => (
     <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
       {b.walrusBlobId && (
@@ -331,18 +334,14 @@ export default function Host() {
                         <div style={{ fontSize: '18px', fontWeight: '700', color: b.paymentStatus === 'cancelled' ? '#555' : '#00ff44', textDecoration: b.paymentStatus === 'cancelled' ? 'line-through' : 'none' }}>
                           {b.breakdown?.totalPaid || `$${b.totalAmount}`}
                         </div>
-                        <div style={{ fontSize: '11px', color: '#555' }}>{b.checkIn} → {b.checkOut}</div>
+                        <div style={{ fontSize: '11px', color: '#555' }}>{fmtDate(b.checkIn)} → {fmtDate(b.checkOut)}</div>
                         <div style={{ fontSize: '11px', color: '#555' }}>{b.nights} night{b.nights > 1 ? 's' : ''}</div>
                       </div>
                     </div>
-
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
                       <div style={{ fontSize: '11px', color: '#555', fontFamily: 'monospace' }}>Ref: {b.bookingRef}</div>
                       <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
-
-                        {/* All Walrus receipts for this booking */}
                         <WalrusReceipts b={b} />
-
                         {b.paymentStatus !== 'cancelled' && (
                           <button
                             onClick={() => router.push(`/messages?bookingRef=${b.bookingRef}&property=${encodeURIComponent(b.property)}`)}
@@ -355,7 +354,6 @@ export default function Host() {
                             )}
                           </button>
                         )}
-
                         {b.depositAmount && b.paymentStatus !== 'cancelled' && b.depositStatus !== 'released' && (
                           <button
                             onClick={() => handleReleaseDeposit(b.bookingRef)}
@@ -395,7 +393,7 @@ export default function Host() {
                       <div style={{ fontSize: '10px', color: '#555', marginBottom: '6px', fontWeight: '600' }}>ICAL EXPORT — paste into Airbnb/VRBO</div>
                       <div style={{ display: 'flex', gap: '6px' }}>
                         <div style={{ flex: 1, background: '#111', border: '1px solid #333', borderRadius: '6px', padding: '6px 10px', fontSize: '11px', color: '#666', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          localhost:3001/ical/{p.id}
+                          {API}/ical/{p.id}
                         </div>
                         <button onClick={() => copyICal(p.id)} style={{ background: copiedId === p.id ? '#0a1a0a' : '#1a1a1a', border: `1px solid ${copiedId === p.id ? '#00ff44' : '#333'}`, color: copiedId === p.id ? '#00ff44' : '#888', fontSize: '11px', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontWeight: '600', whiteSpace: 'nowrap' }}>
                           {copiedId === p.id ? '✓ Copied' : 'Copy'}
@@ -431,7 +429,7 @@ export default function Host() {
             <div style={{ background: '#0a0a1a', border: '1px solid #1a1a3a', borderRadius: '12px', padding: '20px', marginBottom: '24px' }}>
               <h3 style={{ fontSize: '16px', fontWeight: '600', margin: '0 0 8px' }}>📅 Two-Way Calendar Sync</h3>
               <p style={{ color: '#888', fontSize: '13px', margin: 0, lineHeight: '1.6' }}>
-                ARIA prevents double bookings across all platforms. Export your ARIA calendar to Airbnb/VRBO, and import their calendars here. ARIA is always the source of truth.
+                ARIA prevents double bookings across all platforms. Export your ARIA calendar to Airbnb/VRBO, and import their calendars here.
               </p>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -449,7 +447,7 @@ export default function Host() {
                       <div style={{ fontSize: '11px', color: '#00ff44', fontWeight: '600', marginBottom: '6px' }}>↑ EXPORT — paste into Airbnb/VRBO</div>
                       <div style={{ display: 'flex', gap: '6px' }}>
                         <div style={{ flex: 1, background: '#111', border: '1px solid #333', borderRadius: '6px', padding: '6px 8px', fontSize: '10px', color: '#666', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          localhost:3001/ical/{p.id}
+                          {API}/ical/{p.id}
                         </div>
                         <button onClick={() => copyICal(p.id)} style={{ background: copiedId === p.id ? '#0a1a0a' : '#111', border: `1px solid ${copiedId === p.id ? '#00ff44' : '#333'}`, color: copiedId === p.id ? '#00ff44' : '#888', fontSize: '11px', padding: '6px 8px', borderRadius: '6px', cursor: 'pointer', fontWeight: '600', whiteSpace: 'nowrap' }}>
                           {copiedId === p.id ? '✓' : 'Copy'}
@@ -497,7 +495,7 @@ export default function Host() {
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
                         <div>
                           <div style={{ fontSize: '15px', fontWeight: '600', marginBottom: '2px' }}>{prop?.title || `Property ${r.propertyId}`}</div>
-                          <div style={{ fontSize: '12px', color: '#666' }}>{r.guestName} · {new Date(r.timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</div>
+                          <div style={{ fontSize: '12px', color: '#666' }}>{r.guestName} · {fmtDate(r.timestamp)}</div>
                         </div>
                         <div style={{ fontSize: '20px' }}>{stars(r.rating)}</div>
                       </div>

@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 
+const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+
 const fmtDate = (d) => new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
 export default function Bookings() {
@@ -18,7 +20,7 @@ export default function Bookings() {
   const handleSubmitReview = async () => {
     if (!reviewText.trim()) return;
     setReviewSubmitting(true);
-    const res = await fetch('https://aria-demo-production-e590.up.railway.app/reviews/submit', {
+    const res = await fetch(`${API}/reviews/submit`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -42,7 +44,7 @@ export default function Bookings() {
   const handleCancel = async (bookingRef) => {
     if (!confirm('Cancel this booking? You will receive a full refund within 24 hours.')) return;
     setCancellingId(bookingRef);
-    const res = await fetch('https://aria-demo-production-e590.up.railway.app/booking/cancel', {
+    const res = await fetch(`${API}/booking/cancel`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -50,7 +52,7 @@ export default function Bookings() {
     });
     const data = await res.json();
     if (data.success) {
-      const updated = await fetch('https://aria-demo-production-e590.up.railway.app/bookings/history', { credentials: 'include' });
+      const updated = await fetch(`${API}/bookings/history`, { credentials: 'include' });
       const updatedData = await updated.json();
       setBookings(updatedData.bookings || []);
     }
@@ -58,12 +60,12 @@ export default function Bookings() {
   };
 
   useEffect(() => {
-    fetch('https://aria-demo-production-e590.up.railway.app/auth/me', { credentials: 'include' })
+    fetch(`${API}/auth/me`, { credentials: 'include' })
       .then(res => res.json())
       .then(data => {
         if (!data.address) { router.push('/'); return; }
         setUser(data);
-        return fetch('https://aria-demo-production-e590.up.railway.app/bookings/history', { credentials: 'include' });
+        return fetch(`${API}/bookings/history`, { credentials: 'include' });
       })
       .then(res => res.json())
       .then(data => {
@@ -208,7 +210,7 @@ export default function Bookings() {
                   </div>
                 )}
 
-                {/* Walrus receipts — show both on cancelled bookings */}
+                {/* Walrus receipts */}
                 {b.paymentStatus === 'cancelled' && (b.walrusBlobId || b.cancellationWalrusBlobId) && (
                   <div style={{ background: '#0d0d0d', border: '1px solid #1a1a1a', borderRadius: '8px', padding: '12px', marginBottom: '16px' }}>
                     <div style={{ fontSize: '10px', color: '#555', marginBottom: '10px', fontWeight: '600', letterSpacing: '0.08em' }}>ON-CHAIN AUDIT TRAIL</div>
@@ -239,12 +241,8 @@ export default function Bookings() {
 
                 {/* Action buttons */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
-                  <div style={{ fontSize: '11px', color: '#555', fontFamily: 'monospace' }}>
-                    Ref: {b.bookingRef}
-                  </div>
+                  <div style={{ fontSize: '11px', color: '#555', fontFamily: 'monospace' }}>Ref: {b.bookingRef}</div>
                   <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-
-                    {/* Single Walrus button for active bookings */}
                     {b.paymentStatus !== 'cancelled' && b.walrusBlobId && (
                       <a href={`https://aggregator.walrus-testnet.walrus.space/v1/blobs/${b.walrusBlobId}`}
                         target="_blank" rel="noreferrer"
@@ -252,13 +250,11 @@ export default function Bookings() {
                         🔗 View Walrus Receipt
                       </a>
                     )}
-
                     <button
                       onClick={() => router.push(`/messages?bookingRef=${b.bookingRef}&property=${encodeURIComponent(b.property)}`)}
                       style={{ background: 'transparent', border: '1px solid #1a1a3a', color: '#4a9eff', fontSize: '12px', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontWeight: '600' }}>
                       💬 Message Host
                     </button>
-
                     {b.paymentStatus !== 'cancelled' && !reviewedRefs.includes(b.bookingRef) && (
                       <button
                         onClick={() => { setReviewingBooking(b); setReviewRating(5); setReviewText(''); }}
@@ -269,7 +265,6 @@ export default function Bookings() {
                     {reviewedRefs.includes(b.bookingRef) && (
                       <span style={{ color: '#aa44ff', fontSize: '12px', fontWeight: '600' }}>⭐ Reviewed</span>
                     )}
-
                     {b.paymentStatus !== 'cancelled' ? (
                       <button
                         onClick={() => handleCancel(b.bookingRef)}
