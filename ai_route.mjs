@@ -196,12 +196,21 @@ function buildGuestSystemPrompt(session, bookings) {
 
 IMPORTANT RULES:
 - Always confirm details with the user BEFORE calling create_booking or cancel_booking
-- Cost formula: subtotal = pricePerNight * nights. ARIA fee = subtotal * 0.03. Taxes = subtotal * 0.08. Total = subtotal + ariaFee + taxes
-- Always show the full breakdown: subtotal, ARIA fee (3%), occupancy tax (8%), and total before booking
+- Cost formula: subtotal = pricePerNight * nights. ARIA fee = subtotal * 0.03. Taxes = subtotal * 0.08. Total = subtotal + ariaFee + taxes.
+- Security deposit = 20% of total (e.g. if total is $1,776 then deposit = $355). The deposit is FULLY REFUNDABLE after checkout and is held separately in Sui escrow.
+- Always show the COMPLETE breakdown before booking so there are no surprises at checkout:
+    • Price per night
+    • Subtotal (nights × price)
+    • ARIA fee (3%)
+    • Occupancy tax (8%)
+    • Total charge
+    • Refundable security deposit (20% of total) — held in Sui escrow, returned after checkout
+    • Grand total due at checkout (total + deposit)
+- Make it clear the deposit is NOT an extra cost — it is returned after a successful stay
 - Dates must be YYYY-MM-DD format. Pass pricePerNight as the exact property price.
 - Be conversational and friendly
 
-ABOUT ARIA: 3% fee vs 15% Airbnb. Instant Sui settlement. Walrus receipts. SuiUSD payments. Damage deposits in Sui escrow.
+ABOUT ARIA: 3% fee vs 15% Airbnb. Instant Sui settlement. Walrus receipts. SuiUSD payments. Refundable damage deposits held in Sui escrow (20% of total, returned after checkout).
 
 CURRENT USER: ${session.name} (${session.email})
 Wallet: ${session.suiAddress}
@@ -217,7 +226,7 @@ AVAILABLE PROPERTIES:
 5. Lake House — Lake Tahoe, CA — $320/night (id:5)
 6. Historic Brownstone — Brooklyn, NY — $175/night (id:6)
 
-CANCELLATION POLICY: Full refund 24+ hours before check-in. 50% within 24 hours.`;
+CANCELLATION POLICY: Full refund 24+ hours before check-in. 50% within 24 hours. Security deposit auto-released on cancellation before check-in.`;
 }
 
 function buildHostSystemPrompt(session) {
@@ -231,7 +240,7 @@ IMPORTANT RULES:
 - Be proactive — if asked about messages, check them; if asked about revenue, compute it live
 - Format numbers as USD. Be clear and concise. You are talking to the HOST.
 
-ABOUT ARIA: 3% fee vs 15% Airbnb. Instant Sui settlement. Walrus receipts. SuiUSD. Damage deposits in Sui escrow.
+ABOUT ARIA: 3% fee vs 15% Airbnb. Instant Sui settlement. Walrus receipts. SuiUSD. Refundable damage deposits held in Sui escrow (20% of booking total, returned to guest after checkout).
 
 HOST USER: ${session.name} (${session.email})
 Wallet: ${session.suiAddress}
@@ -359,7 +368,6 @@ async function executeTool(toolName, toolInput, session) {
       }
 
       // ── Confirmation email ────────────────────────────────────────────────
-      // Sends the same styled email as the regular booking flow
       try {
         const { Resend } = await import('resend');
         const resend     = new Resend(process.env.RESEND_API_KEY);
@@ -370,11 +378,12 @@ async function executeTool(toolName, toolInput, session) {
           ['Nights',          nights],
           ['Price per night', `$${pricePerNight}`],
           ['Subtotal',        `$${subtotal}`],
-          ['ARIA Fee (3%)',   `$${ariaFee} (3%)`],
-          ['Taxes (8%)',      `$${taxes} (8% occupancy tax)`],
+          ['ARIA Fee (3%)',   `$${ariaFee}`],
+          ['Taxes (8%)',      `$${taxes}`],
         ];
         const rowsHtml   = emailRows.map(([l, v]) => `<tr><td style="color:#888;padding:6px 0">${l}</td><td style="text-align:right">${v}</td></tr>`).join('');
-        const totalRow   = `<tr style="border-top:1px solid #333"><td style="padding:10px 0;font-weight:700">Total Paid</td><td style="text-align:right;font-weight:700;color:#00ff44">$${total} SuiUSD</td></tr>`;
+        const totalRow   = `<tr style="border-top:1px solid #333"><td style="padding:10px 0;font-weight:700">Total Charged</td><td style="text-align:right;font-weight:700;color:#00ff44">$${total} SuiUSD</td></tr>`;
+        const depositRow = `<tr><td style="color:#4a9eff;padding:6px 0">Refundable Deposit (held in escrow)</td><td style="text-align:right;color:#4a9eff">$${depositAmount} SuiUSD</td></tr>`;
         const walrusHtml = receipt.walrusBlobId
           ? `<div style="background:#111;border:1px solid #222;border-radius:8px;padding:16px;margin-bottom:20px"><p style="margin:0 0 8px;font-size:12px;color:#555">WALRUS RECEIPT — PERMANENT ON-CHAIN RECORD</p><p style="margin:0;font-size:11px;color:#00ff44;word-break:break-all;font-family:monospace">${receipt.walrusBlobId}</p></div>`
           : '';
@@ -387,20 +396,21 @@ async function executeTool(toolName, toolInput, session) {
             <p style="color:#888;margin:0 0 24px">Your ARIA booking receipt — ${session.name}</p>
             <div style="background:#111;border:1px solid #222;border-radius:8px;padding:20px;margin-bottom:20px">
               <h2 style="margin:0 0 16px;font-size:18px">${propertyTitle}</h2>
-              <table style="width:100%;border-collapse:collapse">${rowsHtml}${totalRow}</table>
+              <table style="width:100%;border-collapse:collapse">${rowsHtml}${totalRow}${depositRow}</table>
+              <p style="color:#555;font-size:12px;margin:12px 0 0;line-height:1.6">The security deposit is held in Sui escrow and will be automatically returned after your checkout.</p>
             </div>
             ${walrusHtml}
             <p style="color:#555;font-size:12px;text-align:center;margin:0">Powered by ARIA — Built on Sui | The Airbnb killer</p>
           </div>`
         });
       } catch (emailErr) {
-        // Email failure never breaks the booking
         console.warn('AI booking email failed:', emailErr.message);
       }
 
       return JSON.stringify({
         success: true, bookingRef, property: propertyTitle,
         checkIn, checkOut, nights, totalAmount: total,
+        depositAmount, depositNote: 'Refundable security deposit held in Sui escrow — returned after checkout',
         network: 'sui:testnet', walrusBlobId: receipt.walrusBlobId,
         message: 'Booking confirmed on Sui testnet! Confirmation email sent.'
       });
@@ -473,7 +483,6 @@ async function executeTool(toolName, toolInput, session) {
           </div>`
         });
       } catch (emailErr) {
-        // Email failure never breaks the cancellation
         console.warn('AI cancellation email failed:', emailErr.message);
       }
 
@@ -616,7 +625,6 @@ export async function registerAIRoute(fastify) {
       : buildGuestSystemPrompt(session, guestBookings);
 
     // ── Agentic loop ──────────────────────────────────────────────────────────
-    // Keep calling Grok until it returns a plain text response with no tool calls.
     let apiMessages = [
       { role: 'system', content: systemPrompt },
       ...messages.map(m => ({ role: m.role, content: m.content }))
