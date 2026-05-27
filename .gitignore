@@ -26,3 +26,5 @@ messages/
 reviews/
 walrus.exe
 *.exe
+.vercel
+.env*
