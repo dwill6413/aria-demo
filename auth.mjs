@@ -88,8 +88,8 @@ export async function handleZkLoginCallback(request, reply) {
 
     reply.setCookie('aria_session', sessionId, {
       httpOnly: true,
-      secure: true,
-      sameSite: 'none',
+      secure: process.env.NODE_ENV !== 'development',
+      sameSite: process.env.NODE_ENV !== 'development' ? 'none' : 'lax',
       maxAge: 86400,
       path: '/'
     });

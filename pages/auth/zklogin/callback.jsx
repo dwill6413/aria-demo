@@ -1,6 +1,8 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/router';
 
+const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+
 export default function Callback() {
   const router = useRouter();
 
@@ -15,25 +17,25 @@ export default function Callback() {
       return;
     }
 
-    fetch(`https://aria-demo-production-e590.up.railway.app/auth/zklogin/callback?state=${state}&id_token=${id_token}`, {
-  credentials: 'include',
-  redirect: 'manual'
-})
-  .then(res => {
-    if (res.ok || res.type === 'opaqueredirect') {
-      router.push('/');
-    } else {
-      return res.json().then(data => {
-        if (data.address) {
-          localStorage.setItem('aria_user', JSON.stringify(data));
-          router.push('/');
-        } else {
-          router.push('/?error=auth_failed');
-        }
-      });
-    }
-  })
-  .catch(() => router.push('/?error=network'));
+    fetch(`${API}/auth/zklogin/callback?state=${state}&id_token=${id_token}`, {
+      credentials: 'include',
+      redirect: 'manual'
+    })
+    .then(res => {
+      if (res.ok || res.type === 'opaqueredirect') {
+        router.push('/');
+      } else {
+        return res.json().then(data => {
+          if (data.address) {
+            localStorage.setItem('aria_user', JSON.stringify(data));
+            router.push('/');
+          } else {
+            router.push('/?error=auth_failed');
+          }
+        });
+      }
+    })
+    .catch(() => router.push('/?error=network'));
   }, []);
 
   return (

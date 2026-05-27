@@ -3,6 +3,8 @@ import { useRouter } from 'next/router';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 
+const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+
 const PROPERTIES = [
   {
     id: 1, title: 'Oceanfront Villa', location: 'Miami Beach, FL', price: 285, rating: 4.97, reviews: 124,
@@ -99,8 +101,6 @@ export default function Home() {
     ? Math.round((checkOut - checkIn) / (1000 * 60 * 60 * 24))
     : 0;
 
-  // Pricing helpers — single source of truth, matches server exactly
-  // ARIA fee on subtotal only, never on deposit
   const getSubtotal    = (p, n) => p.price * n;
   const getAriaFee     = (p, n) => Math.round(getSubtotal(p, n) * 0.03);
   const getTax         = (p, n) => Math.round(getSubtotal(p, n) * 0.08);
@@ -129,13 +129,13 @@ export default function Home() {
   };
 
   useEffect(() => {
-    fetch('https://aria-demo-production-e590.up.railway.app/auth/me', { credentials: 'include' })
+    fetch(`${API}/auth/me`, { credentials: 'include' })
       .then(res => res.json())
       .then(data => { if (data.address) setUser(data); setLoading(false); })
       .catch(() => setLoading(false));
 
     Promise.all(PROPERTIES.map(p =>
-      fetch(`https://aria-demo-production-e590.up.railway.app/reviews/${p.id}`)
+      fetch(`${API}/reviews/${p.id}`)
         .then(r => r.json())
         .then(d => ({ id: p.id, rating: d.averageRating, count: d.count }))
         .catch(() => ({ id: p.id, rating: 0, count: 0 }))
@@ -153,13 +153,13 @@ export default function Home() {
   };
 
   const handleLogin = async () => {
-    const res = await fetch('https://aria-demo-production-e590.up.railway.app/auth/zklogin/init');
+    const res = await fetch(`${API}/auth/zklogin/init`);
     const { url } = await res.json();
     window.location.href = url;
   };
 
   const handleLogout = async () => {
-    await fetch('https://aria-demo-production-e590.up.railway.app/auth/logout', { credentials: 'include' });
+    await fetch(`${API}/auth/logout`, { credentials: 'include' });
     setUser(null);
   };
 
@@ -167,7 +167,7 @@ export default function Home() {
     if (!checkIn || !checkOut) { alert('Please select check-in and check-out dates'); return; }
     if (nights < 1) { alert('Check-out must be after check-in'); return; }
     setBookingLoading(true);
-    const res = await fetch('https://aria-demo-production-e590.up.railway.app/booking/create', {
+    const res = await fetch(`${API}/booking/create`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -194,7 +194,7 @@ export default function Home() {
   const handleCardPayment = async () => {
     if (!checkIn || !checkOut) { alert('Please select check-in and check-out dates'); return; }
     setBookingLoading(true);
-    const res = await fetch('https://aria-demo-production-e590.up.railway.app/payment/create-intent', {
+    const res = await fetch(`${API}/payment/create-intent`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -260,7 +260,9 @@ export default function Home() {
             <div style={{ fontSize: '11px', color: '#00ff44', fontFamily: 'monospace' }}>{user.address.slice(0, 8)}...{user.address.slice(-6)}</div>
           </div>
           <button onClick={() => router.push('/bookings')} style={{ background: 'transparent', border: '1px solid #333', color: '#888', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>My Bookings</button>
-          <button onClick={() => router.push('/host')} style={{ background: 'transparent', border: '1px solid #333', color: '#888', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>Host Dashboard</button>
+          {user.isHost && (
+            <button onClick={() => router.push('/host')} style={{ background: 'transparent', border: '1px solid #333', color: '#888', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>Host Dashboard</button>
+          )}
           <button onClick={() => router.push('/ai')} style={{ background: 'transparent', border: '1px solid #2a1a3a', color: '#aa44ff', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', fontWeight: '600' }}>🤖 AI</button>
           <button onClick={handleLogout} style={{ background: 'transparent', border: '1px solid #333', color: '#888', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>Sign out</button>
         </div>
@@ -435,32 +437,22 @@ export default function Home() {
 
               {checkIn && checkOut && nights > 0 && (
                 <div style={{ background: '#1a1a1a', borderRadius: '8px', padding: '16px', marginBottom: '20px' }}>
-
-                  {/* Subtotal */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
                     <span style={{ color: '#888', fontSize: '14px' }}>${selected.price} × {nights} night{nights > 1 ? 's' : ''}</span>
                     <span style={{ fontSize: '14px' }}>${getSubtotal(selected, nights)}</span>
                   </div>
-
-                  {/* ARIA fee */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
                     <span style={{ color: '#888', fontSize: '14px' }}>ARIA fee (3% of stay cost)</span>
                     <span style={{ fontSize: '14px', color: '#00ff44' }}>${getAriaFee(selected, nights)}</span>
                   </div>
-
-                  {/* Occupancy tax */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px', paddingBottom: '12px', borderBottom: '1px solid #333' }}>
                     <span style={{ color: '#888', fontSize: '14px' }}>Occupancy tax (8%)</span>
                     <span style={{ fontSize: '14px', color: '#888' }}>${getTax(selected, nights)}</span>
                   </div>
-
-                  {/* Booking total */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
                     <span style={{ fontSize: '14px', fontWeight: '600', color: '#fff' }}>Stay total</span>
                     <span style={{ fontSize: '14px', fontWeight: '700', color: '#00ff44' }}>${getBookingTotal(selected, nights)}</span>
                   </div>
-
-                  {/* Security deposit */}
                   <div style={{ background: '#0a0a1a', border: '1px solid #1a1a3a', borderRadius: '6px', padding: '10px', marginBottom: '12px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                       <span style={{ fontSize: '13px', color: '#4a9eff', fontWeight: '600' }}>🔒 Refundable security deposit</span>
@@ -470,8 +462,6 @@ export default function Home() {
                       Held in Sui escrow until checkout. Returned in full — no ARIA fee on deposit.
                     </p>
                   </div>
-
-                  {/* Grand total charged */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#0d0d0d', border: '1px solid #333', borderRadius: '6px', padding: '12px', marginBottom: '12px' }}>
                     <div>
                       <div style={{ fontSize: '14px', fontWeight: '700', color: '#fff' }}>Total charged today</div>
@@ -479,8 +469,6 @@ export default function Home() {
                     </div>
                     <span style={{ fontSize: '20px', fontWeight: '700', color: '#fff' }}>${getChargeTotal(selected, nights)}</span>
                   </div>
-
-                  {/* SuiUSD */}
                   <div style={{ background: '#0a1a0a', border: '1px solid #1a3a1a', borderRadius: '6px', padding: '10px', marginBottom: '8px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                       <span style={{ fontSize: '12px', color: '#00ff44', fontWeight: '600' }}>Pay with SuiUSD</span>
@@ -493,8 +481,6 @@ export default function Home() {
                       </span>
                     </div>
                   </div>
-
-                  {/* Card */}
                   <div style={{ background: '#1a1212', border: '1px solid #2a1a1a', borderRadius: '6px', padding: '10px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                       <span style={{ fontSize: '12px', color: '#ff6666', fontWeight: '600' }}>Pay with Card</span>
