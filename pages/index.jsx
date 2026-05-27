@@ -481,6 +481,15 @@ export default function Home() {
                     <p style={{ color: '#555', fontSize: '11px', margin: 0, lineHeight: '1.5' }}>Held in Sui escrow. Fully refundable after checkout. Not included in payment total.</p>
                   </div>
 
+                  {/* Grand total */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', padding: '10px 0', borderTop: '1px solid #333' }}>
+                    <div>
+                      <span style={{ fontSize: '14px', fontWeight: '700', color: '#fff' }}>Total due at checkout</span>
+                      <div style={{ fontSize: '11px', color: '#555', marginTop: '2px' }}>Booking + refundable deposit</div>
+                    </div>
+                    <span style={{ fontSize: '18px', fontWeight: '700', color: '#fff' }}>${getTotal(selected, nights) + getDeposit(selected, nights)}</span>
+                  </div>
+
                   {/* SuiUSD */}
                   <div style={{ background: '#0a1a0a', border: '1px solid #1a3a1a', borderRadius: '6px', padding: '10px', marginBottom: '8px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
