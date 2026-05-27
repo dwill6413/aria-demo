@@ -133,14 +133,16 @@ fastify.post('/booking/create', {
     }
   } catch (err) { fastify.log.warn({ err }, 'Availability check failed'); }
 
-  const bookingRef    = `ARIA-${propertyId}-${Date.now()}`;
-  const depositAmount = Math.round(totalAmount * 0.20);
+  // ── All pricing calculated server-side — never trust client totals ──────────
   const pricePerNight = request.body.pricePerNight || Math.round(totalAmount / nights / 1.03 / 1.08);
   const subtotal      = pricePerNight * nights;
   const ariaFee       = Math.round(subtotal * 0.03);
   const taxes         = Math.round(subtotal * 0.08);
   const total         = subtotal + ariaFee + taxes;
+  const depositAmount = Math.round(total * 0.20); // FIX: use server-calculated total, not client totalAmount
   const hostPayout    = calculateHostPayout(subtotal);
+
+  const bookingRef = `ARIA-${propertyId}-${Date.now()}`;
 
   // Save to database
   try {
@@ -164,7 +166,8 @@ fastify.post('/booking/create', {
       breakdown: {
         pricePerNight: `$${pricePerNight}`, nights,
         subtotal: `$${subtotal}`, ariaFee: `$${ariaFee} (3%)`,
-        taxes: `$${taxes} (8% occupancy tax)`, totalPaid: `$${total} SuiUSD`
+        taxes: `$${taxes} (8% occupancy tax)`, totalPaid: `$${total} SuiUSD`,
+        depositAmount: `$${depositAmount} (refundable, held in Sui escrow)`
       },
       hostPayout: { amount: `$${hostPayout.hostPayout} SuiUSD`, ariaFee: `$${hostPayout.ariaFee} SuiUSD`, settlementMethod: hostPayout.settlementMethod },
       walletAddress: session.suiAddress, guestName: session.name, guestEmail: session.email,
@@ -181,17 +184,38 @@ fastify.post('/booking/create', {
     }
   } catch (err) { fastify.log.warn({ err }, 'Walrus storage failed'); }
 
-  // Confirmation email
+  // Confirmation email — includes deposit line item
   try {
     const walrusHtml = walrusBlobId ? `<div style="background:#111;border:1px solid #222;border-radius:8px;padding:16px;margin-bottom:20px"><p style="margin:0 0 8px;font-size:12px;color:#555">WALRUS RECEIPT — PERMANENT ON-CHAIN RECORD</p><p style="margin:0;font-size:11px;color:#00ff44;word-break:break-all;font-family:monospace">${walrusBlobId}</p></div>` : '';
     await resend.emails.send({
       from: 'ARIA <onboarding@resend.dev>', to: session.email,
       subject: `Booking Confirmed — ${propertyTitle} | Ref: ${bookingRef}`,
-      html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px"><h1 style="color:#00ff44;font-size:24px;margin:0 0 8px">✅ Booking Confirmed</h1><p style="color:#888;margin:0 0 24px">Your ARIA booking receipt — ${session.name}</p><div style="background:#111;border:1px solid #222;border-radius:8px;padding:20px;margin-bottom:20px"><h2 style="margin:0 0 16px;font-size:18px">${propertyTitle}</h2><table style="width:100%;border-collapse:collapse"><tr><td style="color:#888;padding:6px 0">Booking Ref</td><td style="text-align:right">${bookingRef}</td></tr><tr><td style="color:#888;padding:6px 0">Check-in</td><td style="text-align:right">${checkInStr}</td></tr><tr><td style="color:#888;padding:6px 0">Check-out</td><td style="text-align:right">${checkOutStr}</td></tr><tr><td style="color:#888;padding:6px 0">Nights</td><td style="text-align:right">${nights}</td></tr><tr><td style="color:#888;padding:6px 0">Subtotal</td><td style="text-align:right">$${subtotal}</td></tr><tr><td style="color:#888;padding:6px 0">ARIA Fee (3%)</td><td style="text-align:right;color:#00ff44">$${ariaFee}</td></tr><tr><td style="color:#888;padding:6px 0">Taxes (8%)</td><td style="text-align:right">$${taxes}</td></tr><tr style="border-top:1px solid #333"><td style="padding:10px 0;font-weight:700">Total Paid</td><td style="text-align:right;font-weight:700;color:#00ff44">$${total} SuiUSD</td></tr></table></div>${walrusHtml}<p style="color:#555;font-size:12px;text-align:center;margin:0">Powered by ARIA — Built on Sui | The Airbnb killer</p></div>`
+      html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px">
+        <h1 style="color:#00ff44;font-size:24px;margin:0 0 8px">✅ Booking Confirmed</h1>
+        <p style="color:#888;margin:0 0 24px">Your ARIA booking receipt — ${session.name}</p>
+        <div style="background:#111;border:1px solid #222;border-radius:8px;padding:20px;margin-bottom:20px">
+          <h2 style="margin:0 0 16px;font-size:18px">${propertyTitle}</h2>
+          <table style="width:100%;border-collapse:collapse">
+            <tr><td style="color:#888;padding:6px 0">Booking Ref</td><td style="text-align:right">${bookingRef}</td></tr>
+            <tr><td style="color:#888;padding:6px 0">Check-in</td><td style="text-align:right">${checkInStr}</td></tr>
+            <tr><td style="color:#888;padding:6px 0">Check-out</td><td style="text-align:right">${checkOutStr}</td></tr>
+            <tr><td style="color:#888;padding:6px 0">Nights</td><td style="text-align:right">${nights}</td></tr>
+            <tr><td style="color:#888;padding:6px 0">Subtotal</td><td style="text-align:right">$${subtotal}</td></tr>
+            <tr><td style="color:#888;padding:6px 0">ARIA Fee (3%)</td><td style="text-align:right;color:#00ff44">$${ariaFee}</td></tr>
+            <tr><td style="color:#888;padding:6px 0">Taxes (8%)</td><td style="text-align:right">$${taxes}</td></tr>
+            <tr style="border-top:1px solid #333"><td style="padding:10px 0;font-weight:700">Total Charged</td><td style="text-align:right;font-weight:700;color:#00ff44">$${total} SuiUSD</td></tr>
+            <tr><td style="color:#4a9eff;padding:6px 0">Refundable Security Deposit</td><td style="text-align:right;color:#4a9eff">$${depositAmount} SuiUSD</td></tr>
+          </table>
+          <p style="color:#555;font-size:12px;margin:12px 0 0;line-height:1.6">The security deposit is held in Sui escrow and will be automatically returned after your checkout.</p>
+        </div>
+        ${walrusHtml}
+        <p style="color:#555;font-size:12px;text-align:center;margin:0">Powered by ARIA — Built on Sui | The Airbnb killer</p>
+      </div>`
     });
   } catch (err) { fastify.log.warn({ err }, 'Booking confirmation email failed'); }
 
   return { success: true, bookingRef, property: propertyTitle, nights, totalAmount: total,
+    depositAmount, depositNote: 'Refundable security deposit held in Sui escrow — returned after checkout',
     walletAddress: session.suiAddress, network: 'sui:testnet',
     message: 'Booking confirmed on Sui testnet', walrusBlobId };
 });
@@ -318,13 +342,15 @@ fastify.get('/bookings/history', async (request, reply) => {
       bookingRef: b.booking_ref, property: b.property_title, propertyId: b.property_id,
       checkIn: b.check_in, checkOut: b.check_out, nights: b.nights,
       totalAmount: b.total_amount, paymentStatus: b.payment_status,
+      depositAmount: b.deposit_amount, // FIX: now included
       depositStatus: b.deposit_status, walrusBlobId: b.walrus_blob_id,
       cancellationWalrusBlobId: b.cancellation_walrus_blob_id,
       timestamp: b.created_at, walletAddress: b.wallet_address,
       breakdown: {
         pricePerNight: `$${b.price_per_night}`, nights: b.nights,
         subtotal: `$${b.subtotal}`, ariaFee: `$${b.aria_fee} (3%)`,
-        taxes: `$${b.taxes} (8% occupancy tax)`, totalPaid: `$${b.total_amount} SuiUSD`
+        taxes: `$${b.taxes} (8% occupancy tax)`, totalPaid: `$${b.total_amount} SuiUSD`,
+        depositAmount: `$${b.deposit_amount} (refundable security deposit)`
       }
     }))};
   } catch (err) { return { bookings: [] }; }
@@ -343,6 +369,7 @@ fastify.get('/bookings/all', async (request, reply) => {
       bookingRef: b.booking_ref, property: b.property_title, propertyId: b.property_id,
       checkIn: b.check_in, checkOut: b.check_out, nights: b.nights,
       totalAmount: b.total_amount, paymentStatus: b.payment_status,
+      depositAmount: b.deposit_amount, // FIX: now included
       depositStatus: b.deposit_status, walrusBlobId: b.walrus_blob_id,
       cancellationWalrusBlobId: b.cancellation_walrus_blob_id,
       guestName: b.guest_name, guestEmail: b.guest_email,
@@ -350,7 +377,8 @@ fastify.get('/bookings/all', async (request, reply) => {
       breakdown: {
         pricePerNight: `$${b.price_per_night}`, nights: b.nights,
         subtotal: `$${b.subtotal}`, ariaFee: `$${b.aria_fee} (3%)`,
-        taxes: `$${b.taxes} (8% occupancy tax)`, totalPaid: `$${b.total_amount} SuiUSD`
+        taxes: `$${b.taxes} (8% occupancy tax)`, totalPaid: `$${b.total_amount} SuiUSD`,
+        depositAmount: `$${b.deposit_amount} (refundable security deposit)`
       }
     }))};
   } catch (err) { return { bookings: [] }; }
