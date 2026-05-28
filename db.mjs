@@ -87,6 +87,30 @@ export async function initDB() {
       notes TEXT,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
+    CREATE TABLE IF NOT EXISTS host_profiles (
+      id SERIAL PRIMARY KEY,
+      sui_address TEXT UNIQUE NOT NULL,
+      email TEXT NOT NULL,
+      name TEXT NOT NULL,
+      phone TEXT,
+      property_address TEXT,
+      city TEXT,
+      state TEXT,
+      zip TEXT,
+      country TEXT DEFAULT 'US',
+      jurisdiction TEXT,
+      str_permit TEXT,
+      payout_sui_address TEXT,
+      payout_notes TEXT,
+      status TEXT DEFAULT 'pending',
+      approved_at TIMESTAMPTZ,
+      approved_by TEXT,
+      terms_agreed BOOLEAN DEFAULT false,
+      terms_agreed_at TIMESTAMPTZ,
+      compliance_confirmed BOOLEAN DEFAULT false,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
   `);
   console.log('Database initialized');
 }

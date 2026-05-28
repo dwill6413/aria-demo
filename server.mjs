@@ -17,9 +17,23 @@ try { await initDB(); } catch (err) { console.error('DB init failed:', err.messa
 
 // ─── Role-Based Access Control ────────────────────────────────────────────────
 const HOST_ADDRESSES = (process.env.HOST_ADDRESSES || '').split(',').map(e => e.trim().toLowerCase());
+
+// Superadmin fallback (HOST_ADDRESSES env var) OR database-approved host
 function isHost(session) {
   if (!session?.email) return false;
-  return HOST_ADDRESSES.includes(session.email.toLowerCase());
+  if (HOST_ADDRESSES.includes(session.email.toLowerCase())) return true;
+  return session.dbHostApproved === true;
+}
+
+// Check DB for approved host profile — called at login
+async function checkDbHost(email) {
+  try {
+    const result = await pool.query(
+      `SELECT id FROM host_profiles WHERE email = $1 AND status = 'approved'`,
+      [email.toLowerCase()]
+    );
+    return result.rows.length > 0;
+  } catch { return false; }
 }
 
 const resend = new Resend(process.env.RESEND_API_KEY);
@@ -65,7 +79,29 @@ fastify.get('/auth/me', async (request, reply) => {
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
-  return { address: session.suiAddress, email: session.email, name: session.name, isHost: isHost(session) };
+
+  // Check DB host status if not already a superadmin
+  if (!HOST_ADDRESSES.includes(session.email.toLowerCase()) && !session.dbHostApproved) {
+    session.dbHostApproved = await checkDbHost(session.email);
+  }
+
+  // Check if user has a pending host application
+  let hostStatus = null;
+  try {
+    const hp = await pool.query(
+      'SELECT status FROM host_profiles WHERE email = $1',
+      [session.email.toLowerCase()]
+    );
+    if (hp.rows.length > 0) hostStatus = hp.rows[0].status;
+  } catch {}
+
+  return {
+    address: session.suiAddress,
+    email: session.email,
+    name: session.name,
+    isHost: isHost(session),
+    hostStatus
+  };
 });
 
 fastify.get('/auth/logout', async (request, reply) => {
@@ -548,7 +584,6 @@ fastify.get('/reviews/all', async (request, reply) => {
 
 // ─── Tax Routes — HOST ONLY ───────────────────────────────────────────────────
 
-// GET /tax/summary — all bookings with tax data + remittance status
 fastify.get('/tax/summary', async (request, reply) => {
   const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
@@ -557,125 +592,259 @@ fastify.get('/tax/summary', async (request, reply) => {
   if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
   try {
     const result = await pool.query(`
-      SELECT
-        b.booking_ref, b.property_id, b.property_title, b.guest_name, b.guest_email,
+      SELECT b.booking_ref, b.property_id, b.property_title, b.guest_name, b.guest_email,
         b.check_in, b.check_out, b.nights, b.subtotal, b.taxes, b.total_amount,
         b.payment_status, b.created_at,
-        tr.id AS remittance_id, tr.remitted_at, tr.remitted_by,
-        tr.jurisdiction, tr.notes
+        tr.id AS remittance_id, tr.remitted_at, tr.remitted_by, tr.jurisdiction, tr.notes
       FROM bookings b
       LEFT JOIN tax_remittances tr ON b.booking_ref = tr.booking_ref
       WHERE b.payment_status != 'cancelled'
       ORDER BY b.created_at DESC
     `);
     const rows = result.rows;
-    const totalCollected  = rows.reduce((sum, r) => sum + (r.taxes || 0), 0);
-    const totalRemitted   = rows.filter(r => r.remittance_id).reduce((sum, r) => sum + (r.taxes || 0), 0);
+    const totalCollected   = rows.reduce((sum, r) => sum + (r.taxes || 0), 0);
+    const totalRemitted    = rows.filter(r => r.remittance_id).reduce((sum, r) => sum + (r.taxes || 0), 0);
     const totalOutstanding = totalCollected - totalRemitted;
     return {
       bookings: rows.map(r => ({
-        bookingRef:    r.booking_ref,
-        propertyId:    r.property_id,
-        property:      r.property_title,
-        guestName:     r.guest_name,
-        guestEmail:    r.guest_email,
-        checkIn:       r.check_in,
-        checkOut:      r.check_out,
-        nights:        r.nights,
-        subtotal:      r.subtotal,
-        taxAmount:     r.taxes || 0,
-        totalAmount:   r.total_amount,
-        bookedAt:      r.created_at,
-        remitted:      !!r.remittance_id,
-        remittedAt:    r.remitted_at || null,
-        remittedBy:    r.remitted_by || null,
-        jurisdiction:  r.jurisdiction || null,
-        notes:         r.notes || null,
+        bookingRef: r.booking_ref, propertyId: r.property_id, property: r.property_title,
+        guestName: r.guest_name, guestEmail: r.guest_email,
+        checkIn: r.check_in, checkOut: r.check_out, nights: r.nights,
+        subtotal: r.subtotal, taxAmount: r.taxes || 0, totalAmount: r.total_amount,
+        bookedAt: r.created_at, remitted: !!r.remittance_id,
+        remittedAt: r.remitted_at || null, remittedBy: r.remitted_by || null,
+        jurisdiction: r.jurisdiction || null, notes: r.notes || null,
       })),
       summary: {
-        totalCollected,
-        totalRemitted,
-        totalOutstanding,
-        bookingCount:   rows.length,
-        remittedCount:  rows.filter(r => r.remittance_id).length,
-        pendingCount:   rows.filter(r => !r.remittance_id).length,
+        totalCollected, totalRemitted, totalOutstanding,
+        bookingCount: rows.length,
+        remittedCount: rows.filter(r => r.remittance_id).length,
+        pendingCount: rows.filter(r => !r.remittance_id).length,
       }
     };
-  } catch (err) {
-    fastify.log.error(err);
-    return reply.code(500).send({ error: 'Failed to fetch tax summary' });
-  }
+  } catch (err) { fastify.log.error(err); return reply.code(500).send({ error: 'Failed to fetch tax summary' }); }
 });
 
-// POST /tax/remit — mark a booking's taxes as remitted
 fastify.post('/tax/remit', async (request, reply) => {
   const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
   if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
-
   const { bookingRef, jurisdiction, notes } = request.body;
   if (!bookingRef || typeof bookingRef !== 'string' || !bookingRef.startsWith('ARIA-'))
     return reply.code(400).send({ error: 'A valid bookingRef is required' });
-
   try {
-    const bkResult = await pool.query(
-      'SELECT * FROM bookings WHERE booking_ref = $1 AND payment_status != $2',
-      [bookingRef, 'cancelled']
-    );
-    if (bkResult.rows.length === 0)
-      return reply.code(404).send({ error: 'Booking not found or is cancelled' });
+    const bkResult = await pool.query('SELECT * FROM bookings WHERE booking_ref = $1 AND payment_status != $2', [bookingRef, 'cancelled']);
+    if (bkResult.rows.length === 0) return reply.code(404).send({ error: 'Booking not found or is cancelled' });
     const booking = bkResult.rows[0];
-
-    const existing = await pool.query(
-      'SELECT id FROM tax_remittances WHERE booking_ref = $1', [bookingRef]
-    );
-    if (existing.rows.length > 0)
-      return reply.code(400).send({ error: 'Taxes already marked as remitted for this booking' });
-
+    const existing = await pool.query('SELECT id FROM tax_remittances WHERE booking_ref = $1', [bookingRef]);
+    if (existing.rows.length > 0) return reply.code(400).send({ error: 'Taxes already marked as remitted for this booking' });
     await pool.query(
-      `INSERT INTO tax_remittances
-        (booking_ref, property_id, property_title, tax_amount, jurisdiction, remitted_at, remitted_by, notes)
+      `INSERT INTO tax_remittances (booking_ref, property_id, property_title, tax_amount, jurisdiction, remitted_at, remitted_by, notes)
        VALUES ($1, $2, $3, $4, $5, NOW(), $6, $7)`,
-      [bookingRef, booking.property_id, booking.property_title, booking.taxes || 0,
-       jurisdiction || null, session.email, notes || null]
+      [bookingRef, booking.property_id, booking.property_title, booking.taxes || 0, jurisdiction || null, session.email, notes || null]
     );
-
-    return {
-      success: true,
-      bookingRef,
-      taxAmount: booking.taxes || 0,
-      remittedBy: session.email,
-      remittedAt: new Date().toISOString(),
-      message: `$${booking.taxes || 0} occupancy tax marked as remitted for ${booking.property_title}`
-    };
-  } catch (err) {
-    fastify.log.error(err);
-    return reply.code(500).send({ error: 'Failed to record tax remittance' });
-  }
+    return { success: true, bookingRef, taxAmount: booking.taxes || 0, remittedBy: session.email, remittedAt: new Date().toISOString() };
+  } catch (err) { fastify.log.error(err); return reply.code(500).send({ error: 'Failed to record tax remittance' }); }
 });
 
-// POST /tax/unremit — undo a remittance (correction use case)
 fastify.post('/tax/unremit', async (request, reply) => {
   const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
   if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
-
   const { bookingRef } = request.body;
   if (!bookingRef) return reply.code(400).send({ error: 'bookingRef is required' });
+  try {
+    const result = await pool.query('DELETE FROM tax_remittances WHERE booking_ref = $1 RETURNING *', [bookingRef]);
+    if (result.rows.length === 0) return reply.code(404).send({ error: 'No remittance record found' });
+    return { success: true, bookingRef };
+  } catch (err) { return reply.code(500).send({ error: 'Failed to remove remittance record' }); }
+});
+
+// ─── Host Onboarding Routes ───────────────────────────────────────────────────
+
+// GET /host/profile — get current user's host profile
+fastify.get('/host/profile', async (request, reply) => {
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+  const session = getSession(sessionId);
+  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  try {
+    const result = await pool.query(
+      'SELECT * FROM host_profiles WHERE sui_address = $1',
+      [session.suiAddress]
+    );
+    if (result.rows.length === 0) return { profile: null };
+    const p = result.rows[0];
+    return { profile: {
+      name: p.name, email: p.email, phone: p.phone,
+      propertyAddress: p.property_address, city: p.city, state: p.state,
+      zip: p.zip, country: p.country, jurisdiction: p.jurisdiction,
+      strPermit: p.str_permit, payoutSuiAddress: p.payout_sui_address,
+      payoutNotes: p.payout_notes, status: p.status,
+      termsAgreed: p.terms_agreed, complianceConfirmed: p.compliance_confirmed,
+      createdAt: p.created_at, updatedAt: p.updated_at
+    }};
+  } catch (err) { return reply.code(500).send({ error: 'Failed to fetch host profile' }); }
+});
+
+// POST /host/apply — submit host application
+fastify.post('/host/apply', {
+  config: { rateLimit: { max: 3, timeWindow: '1 hour', errorResponseBuilder: () => ({ error: 'Too many applications. Please wait and try again.' }) } }
+}, async (request, reply) => {
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+  const session = getSession(sessionId);
+  if (!session) return reply.code(401).send({ error: 'Session expired' });
+
+  const {
+    name, email, phone,
+    propertyAddress, city, state, zip, country,
+    jurisdiction, strPermit,
+    payoutSuiAddress, payoutNotes,
+    termsAgreed, complianceConfirmed
+  } = request.body;
+
+  if (!name || !email || !termsAgreed || !complianceConfirmed)
+    return reply.code(400).send({ error: 'Name, email, terms agreement, and compliance confirmation are required' });
+  if (!termsAgreed) return reply.code(400).send({ error: 'You must agree to the terms' });
+  if (!complianceConfirmed) return reply.code(400).send({ error: 'You must confirm regulatory compliance' });
+
+  try {
+    // Check for existing application
+    const existing = await pool.query('SELECT id, status FROM host_profiles WHERE sui_address = $1', [session.suiAddress]);
+    if (existing.rows.length > 0) {
+      const status = existing.rows[0].status;
+      if (status === 'approved') return reply.code(400).send({ error: 'You are already an approved host' });
+      if (status === 'pending') return reply.code(400).send({ error: 'Your application is already under review' });
+    }
+
+    await pool.query(
+      `INSERT INTO host_profiles
+        (sui_address, email, name, phone, property_address, city, state, zip, country,
+         jurisdiction, str_permit, payout_sui_address, payout_notes,
+         status, terms_agreed, terms_agreed_at, compliance_confirmed)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'pending',true,NOW(),true)
+       ON CONFLICT (sui_address) DO UPDATE SET
+         email=$2, name=$3, phone=$4, property_address=$5, city=$6, state=$7, zip=$8,
+         country=$9, jurisdiction=$10, str_permit=$11, payout_sui_address=$12,
+         payout_notes=$13, status='pending', terms_agreed=true, terms_agreed_at=NOW(),
+         compliance_confirmed=true, updated_at=NOW()`,
+      [session.suiAddress, email.toLowerCase(), name, phone || null,
+       propertyAddress || null, city || null, state || null, zip || null, country || 'US',
+       jurisdiction || null, strPermit || null,
+       payoutSuiAddress || session.suiAddress, payoutNotes || null]
+    );
+
+    // Send welcome / confirmation email
+    try {
+      await resend.emails.send({
+        from: 'ARIA <onboarding@resend.dev>',
+        to: email,
+        subject: 'ARIA Host Application Received',
+        html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px">
+          <h1 style="color:#00ff44;font-size:24px;margin:0 0 8px">🏠 Host Application Received</h1>
+          <p style="color:#888;margin:0 0 24px">Thanks for applying to host on ARIA, ${name}.</p>
+          <div style="background:#111;border:1px solid #222;border-radius:8px;padding:20px;margin-bottom:20px">
+            <p style="margin:0 0 12px;font-size:14px;color:#ccc">Your application is under review. Here's what happens next:</p>
+            <ul style="color:#888;font-size:13px;line-height:1.8;padding-left:16px">
+              <li>We'll review your application within 1–2 business days</li>
+              <li>You'll receive an email when your account is approved</li>
+              <li>Once approved, you can list properties and receive bookings</li>
+            </ul>
+          </div>
+          <div style="background:#0a1a0a;border:1px solid #1a3a1a;border-radius:8px;padding:16px;margin-bottom:20px">
+            <div style="font-size:12px;color:#555;margin-bottom:8px;font-weight:600">YOUR APPLICATION DETAILS</div>
+            <table style="width:100%;border-collapse:collapse;font-size:13px">
+              <tr><td style="color:#888;padding:4px 0">Name</td><td style="text-align:right">${name}</td></tr>
+              <tr><td style="color:#888;padding:4px 0">Email</td><td style="text-align:right">${email}</td></tr>
+              ${city ? `<tr><td style="color:#888;padding:4px 0">Location</td><td style="text-align:right">${city}, ${state || ''}</td></tr>` : ''}
+              ${strPermit ? `<tr><td style="color:#888;padding:4px 0">STR Permit</td><td style="text-align:right">${strPermit}</td></tr>` : ''}
+            </table>
+          </div>
+          <p style="color:#555;font-size:12px;text-align:center;margin:0">Powered by ARIA — Built on Sui</p>
+        </div>`
+      });
+    } catch (err) { fastify.log.warn({ err }, 'Host application email failed'); }
+
+    return { success: true, status: 'pending', message: 'Host application submitted. You will receive an email when approved.' };
+  } catch (err) {
+    fastify.log.error(err);
+    return reply.code(500).send({ error: 'Failed to submit host application' });
+  }
+});
+
+// POST /host/approve — superadmin approves a host (HOST_ADDRESSES only)
+fastify.post('/host/approve', async (request, reply) => {
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+  const session = getSession(sessionId);
+  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  if (!HOST_ADDRESSES.includes(session.email.toLowerCase()))
+    return reply.code(403).send({ error: 'Superadmin access required' });
+
+  const { suiAddress } = request.body;
+  if (!suiAddress) return reply.code(400).send({ error: 'suiAddress is required' });
 
   try {
     const result = await pool.query(
-      'DELETE FROM tax_remittances WHERE booking_ref = $1 RETURNING *', [bookingRef]
+      `UPDATE host_profiles SET status='approved', approved_at=NOW(), approved_by=$1, updated_at=NOW()
+       WHERE sui_address=$2 RETURNING *`,
+      [session.email, suiAddress]
     );
-    if (result.rows.length === 0)
-      return reply.code(404).send({ error: 'No remittance record found for this booking' });
-    return { success: true, bookingRef, message: 'Remittance record removed' };
+    if (result.rows.length === 0) return reply.code(404).send({ error: 'Host profile not found' });
+    const host = result.rows[0];
+
+    // Send approval email
+    try {
+      await resend.emails.send({
+        from: 'ARIA <onboarding@resend.dev>',
+        to: host.email,
+        subject: '🎉 Your ARIA Host Account is Approved!',
+        html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px">
+          <h1 style="color:#00ff44;font-size:24px;margin:0 0 8px">🎉 You're an ARIA Host!</h1>
+          <p style="color:#888;margin:0 0 24px">Congratulations ${host.name} — your host account has been approved.</p>
+          <div style="background:#0a1a0a;border:1px solid #1a3a1a;border-radius:8px;padding:20px;margin-bottom:20px">
+            <p style="color:#00ff44;font-size:14px;font-weight:600;margin:0 0 8px">You can now:</p>
+            <ul style="color:#888;font-size:13px;line-height:1.8;padding-left:16px">
+              <li>Access your Host Dashboard</li>
+              <li>Receive bookings from guests</li>
+              <li>Manage deposits and payouts</li>
+              <li>Track occupancy tax compliance</li>
+            </ul>
+          </div>
+          <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}" style="display:block;background:#00ff44;color:#000;text-align:center;padding:14px;border-radius:8px;font-weight:700;font-size:15px;text-decoration:none;margin-bottom:20px">Go to ARIA →</a>
+          <p style="color:#555;font-size:12px;text-align:center;margin:0">Powered by ARIA — Built on Sui</p>
+        </div>`
+      });
+    } catch (err) { fastify.log.warn({ err }, 'Host approval email failed'); }
+
+    return { success: true, message: `Host ${host.name} approved`, email: host.email };
   } catch (err) {
-    return reply.code(500).send({ error: 'Failed to remove remittance record' });
+    return reply.code(500).send({ error: 'Failed to approve host' });
+  }
+});
+
+// GET /host/applications — list all pending applications (superadmin only)
+fastify.get('/host/applications', async (request, reply) => {
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+  const session = getSession(sessionId);
+  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  if (!HOST_ADDRESSES.includes(session.email.toLowerCase()))
+    return reply.code(403).send({ error: 'Superadmin access required' });
+
+  try {
+    const result = await pool.query(
+      `SELECT id, sui_address, name, email, phone, city, state, jurisdiction, str_permit, status, created_at, approved_at
+       FROM host_profiles ORDER BY created_at DESC`
+    );
+    return { applications: result.rows };
+  } catch (err) {
+    return reply.code(500).send({ error: 'Failed to fetch applications' });
   }
 });
 

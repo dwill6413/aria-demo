@@ -5,12 +5,7 @@ import 'react-datepicker/dist/react-datepicker.css';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
-// Helper to get session ID from localStorage (for cross-domain production auth)
-const getStoredSid = () => {
-  try { return localStorage.getItem('aria_sid') || ''; } catch { return ''; }
-};
-
-// Helper to build fetch options with session header when needed
+const getStoredSid = () => { try { return localStorage.getItem('aria_sid') || ''; } catch { return ''; } };
 const authFetch = (url, options = {}) => {
   const sid = getStoredSid();
   const headers = { ...(options.headers || {}) };
@@ -110,9 +105,7 @@ export default function Home() {
   const [liveRatings, setLiveRatings] = useState({});
   const [photoIndex, setPhotoIndex] = useState(0);
 
-  const nights = checkIn && checkOut
-    ? Math.round((checkOut - checkIn) / (1000 * 60 * 60 * 24))
-    : 0;
+  const nights = checkIn && checkOut ? Math.round((checkOut - checkIn) / (1000 * 60 * 60 * 24)) : 0;
 
   const getSubtotal    = (p, n) => p.price * n;
   const getAriaFee     = (p, n) => Math.round(getSubtotal(p, n) * 0.03);
@@ -123,7 +116,7 @@ export default function Home() {
   const getCardTotal   = (p, n) => (getChargeTotal(p, n) * 1.029 + 0.30).toFixed(2);
   const getCardFee     = (p, n) => (getChargeTotal(p, n) * 0.029 + 0.30).toFixed(2);
 
-  const openModal = (p) => { setSelected(p); setBooking(null); setCheckIn(null); setCheckOut(null); setPhotoIndex(0); };
+  const openModal  = (p) => { setSelected(p); setBooking(null); setCheckIn(null); setCheckOut(null); setPhotoIndex(0); };
   const closeModal = () => { setSelected(null); setBooking(null); setCheckIn(null); setCheckOut(null); setPhotoIndex(0); };
 
   const handleSearch = () => {
@@ -142,7 +135,6 @@ export default function Home() {
   };
 
   useEffect(() => {
-    // Read sid from URL (set by Railway after OAuth) and store in localStorage
     const params = new URLSearchParams(window.location.search);
     const sid = params.get('sid');
     if (sid) {
@@ -193,13 +185,11 @@ export default function Home() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        propertyId:    selected.id,
-        propertyTitle: selected.title,
-        pricePerNight: selected.price,
-        nights,
-        totalAmount:   getBookingTotal(selected, nights),
-        checkIn:       checkIn.toISOString().split('T')[0],
-        checkOut:      checkOut.toISOString().split('T')[0]
+        propertyId: selected.id, propertyTitle: selected.title,
+        pricePerNight: selected.price, nights,
+        totalAmount: getBookingTotal(selected, nights),
+        checkIn: checkIn.toISOString().split('T')[0],
+        checkOut: checkOut.toISOString().split('T')[0]
       })
     });
     const data = await res.json();
@@ -283,6 +273,14 @@ export default function Home() {
           {user.isHost && (
             <button onClick={() => router.push('/host')} style={{ background: 'transparent', border: '1px solid #333', color: '#888', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>Host Dashboard</button>
           )}
+          {!user.isHost && user.hostStatus !== 'pending' && (
+            <button onClick={() => router.push('/become-host')} style={{ background: 'transparent', border: '1px solid #00ff44', color: '#00ff44', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', fontWeight: '600' }}>
+              🏡 Become a Host
+            </button>
+          )}
+          {user.hostStatus === 'pending' && (
+            <span style={{ fontSize: '12px', color: '#ffaa00', fontWeight: '600' }}>⏳ Application Pending</span>
+          )}
           <button onClick={() => router.push('/ai')} style={{ background: 'transparent', border: '1px solid #2a1a3a', color: '#aa44ff', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', fontWeight: '600' }}>🤖 AI</button>
           <button onClick={handleLogout} style={{ background: 'transparent', border: '1px solid #333', color: '#888', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>Sign out</button>
         </div>
@@ -341,12 +339,8 @@ export default function Home() {
                 <div style={{ height: '200px', background: '#1a1a1a', overflow: 'hidden', position: 'relative' }}>
                   <img src={p.image} alt={p.title} className="property-img" />
                   <span style={{ position: 'absolute', top: '12px', left: '12px', background: 'rgba(0,0,0,0.7)', color: '#fff', fontSize: '11px', fontWeight: '600', padding: '4px 10px', borderRadius: '6px', backdropFilter: 'blur(4px)' }}>{p.tag}</span>
-                  {isLive && (
-                    <span style={{ position: 'absolute', top: '12px', right: '12px', background: 'rgba(170,68,255,0.85)', color: '#fff', fontSize: '10px', fontWeight: '700', padding: '3px 8px', borderRadius: '6px' }}>ARIA VERIFIED</span>
-                  )}
-                  <span style={{ position: 'absolute', bottom: '10px', right: '10px', background: 'rgba(0,0,0,0.65)', color: '#fff', fontSize: '10px', fontWeight: '600', padding: '3px 8px', borderRadius: '6px', backdropFilter: 'blur(4px)' }}>
-                    📷 {p.images.length}
-                  </span>
+                  {isLive && <span style={{ position: 'absolute', top: '12px', right: '12px', background: 'rgba(170,68,255,0.85)', color: '#fff', fontSize: '10px', fontWeight: '700', padding: '3px 8px', borderRadius: '6px' }}>ARIA VERIFIED</span>}
+                  <span style={{ position: 'absolute', bottom: '10px', right: '10px', background: 'rgba(0,0,0,0.65)', color: '#fff', fontSize: '10px', fontWeight: '600', padding: '3px 8px', borderRadius: '6px', backdropFilter: 'blur(4px)' }}>📷 {p.images.length}</span>
                 </div>
                 <div style={{ padding: '16px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '4px' }}>
@@ -363,18 +357,12 @@ export default function Home() {
                     <div><span style={{ fontSize: '17px', fontWeight: '700' }}>${p.price}</span><span style={{ color: '#666', fontSize: '13px' }}>/night</span></div>
                   </div>
                   <div style={{ marginTop: '12px', display: 'flex', gap: '8px' }}>
-                    <div style={{ flex: 1, background: '#1a1a1a', borderRadius: '6px', padding: '8px', textAlign: 'center' }}>
-                      <div style={{ fontSize: '10px', color: '#555', marginBottom: '2px' }}>ARIA FEE</div>
-                      <div style={{ fontSize: '13px', fontWeight: '600', color: '#00ff44' }}>3%</div>
-                    </div>
-                    <div style={{ flex: 1, background: '#1a1a1a', borderRadius: '6px', padding: '8px', textAlign: 'center' }}>
-                      <div style={{ fontSize: '10px', color: '#555', marginBottom: '2px' }}>AIRBNB FEE</div>
-                      <div style={{ fontSize: '13px', fontWeight: '600', color: '#ff4444' }}>15%</div>
-                    </div>
-                    <div style={{ flex: 1, background: '#1a1a1a', borderRadius: '6px', padding: '8px', textAlign: 'center' }}>
-                      <div style={{ fontSize: '10px', color: '#555', marginBottom: '2px' }}>SETTLEMENT</div>
-                      <div style={{ fontSize: '13px', fontWeight: '600', color: '#4a9eff' }}>instant</div>
-                    </div>
+                    {[['ARIA FEE','3%','#00ff44'],['AIRBNB FEE','15%','#ff4444'],['SETTLEMENT','instant','#4a9eff']].map(([label, val, color]) => (
+                      <div key={label} style={{ flex: 1, background: '#1a1a1a', borderRadius: '6px', padding: '8px', textAlign: 'center' }}>
+                        <div style={{ fontSize: '10px', color: '#555', marginBottom: '2px' }}>{label}</div>
+                        <div style={{ fontSize: '13px', fontWeight: '600', color }}>{val}</div>
+                      </div>
+                    ))}
                   </div>
                 </div>
               </div>
@@ -390,24 +378,15 @@ export default function Home() {
           <div style={{ background: '#111', border: '1px solid #333', borderRadius: '16px', width: '100%', maxWidth: '500px', maxHeight: '92vh', overflowY: 'auto' }}>
             <div style={{ borderRadius: '16px 16px 0 0', position: 'relative', background: '#000' }}>
               <div style={{ height: '260px', overflow: 'hidden', position: 'relative' }}>
-                <img src={selected.images[photoIndex]} alt={selected.title}
-                  style={{ width: '100%', height: '100%', objectFit: 'cover', transition: 'opacity 0.2s ease' }} />
+                <img src={selected.images[photoIndex]} alt={selected.title} style={{ width: '100%', height: '100%', objectFit: 'cover', transition: 'opacity 0.2s ease' }} />
                 <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to bottom, transparent 45%, rgba(0,0,0,0.85) 100%)' }} />
-                <button onClick={closeModal}
-                  style={{ position: 'absolute', top: '12px', right: '12px', background: 'rgba(0,0,0,0.6)', border: 'none', color: '#fff', fontSize: '20px', cursor: 'pointer', borderRadius: '50%', width: '34px', height: '34px', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)', zIndex: 3 }}>×</button>
-                <div style={{ position: 'absolute', top: '12px', left: '12px', background: 'rgba(0,0,0,0.6)', color: '#fff', fontSize: '11px', fontWeight: '600', padding: '4px 10px', borderRadius: '6px', backdropFilter: 'blur(4px)', zIndex: 3 }}>
-                  {photoIndex + 1} / {selected.images.length}
-                </div>
-                {photoIndex > 0 && (
-                  <button className="gallery-arrow" onClick={e => { e.stopPropagation(); setPhotoIndex(i => i - 1); }} style={{ left: '12px' }}>‹</button>
-                )}
-                {photoIndex < selected.images.length - 1 && (
-                  <button className="gallery-arrow" onClick={e => { e.stopPropagation(); setPhotoIndex(i => i + 1); }} style={{ right: '12px' }}>›</button>
-                )}
+                <button onClick={closeModal} style={{ position: 'absolute', top: '12px', right: '12px', background: 'rgba(0,0,0,0.6)', border: 'none', color: '#fff', fontSize: '20px', cursor: 'pointer', borderRadius: '50%', width: '34px', height: '34px', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)', zIndex: 3 }}>×</button>
+                <div style={{ position: 'absolute', top: '12px', left: '12px', background: 'rgba(0,0,0,0.6)', color: '#fff', fontSize: '11px', fontWeight: '600', padding: '4px 10px', borderRadius: '6px', backdropFilter: 'blur(4px)', zIndex: 3 }}>{photoIndex + 1} / {selected.images.length}</div>
+                {photoIndex > 0 && <button className="gallery-arrow" onClick={e => { e.stopPropagation(); setPhotoIndex(i => i - 1); }} style={{ left: '12px' }}>‹</button>}
+                {photoIndex < selected.images.length - 1 && <button className="gallery-arrow" onClick={e => { e.stopPropagation(); setPhotoIndex(i => i + 1); }} style={{ right: '12px' }}>›</button>}
                 <div style={{ position: 'absolute', bottom: '50px', left: '50%', transform: 'translateX(-50%)', display: 'flex', gap: '6px', zIndex: 3 }}>
                   {selected.images.map((_, i) => (
-                    <button key={i} className="gallery-dot"
-                      onClick={e => { e.stopPropagation(); setPhotoIndex(i); }}
+                    <button key={i} className="gallery-dot" onClick={e => { e.stopPropagation(); setPhotoIndex(i); }}
                       style={{ width: i === photoIndex ? '22px' : '8px', height: '8px', background: i === photoIndex ? '#fff' : 'rgba(255,255,255,0.45)' }} />
                   ))}
                 </div>
@@ -418,8 +397,7 @@ export default function Home() {
               </div>
               <div style={{ display: 'flex', gap: '4px', padding: '4px', background: '#000' }}>
                 {selected.images.map((img, i) => (
-                  <div key={i} className="gallery-thumb"
-                    onClick={e => { e.stopPropagation(); setPhotoIndex(i); }}
+                  <div key={i} className="gallery-thumb" onClick={e => { e.stopPropagation(); setPhotoIndex(i); }}
                     style={{ border: i === photoIndex ? '2px solid #00ff44' : '2px solid transparent', opacity: i === photoIndex ? 1 : 0.5 }}>
                     <img src={img} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
                   </div>
@@ -434,8 +412,7 @@ export default function Home() {
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: '11px', color: '#555', marginBottom: '4px' }}>CHECK-IN</div>
                     <DatePicker selected={checkIn} onChange={date => { setCheckIn(date); if (checkOut && date >= checkOut) setCheckOut(null); }}
-                      selectsStart startDate={checkIn} endDate={checkOut}
-                      minDate={new Date()} placeholderText="Select date" dateFormat="MMM d, yyyy" className="date-input" />
+                      selectsStart startDate={checkIn} endDate={checkOut} minDate={new Date()} placeholderText="Select date" dateFormat="MMM d, yyyy" className="date-input" />
                   </div>
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: '11px', color: '#555', marginBottom: '4px' }}>CHECK-OUT</div>
@@ -446,9 +423,7 @@ export default function Home() {
                   </div>
                 </div>
                 {checkIn && checkOut && nights > 0 && (
-                  <div style={{ marginTop: '8px', fontSize: '13px', color: '#00ff44', textAlign: 'center' }}>
-                    {nights} night{nights > 1 ? 's' : ''} selected
-                  </div>
+                  <div style={{ marginTop: '8px', fontSize: '13px', color: '#00ff44', textAlign: 'center' }}>{nights} night{nights > 1 ? 's' : ''} selected</div>
                 )}
               </div>
 
@@ -475,9 +450,7 @@ export default function Home() {
                       <span style={{ fontSize: '13px', color: '#4a9eff', fontWeight: '600' }}>🔒 Refundable security deposit</span>
                       <span style={{ fontSize: '13px', color: '#4a9eff', fontWeight: '700' }}>${getDeposit(selected, nights)}</span>
                     </div>
-                    <p style={{ color: '#555', fontSize: '11px', margin: 0, lineHeight: '1.5' }}>
-                      Held in Sui escrow until checkout. Returned in full — no ARIA fee on deposit.
-                    </p>
+                    <p style={{ color: '#555', fontSize: '11px', margin: 0, lineHeight: '1.5' }}>Held in Sui escrow until checkout. Returned in full — no ARIA fee on deposit.</p>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#0d0d0d', border: '1px solid #333', borderRadius: '6px', padding: '12px', marginBottom: '12px' }}>
                     <div>
@@ -493,9 +466,7 @@ export default function Home() {
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <span style={{ color: '#666', fontSize: '12px' }}>Gas fee ~$0.02</span>
-                      <span style={{ fontWeight: '700', fontSize: '16px', color: '#00ff44' }}>
-                        ${getChargeTotal(selected, nights)}<span style={{ fontSize: '11px', color: '#555' }}>.02</span>
-                      </span>
+                      <span style={{ fontWeight: '700', fontSize: '16px', color: '#00ff44' }}>${getChargeTotal(selected, nights)}<span style={{ fontSize: '11px', color: '#555' }}>.02</span></span>
                     </div>
                   </div>
                   <div style={{ background: '#1a1212', border: '1px solid #2a1a1a', borderRadius: '6px', padding: '10px' }}>
@@ -543,15 +514,12 @@ export default function Home() {
                 <div style={{ marginTop: '16px', background: '#0a1a0a', border: '1px solid #00ff44', borderRadius: '8px', padding: '16px', fontSize: '12px', color: '#00ff44', textAlign: 'center' }}>
                   ✅ Booking confirmed! Ref: {booking.bookingRef}
                   {booking.depositAmount && (
-                    <div style={{ marginTop: '8px', color: '#4a9eff', fontSize: '11px' }}>
-                      🔒 ${booking.depositAmount} deposit held in Sui escrow — returned after checkout
-                    </div>
+                    <div style={{ marginTop: '8px', color: '#4a9eff', fontSize: '11px' }}>🔒 ${booking.depositAmount} deposit held in Sui escrow — returned after checkout</div>
                   )}
                   {booking.walrusBlobId && (
                     <div style={{ marginTop: '10px', background: '#050f05', borderRadius: '6px', padding: '10px' }}>
                       <div style={{ color: '#555', fontSize: '10px', marginBottom: '4px' }}>RECEIPT STORED ON WALRUS</div>
-                      <a href={`https://aggregator.walrus-testnet.walrus.space/v1/blobs/${booking.walrusBlobId}`}
-                        target="_blank" rel="noreferrer"
+                      <a href={`https://aggregator.walrus-testnet.walrus.space/v1/blobs/${booking.walrusBlobId}`} target="_blank" rel="noreferrer"
                         style={{ color: '#00ff44', fontFamily: 'monospace', fontSize: '10px', wordBreak: 'break-all' }}>
                         {booking.walrusBlobId}
                       </a>
