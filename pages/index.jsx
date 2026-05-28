@@ -17,75 +17,48 @@ const PROPERTIES = [
   {
     id: 1, title: 'Oceanfront Villa', location: 'Miami Beach, FL', price: 285, rating: 4.97, reviews: 124,
     image: 'https://images.unsplash.com/photo-1499793983690-e29da59ef1c2?w=600&q=80',
-    images: [
-      'https://images.unsplash.com/photo-1499793983690-e29da59ef1c2?w=800&q=80',
-      'https://images.unsplash.com/photo-1502005229762-cf1b2da7c5d6?w=800&q=80',
-      'https://images.unsplash.com/photo-1615571022219-eb45cf7faa9d?w=800&q=80',
-      'https://images.unsplash.com/photo-1571003123894-1f0594d2b5d9?w=800&q=80',
-      'https://images.unsplash.com/photo-1584132967334-10e028bd69f7?w=800&q=80',
-    ],
+    images: ['https://images.unsplash.com/photo-1499793983690-e29da59ef1c2?w=800&q=80','https://images.unsplash.com/photo-1502005229762-cf1b2da7c5d6?w=800&q=80','https://images.unsplash.com/photo-1615571022219-eb45cf7faa9d?w=800&q=80','https://images.unsplash.com/photo-1571003123894-1f0594d2b5d9?w=800&q=80','https://images.unsplash.com/photo-1584132967334-10e028bd69f7?w=800&q=80'],
     beds: 4, baths: 3, tag: 'Beachfront'
   },
   {
     id: 2, title: 'Downtown Loft', location: 'Austin, TX', price: 145, rating: 4.89, reviews: 87,
     image: 'https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?w=600&q=80',
-    images: [
-      'https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?w=800&q=80',
-      'https://images.unsplash.com/photo-1560448204-e02f11c3d0e2?w=800&q=80',
-      'https://images.unsplash.com/photo-1484154218962-a197022b5858?w=800&q=80',
-      'https://images.unsplash.com/photo-1556909114-f6e7ad7d3136?w=800&q=80',
-      'https://images.unsplash.com/photo-1507089947368-19c1da9775ae?w=800&q=80',
-    ],
+    images: ['https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?w=800&q=80','https://images.unsplash.com/photo-1560448204-e02f11c3d0e2?w=800&q=80','https://images.unsplash.com/photo-1484154218962-a197022b5858?w=800&q=80','https://images.unsplash.com/photo-1556909114-f6e7ad7d3136?w=800&q=80','https://images.unsplash.com/photo-1507089947368-19c1da9775ae?w=800&q=80'],
     beds: 2, baths: 1, tag: 'City View'
   },
   {
     id: 3, title: 'Mountain Cabin', location: 'Asheville, NC', price: 195, rating: 4.95, reviews: 203,
     image: 'https://images.unsplash.com/photo-1542718610-a1d656d1884c?w=600&q=80',
-    images: [
-      'https://images.unsplash.com/photo-1542718610-a1d656d1884c?w=800&q=80',
-      'https://images.unsplash.com/photo-1518780664697-55e3ad937233?w=800&q=80',
-      'https://images.unsplash.com/photo-1510798831971-661eb04b3739?w=800&q=80',
-      'https://images.unsplash.com/photo-1506974210756-8e1b8985d348?w=800&q=80',
-      'https://images.unsplash.com/photo-1449158743715-0a90ebb6d2d8?w=800&q=80',
-    ],
+    images: ['https://images.unsplash.com/photo-1542718610-a1d656d1884c?w=800&q=80','https://images.unsplash.com/photo-1518780664697-55e3ad937233?w=800&q=80','https://images.unsplash.com/photo-1510798831971-661eb04b3739?w=800&q=80','https://images.unsplash.com/photo-1506974210756-8e1b8985d348?w=800&q=80','https://images.unsplash.com/photo-1449158743715-0a90ebb6d2d8?w=800&q=80'],
     beds: 3, baths: 2, tag: 'Nature'
   },
   {
     id: 4, title: 'Desert Retreat', location: 'Scottsdale, AZ', price: 225, rating: 4.92, reviews: 156,
     image: 'https://images.unsplash.com/photo-1613977257363-707ba9348227?w=600&q=80',
-    images: [
-      'https://images.unsplash.com/photo-1613977257363-707ba9348227?w=800&q=80',
-      'https://images.unsplash.com/photo-1558618666-fcd25c85cd64?w=800&q=80',
-      'https://images.unsplash.com/photo-1571055107559-3e67626fa8be?w=800&q=80',
-      'https://images.unsplash.com/photo-1596394516093-501ba68a0ba6?w=800&q=80',
-      'https://images.unsplash.com/photo-1600607687920-4e2a09cf159d?w=800&q=80',
-    ],
+    images: ['https://images.unsplash.com/photo-1613977257363-707ba9348227?w=800&q=80','https://images.unsplash.com/photo-1558618666-fcd25c85cd64?w=800&q=80','https://images.unsplash.com/photo-1571055107559-3e67626fa8be?w=800&q=80','https://images.unsplash.com/photo-1596394516093-501ba68a0ba6?w=800&q=80','https://images.unsplash.com/photo-1600607687920-4e2a09cf159d?w=800&q=80'],
     beds: 3, baths: 2, tag: 'Pool'
   },
   {
     id: 5, title: 'Lake House', location: 'Lake Tahoe, CA', price: 320, rating: 4.98, reviews: 91,
     image: 'https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?w=600&q=80',
-    images: [
-      'https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?w=800&q=80',
-      'https://images.unsplash.com/photo-1601918774946-25832a4be0d6?w=800&q=80',
-      'https://images.unsplash.com/photo-1505916349660-8d91a99f56e0?w=800&q=80',
-      'https://images.unsplash.com/photo-1571492913491-50e0083303f4?w=800&q=80',
-      'https://images.unsplash.com/photo-1520250497591-112f2f40a3f4?w=800&q=80',
-    ],
+    images: ['https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?w=800&q=80','https://images.unsplash.com/photo-1601918774946-25832a4be0d6?w=800&q=80','https://images.unsplash.com/photo-1505916349660-8d91a99f56e0?w=800&q=80','https://images.unsplash.com/photo-1571492913491-50e0083303f4?w=800&q=80','https://images.unsplash.com/photo-1520250497591-112f2f40a3f4?w=800&q=80'],
     beds: 5, baths: 4, tag: 'Waterfront'
   },
   {
     id: 6, title: 'Historic Brownstone', location: 'Brooklyn, NY', price: 175, rating: 4.85, reviews: 312,
     image: 'https://images.unsplash.com/photo-1570129477492-45c003edd2be?w=600&q=80',
-    images: [
-      'https://images.unsplash.com/photo-1570129477492-45c003edd2be?w=800&q=80',
-      'https://images.unsplash.com/photo-1555636222-cae831e670b3?w=800&q=80',
-      'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?w=800&q=80',
-      'https://images.unsplash.com/photo-1600047509807-ba8f99d2cdde?w=800&q=80',
-      'https://images.unsplash.com/photo-1586023492125-27b2c045efd7?w=800&q=80',
-    ],
+    images: ['https://images.unsplash.com/photo-1570129477492-45c003edd2be?w=800&q=80','https://images.unsplash.com/photo-1555636222-cae831e670b3?w=800&q=80','https://images.unsplash.com/photo-1600585154340-be6161a56a0c?w=800&q=80','https://images.unsplash.com/photo-1600047509807-ba8f99d2cdde?w=800&q=80','https://images.unsplash.com/photo-1586023492125-27b2c045efd7?w=800&q=80'],
     beds: 2, baths: 2, tag: 'Historic'
   },
+];
+
+const WHY_ARIA = [
+  { icon: '🔑', title: 'Your Wallet, Your Control', desc: 'ARIA never holds your funds. Payments execute directly on the Sui blockchain — no middleman, no delays.' },
+  { icon: '⚡', title: 'Instant Settlement', desc: 'Hosts receive payouts in seconds, not days. No 3–5 day bank holds. No Airbnb holding your money.' },
+  { icon: '🔒', title: 'On-Chain Escrow', desc: 'Security deposits are held by smart contract — not by ARIA. Released automatically when you approve.' },
+  { icon: '✅', title: 'You Approve Everything', desc: 'Cancellations, deposit releases, and payouts all require your action. We never act on your behalf.' },
+  { icon: '📋', title: 'Permanent Audit Trail', desc: 'Every booking and payment is stored immutably on Walrus. Your receipts exist forever, independently of ARIA.' },
+  { icon: '💸', title: '3% vs 15%', desc: 'Airbnb takes up to 15%. ARIA takes 3% — only on your stay cost, never on your deposit.' },
 ];
 
 export default function Home() {
@@ -127,20 +100,14 @@ export default function Home() {
   };
 
   const handleClearSearch = () => {
-    setSearchLocation('All Locations');
-    setSearchCheckIn(null);
-    setSearchCheckOut(null);
-    setFilteredProperties(PROPERTIES);
-    setSearched(false);
+    setSearchLocation('All Locations'); setSearchCheckIn(null); setSearchCheckOut(null);
+    setFilteredProperties(PROPERTIES); setSearched(false);
   };
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const sid = params.get('sid');
-    if (sid) {
-      try { localStorage.setItem('aria_sid', sid); } catch {}
-      window.history.replaceState({}, '', '/');
-    }
+    if (sid) { try { localStorage.setItem('aria_sid', sid); } catch {} window.history.replaceState({}, '', '/'); }
 
     authFetch(`${API}/auth/me`)
       .then(res => res.json())
@@ -148,10 +115,7 @@ export default function Home() {
       .catch(() => setLoading(false));
 
     Promise.all(PROPERTIES.map(p =>
-      fetch(`${API}/reviews/${p.id}`)
-        .then(r => r.json())
-        .then(d => ({ id: p.id, rating: d.averageRating, count: d.count }))
-        .catch(() => ({ id: p.id, rating: 0, count: 0 }))
+      fetch(`${API}/reviews/${p.id}`).then(r => r.json()).then(d => ({ id: p.id, rating: d.averageRating, count: d.count })).catch(() => ({ id: p.id, rating: 0, count: 0 }))
     )).then(results => {
       const ratings = {};
       results.forEach(r => { ratings[r.id] = { rating: r.rating, count: r.count }; });
@@ -182,22 +146,11 @@ export default function Home() {
     if (nights < 1) { alert('Check-out must be after check-in'); return; }
     setBookingLoading(true);
     const res = await authFetch(`${API}/booking/create`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        propertyId: selected.id, propertyTitle: selected.title,
-        pricePerNight: selected.price, nights,
-        totalAmount: getBookingTotal(selected, nights),
-        checkIn: checkIn.toISOString().split('T')[0],
-        checkOut: checkOut.toISOString().split('T')[0]
-      })
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ propertyId: selected.id, propertyTitle: selected.title, pricePerNight: selected.price, nights, totalAmount: getBookingTotal(selected, nights), checkIn: checkIn.toISOString().split('T')[0], checkOut: checkOut.toISOString().split('T')[0] })
     });
     const data = await res.json();
-    if (data.error === 'Property not available for selected dates') {
-      alert('Sorry — those dates are already booked. Please select different dates.');
-      setBookingLoading(false);
-      return;
-    }
+    if (data.error === 'Property not available for selected dates') { alert('Sorry — those dates are already booked. Please select different dates.'); setBookingLoading(false); return; }
     setBooking(data);
     setBookingLoading(false);
   };
@@ -205,37 +158,56 @@ export default function Home() {
   const handleCardPayment = async () => {
     if (!checkIn || !checkOut) { alert('Please select check-in and check-out dates'); return; }
     setBookingLoading(true);
-    const res = await authFetch(`${API}/payment/create-intent`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ amount: getChargeTotal(selected, nights), propertyTitle: selected.title })
-    });
+    const res = await authFetch(`${API}/payment/create-intent`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ amount: getChargeTotal(selected, nights), propertyTitle: selected.title }) });
     const data = await res.json();
     if (data.clientSecret) { setBooking({ bookingRef: 'STRIPE-' + Date.now(), stripeIntent: true }); }
     setBookingLoading(false);
   };
 
-  if (loading) return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#0a0a0a', color: '#fff' }}>Loading...</div>
-  );
+  if (loading) return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#0a0a0a', color: '#fff' }}>Loading...</div>;
 
   if (!user) return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#0a0a0a' }}>
-      <div style={{ background: '#1a1a1a', borderRadius: '16px', padding: '48px', width: '100%', maxWidth: '400px', textAlign: 'center' }}>
-        <div style={{ fontSize: '40px', marginBottom: '12px' }}>🏠</div>
-        <h1 style={{ color: '#fff', fontSize: '28px', fontWeight: '700', margin: '0 0 8px' }}>ARIA</h1>
-        <p style={{ color: '#666', fontSize: '14px', margin: '0 0 8px' }}>Vacation Rental Platform — Built on Sui</p>
-        <p style={{ color: '#ccc', fontSize: '15px', lineHeight: '1.6', margin: '0 0 32px' }}>The Airbnb killer. Lower fees. Instant settlement. Atomic booking.</p>
-        <button onClick={handleLogin} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', width: '100%', padding: '14px', background: '#fff', color: '#000', border: 'none', borderRadius: '8px', fontSize: '15px', fontWeight: '600', cursor: 'pointer' }}>
-          <span>G</span> Sign in with Google
-        </button>
-        <p style={{ color: '#555', fontSize: '12px', marginTop: '12px' }}>No wallet needed. No seed phrase. Just Google.</p>
+    <div style={{ minHeight: '100vh', background: '#0a0a0a', display: 'flex', flexDirection: 'column' }}>
+      {/* Login hero */}
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '40px 24px' }}>
+        <div style={{ width: '100%', maxWidth: '420px' }}>
+          <div style={{ textAlign: 'center', marginBottom: '40px' }}>
+            <div style={{ fontSize: '48px', marginBottom: '12px' }}>🏠</div>
+            <h1 style={{ color: '#fff', fontSize: '32px', fontWeight: '700', margin: '0 0 8px' }}>ARIA</h1>
+            <p style={{ color: '#666', fontSize: '14px', margin: '0 0 4px' }}>Vacation Rental Platform — Built on Sui</p>
+            <p style={{ color: '#ccc', fontSize: '15px', lineHeight: '1.6', margin: '0 0 32px' }}>The Airbnb killer. Lower fees. Instant settlement. You stay in control.</p>
+            <button onClick={handleLogin} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', width: '100%', padding: '14px', background: '#fff', color: '#000', border: 'none', borderRadius: '8px', fontSize: '15px', fontWeight: '600', cursor: 'pointer' }}>
+              <span>G</span> Sign in with Google
+            </button>
+            <p style={{ color: '#555', fontSize: '12px', marginTop: '12px' }}>No wallet needed. No seed phrase. Just Google.</p>
+          </div>
+
+          {/* Why ARIA — shown on login screen */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {WHY_ARIA.slice(0, 3).map((item, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'start', gap: '12px', background: '#111', border: '1px solid #222', borderRadius: '10px', padding: '14px' }}>
+                <span style={{ fontSize: '20px', flexShrink: 0 }}>{item.icon}</span>
+                <div>
+                  <div style={{ fontSize: '13px', fontWeight: '600', color: '#fff', marginBottom: '2px' }}>{item.title}</div>
+                  <div style={{ fontSize: '12px', color: '#666', lineHeight: '1.5' }}>{item.desc}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      {/* Footer */}
+      <div style={{ borderTop: '1px solid #1a1a1a', padding: '20px 24px', textAlign: 'center' }}>
+        <p style={{ color: '#444', fontSize: '11px', margin: 0, lineHeight: '1.7' }}>
+          ⚠️ ARIA is a non-custodial platform. We do not hold your funds. All payments execute directly on the Sui blockchain. ARIA has no ability to reverse, freeze, or recover transactions. You are solely responsible for your wallet and transactions.
+        </p>
+        <p style={{ color: '#333', fontSize: '11px', margin: '6px 0 0' }}>© 2026 ARIA · Built on Sui · Powered by DeepBook & Walrus</p>
       </div>
     </div>
   );
 
   return (
-    <div style={{ minHeight: '100vh', background: '#0a0a0a', color: '#fff' }}>
+    <div style={{ minHeight: '100vh', background: '#0a0a0a', color: '#fff', display: 'flex', flexDirection: 'column' }}>
       <style>{`
         .react-datepicker { background: #1a1a1a !important; border: 1px solid #333 !important; color: #fff !important; }
         .react-datepicker__header { background: #111 !important; border-bottom: 1px solid #333 !important; }
@@ -270,17 +242,11 @@ export default function Home() {
             <div style={{ fontSize: '11px', color: '#00ff44', fontFamily: 'monospace' }}>{user.address.slice(0, 8)}...{user.address.slice(-6)}</div>
           </div>
           <button onClick={() => router.push('/bookings')} style={{ background: 'transparent', border: '1px solid #333', color: '#888', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>My Bookings</button>
-          {user.isHost && (
-            <button onClick={() => router.push('/host')} style={{ background: 'transparent', border: '1px solid #333', color: '#888', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>Host Dashboard</button>
-          )}
+          {user.isHost && <button onClick={() => router.push('/host')} style={{ background: 'transparent', border: '1px solid #333', color: '#888', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>Host Dashboard</button>}
           {!user.isHost && user.hostStatus !== 'pending' && (
-            <button onClick={() => router.push('/become-host')} style={{ background: 'transparent', border: '1px solid #00ff44', color: '#00ff44', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', fontWeight: '600' }}>
-              🏡 Become a Host
-            </button>
+            <button onClick={() => router.push('/become-host')} style={{ background: 'transparent', border: '1px solid #00ff44', color: '#00ff44', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', fontWeight: '600' }}>🏡 Become a Host</button>
           )}
-          {user.hostStatus === 'pending' && (
-            <span style={{ fontSize: '12px', color: '#ffaa00', fontWeight: '600' }}>⏳ Application Pending</span>
-          )}
+          {user.hostStatus === 'pending' && <span style={{ fontSize: '12px', color: '#ffaa00', fontWeight: '600' }}>⏳ Application Pending</span>}
           <button onClick={() => router.push('/ai')} style={{ background: 'transparent', border: '1px solid #2a1a3a', color: '#aa44ff', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', fontWeight: '600' }}>🤖 AI</button>
           <button onClick={handleLogout} style={{ background: 'transparent', border: '1px solid #333', color: '#888', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>Sign out</button>
         </div>
@@ -289,7 +255,7 @@ export default function Home() {
       {/* Hero / Search */}
       <div style={{ background: 'linear-gradient(180deg,#111 0%,#0a0a0a 100%)', padding: '40px 24px', textAlign: 'center' }}>
         <h2 style={{ fontSize: '28px', fontWeight: '700', margin: '0 0 8px' }}>Find your perfect stay</h2>
-        <p style={{ color: '#666', fontSize: '14px', margin: '0 0 24px' }}>Book instantly. Pay with SuiUSD. Settle in seconds on Sui.</p>
+        <p style={{ color: '#666', fontSize: '14px', margin: '0 0 24px' }}>Book instantly. Pay with SuiUSD. You stay in control — always.</p>
         <div style={{ display: 'flex', gap: '8px', maxWidth: '700px', margin: '0 auto', flexWrap: 'wrap' }}>
           <select value={searchLocation} onChange={e => setSearchLocation(e.target.value)}
             style={{ flex: 2, minWidth: '180px', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '12px 16px', color: '#fff', fontSize: '14px', outline: 'none', cursor: 'pointer' }}>
@@ -302,28 +268,44 @@ export default function Home() {
             <option value="Brooklyn, NY">📍 Brooklyn, NY</option>
           </select>
           <div style={{ flex: 1, minWidth: '130px' }}>
-            <DatePicker selected={searchCheckIn} onChange={date => setSearchCheckIn(date)}
-              minDate={new Date()} placeholderText="📅 Check-in" dateFormat="MMM d" className="date-input" />
+            <DatePicker selected={searchCheckIn} onChange={date => setSearchCheckIn(date)} minDate={new Date()} placeholderText="📅 Check-in" dateFormat="MMM d" className="date-input" />
           </div>
           <div style={{ flex: 1, minWidth: '130px' }}>
-            <DatePicker selected={searchCheckOut} onChange={date => setSearchCheckOut(date)}
-              minDate={searchCheckIn ? new Date(searchCheckIn.getTime() + 86400000) : new Date()}
-              placeholderText="📅 Check-out" dateFormat="MMM d" className="date-input" />
+            <DatePicker selected={searchCheckOut} onChange={date => setSearchCheckOut(date)} minDate={searchCheckIn ? new Date(searchCheckIn.getTime() + 86400000) : new Date()} placeholderText="📅 Check-out" dateFormat="MMM d" className="date-input" />
           </div>
           <button onClick={handleSearch} style={{ background: '#00ff44', color: '#000', border: 'none', borderRadius: '8px', padding: '12px 24px', fontWeight: '700', fontSize: '14px', cursor: 'pointer' }}>Search</button>
         </div>
         {searched && (
           <div style={{ marginTop: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px' }}>
-            <span style={{ fontSize: '13px', color: '#888' }}>
-              {filteredProperties.length} propert{filteredProperties.length === 1 ? 'y' : 'ies'} found{searchLocation !== 'All Locations' ? ` in ${searchLocation}` : ''}
-            </span>
+            <span style={{ fontSize: '13px', color: '#888' }}>{filteredProperties.length} propert{filteredProperties.length === 1 ? 'y' : 'ies'} found{searchLocation !== 'All Locations' ? ` in ${searchLocation}` : ''}</span>
             <button onClick={handleClearSearch} style={{ background: 'transparent', border: '1px solid #444', color: '#888', padding: '4px 10px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>Clear</button>
           </div>
         )}
       </div>
 
+      {/* Why ARIA section */}
+      <div style={{ background: '#0a0a0a', borderTop: '1px solid #1a1a1a', borderBottom: '1px solid #1a1a1a', padding: '48px 24px' }}>
+        <div style={{ maxWidth: '1100px', margin: '0 auto' }}>
+          <div style={{ textAlign: 'center', marginBottom: '32px' }}>
+            <h2 style={{ fontSize: '22px', fontWeight: '700', margin: '0 0 8px' }}>Why ARIA?</h2>
+            <p style={{ color: '#666', fontSize: '14px', margin: 0 }}>Unlike Airbnb, you stay in control of your money — always.</p>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '16px' }}>
+            {WHY_ARIA.map((item, i) => (
+              <div key={i} style={{ background: '#111', border: '1px solid #222', borderRadius: '12px', padding: '20px', display: 'flex', alignItems: 'start', gap: '14px' }}>
+                <span style={{ fontSize: '24px', flexShrink: 0 }}>{item.icon}</span>
+                <div>
+                  <div style={{ fontSize: '14px', fontWeight: '600', color: '#fff', marginBottom: '6px' }}>{item.title}</div>
+                  <div style={{ fontSize: '13px', color: '#666', lineHeight: '1.6' }}>{item.desc}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
       {/* Property Grid */}
-      <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '32px 24px' }}>
+      <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '32px 24px', flex: 1 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px' }}>
           <h3 style={{ fontSize: '18px', fontWeight: '600', margin: 0 }}>Featured Properties</h3>
           <span style={{ fontSize: '13px', color: '#666' }}>{filteredProperties.length} properties available</span>
@@ -357,7 +339,7 @@ export default function Home() {
                     <div><span style={{ fontSize: '17px', fontWeight: '700' }}>${p.price}</span><span style={{ color: '#666', fontSize: '13px' }}>/night</span></div>
                   </div>
                   <div style={{ marginTop: '12px', display: 'flex', gap: '8px' }}>
-                    {[['ARIA FEE','3%','#00ff44'],['AIRBNB FEE','15%','#ff4444'],['SETTLEMENT','instant','#4a9eff']].map(([label, val, color]) => (
+                    {[['ARIA FEE','3%','#00ff44'],['AIRBNB FEE','15%','#ff4444'],['SETTLEMENT','instant','#4a9eff']].map(([label,val,color]) => (
                       <div key={label} style={{ flex: 1, background: '#1a1a1a', borderRadius: '6px', padding: '8px', textAlign: 'center' }}>
                         <div style={{ fontSize: '10px', color: '#555', marginBottom: '2px' }}>{label}</div>
                         <div style={{ fontSize: '13px', fontWeight: '600', color }}>{val}</div>
@@ -369,6 +351,14 @@ export default function Home() {
             );
           })}
         </div>
+      </div>
+
+      {/* Footer */}
+      <div style={{ borderTop: '1px solid #1a1a1a', padding: '24px', textAlign: 'center', marginTop: 'auto' }}>
+        <p style={{ color: '#444', fontSize: '11px', margin: '0 0 6px', lineHeight: '1.7', maxWidth: '700px', marginLeft: 'auto', marginRight: 'auto' }}>
+          ⚠️ ARIA is a non-custodial platform. We do not hold your funds. All payments execute directly on the Sui blockchain. ARIA has no ability to reverse, freeze, or recover transactions. You are solely responsible for your wallet and transactions.
+        </p>
+        <p style={{ color: '#333', fontSize: '11px', margin: 0 }}>© 2026 ARIA · Built on Sui · Powered by DeepBook & Walrus · <span style={{ color: '#444' }}>Non-custodial · You stay in control</span></p>
       </div>
 
       {/* Booking Modal */}
@@ -386,8 +376,7 @@ export default function Home() {
                 {photoIndex < selected.images.length - 1 && <button className="gallery-arrow" onClick={e => { e.stopPropagation(); setPhotoIndex(i => i + 1); }} style={{ right: '12px' }}>›</button>}
                 <div style={{ position: 'absolute', bottom: '50px', left: '50%', transform: 'translateX(-50%)', display: 'flex', gap: '6px', zIndex: 3 }}>
                   {selected.images.map((_, i) => (
-                    <button key={i} className="gallery-dot" onClick={e => { e.stopPropagation(); setPhotoIndex(i); }}
-                      style={{ width: i === photoIndex ? '22px' : '8px', height: '8px', background: i === photoIndex ? '#fff' : 'rgba(255,255,255,0.45)' }} />
+                    <button key={i} className="gallery-dot" onClick={e => { e.stopPropagation(); setPhotoIndex(i); }} style={{ width: i === photoIndex ? '22px' : '8px', height: '8px', background: i === photoIndex ? '#fff' : 'rgba(255,255,255,0.45)' }} />
                   ))}
                 </div>
                 <div style={{ position: 'absolute', bottom: '16px', left: '16px', zIndex: 3 }}>
@@ -397,8 +386,7 @@ export default function Home() {
               </div>
               <div style={{ display: 'flex', gap: '4px', padding: '4px', background: '#000' }}>
                 {selected.images.map((img, i) => (
-                  <div key={i} className="gallery-thumb" onClick={e => { e.stopPropagation(); setPhotoIndex(i); }}
-                    style={{ border: i === photoIndex ? '2px solid #00ff44' : '2px solid transparent', opacity: i === photoIndex ? 1 : 0.5 }}>
+                  <div key={i} className="gallery-thumb" onClick={e => { e.stopPropagation(); setPhotoIndex(i); }} style={{ border: i === photoIndex ? '2px solid #00ff44' : '2px solid transparent', opacity: i === photoIndex ? 1 : 0.5 }}>
                     <img src={img} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
                   </div>
                 ))}
@@ -411,20 +399,14 @@ export default function Home() {
                 <div style={{ display: 'flex', gap: '8px' }}>
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: '11px', color: '#555', marginBottom: '4px' }}>CHECK-IN</div>
-                    <DatePicker selected={checkIn} onChange={date => { setCheckIn(date); if (checkOut && date >= checkOut) setCheckOut(null); }}
-                      selectsStart startDate={checkIn} endDate={checkOut} minDate={new Date()} placeholderText="Select date" dateFormat="MMM d, yyyy" className="date-input" />
+                    <DatePicker selected={checkIn} onChange={date => { setCheckIn(date); if (checkOut && date >= checkOut) setCheckOut(null); }} selectsStart startDate={checkIn} endDate={checkOut} minDate={new Date()} placeholderText="Select date" dateFormat="MMM d, yyyy" className="date-input" />
                   </div>
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: '11px', color: '#555', marginBottom: '4px' }}>CHECK-OUT</div>
-                    <DatePicker selected={checkOut} onChange={date => setCheckOut(date)}
-                      selectsEnd startDate={checkIn} endDate={checkOut}
-                      minDate={checkIn ? new Date(checkIn.getTime() + 86400000) : new Date()}
-                      placeholderText="Select date" dateFormat="MMM d, yyyy" className="date-input" />
+                    <DatePicker selected={checkOut} onChange={date => setCheckOut(date)} selectsEnd startDate={checkIn} endDate={checkOut} minDate={checkIn ? new Date(checkIn.getTime() + 86400000) : new Date()} placeholderText="Select date" dateFormat="MMM d, yyyy" className="date-input" />
                   </div>
                 </div>
-                {checkIn && checkOut && nights > 0 && (
-                  <div style={{ marginTop: '8px', fontSize: '13px', color: '#00ff44', textAlign: 'center' }}>{nights} night{nights > 1 ? 's' : ''} selected</div>
-                )}
+                {checkIn && checkOut && nights > 0 && <div style={{ marginTop: '8px', fontSize: '13px', color: '#00ff44', textAlign: 'center' }}>{nights} night{nights > 1 ? 's' : ''} selected</div>}
               </div>
 
               {checkIn && checkOut && nights > 0 && (
@@ -450,7 +432,7 @@ export default function Home() {
                       <span style={{ fontSize: '13px', color: '#4a9eff', fontWeight: '600' }}>🔒 Refundable security deposit</span>
                       <span style={{ fontSize: '13px', color: '#4a9eff', fontWeight: '700' }}>${getDeposit(selected, nights)}</span>
                     </div>
-                    <p style={{ color: '#555', fontSize: '11px', margin: 0, lineHeight: '1.5' }}>Held in Sui escrow until checkout. Returned in full — no ARIA fee on deposit.</p>
+                    <p style={{ color: '#555', fontSize: '11px', margin: 0, lineHeight: '1.5' }}>Held by smart contract on Sui — not by ARIA. Released when you approve.</p>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#0d0d0d', border: '1px solid #333', borderRadius: '6px', padding: '12px', marginBottom: '12px' }}>
                     <div>
@@ -488,8 +470,16 @@ export default function Home() {
                 </div>
               ) : (
                 <>
-                  <div style={{ background: '#0a1a0a', border: '1px solid #1a3a1a', borderRadius: '8px', padding: '12px', marginBottom: '12px', fontSize: '12px', color: '#888' }}>
-                    ⚡ Payment executes as a single atomic transaction on Sui. Instant settlement. No intermediaries.
+                  {/* Non-custodial disclaimer in booking flow */}
+                  <div style={{ background: '#0a0a0a', border: '1px solid #1a1a1a', borderRadius: '8px', padding: '12px', marginBottom: '12px' }}>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '8px' }}>
+                      {['🔑 Your wallet, your funds','⚡ Instant on-chain settlement','✅ You control deposit release'].map((item, i) => (
+                        <span key={i} style={{ background: '#111', border: '1px solid #222', borderRadius: '20px', padding: '3px 10px', fontSize: '11px', color: '#888' }}>{item}</span>
+                      ))}
+                    </div>
+                    <p style={{ color: '#444', fontSize: '11px', margin: 0, lineHeight: '1.6' }}>
+                      ARIA is non-custodial. Payments execute directly on Sui. We cannot reverse or freeze transactions.
+                    </p>
                   </div>
                   <div style={{ background: '#111', border: '1px solid #222', borderRadius: '8px', padding: '12px', marginBottom: '20px', fontSize: '12px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
@@ -513,21 +503,14 @@ export default function Home() {
               {booking && (
                 <div style={{ marginTop: '16px', background: '#0a1a0a', border: '1px solid #00ff44', borderRadius: '8px', padding: '16px', fontSize: '12px', color: '#00ff44', textAlign: 'center' }}>
                   ✅ Booking confirmed! Ref: {booking.bookingRef}
-                  {booking.depositAmount && (
-                    <div style={{ marginTop: '8px', color: '#4a9eff', fontSize: '11px' }}>🔒 ${booking.depositAmount} deposit held in Sui escrow — returned after checkout</div>
-                  )}
+                  {booking.depositAmount && <div style={{ marginTop: '8px', color: '#4a9eff', fontSize: '11px' }}>🔒 ${booking.depositAmount} deposit held in Sui escrow — you control release</div>}
                   {booking.walrusBlobId && (
                     <div style={{ marginTop: '10px', background: '#050f05', borderRadius: '6px', padding: '10px' }}>
-                      <div style={{ color: '#555', fontSize: '10px', marginBottom: '4px' }}>RECEIPT STORED ON WALRUS</div>
-                      <a href={`https://aggregator.walrus-testnet.walrus.space/v1/blobs/${booking.walrusBlobId}`} target="_blank" rel="noreferrer"
-                        style={{ color: '#00ff44', fontFamily: 'monospace', fontSize: '10px', wordBreak: 'break-all' }}>
-                        {booking.walrusBlobId}
-                      </a>
+                      <div style={{ color: '#555', fontSize: '10px', marginBottom: '4px' }}>RECEIPT STORED PERMANENTLY ON WALRUS</div>
+                      <a href={`https://aggregator.walrus-testnet.walrus.space/v1/blobs/${booking.walrusBlobId}`} target="_blank" rel="noreferrer" style={{ color: '#00ff44', fontFamily: 'monospace', fontSize: '10px', wordBreak: 'break-all' }}>{booking.walrusBlobId}</a>
                     </div>
                   )}
-                  <p style={{ textAlign: 'center', color: '#555', fontSize: '11px', marginTop: '8px', marginBottom: 0 }}>
-                    {'Wallet: ' + user.address.slice(0, 10) + '…' + user.address.slice(-8)}
-                  </p>
+                  <p style={{ textAlign: 'center', color: '#555', fontSize: '11px', marginTop: '8px', marginBottom: 0 }}>{'Wallet: ' + user.address.slice(0, 10) + '…' + user.address.slice(-8)}</p>
                 </div>
               )}
             </div>
