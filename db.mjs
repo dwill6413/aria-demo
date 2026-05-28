@@ -75,6 +75,18 @@ export async function initDB() {
       approved BOOLEAN DEFAULT false,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
+    CREATE TABLE IF NOT EXISTS tax_remittances (
+      id SERIAL PRIMARY KEY,
+      booking_ref TEXT UNIQUE NOT NULL,
+      property_id INTEGER,
+      property_title TEXT,
+      tax_amount INTEGER NOT NULL,
+      jurisdiction TEXT,
+      remitted_at TIMESTAMPTZ NOT NULL,
+      remitted_by TEXT NOT NULL,
+      notes TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
   `);
   console.log('Database initialized');
 }

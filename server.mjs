@@ -75,7 +75,7 @@ fastify.get('/auth/logout', async (request, reply) => {
 
 // Stripe
 fastify.post('/payment/create-intent', async (request, reply) => {
-  const sessionId = request.cookies.aria_session;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
@@ -98,7 +98,7 @@ fastify.post('/booking/create', {
     }
   }
 }, async (request, reply) => {
-  const sessionId = request.cookies.aria_session;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
@@ -235,7 +235,7 @@ fastify.post('/booking/cancel', {
     }
   }
 }, async (request, reply) => {
-  const sessionId = request.cookies.aria_session;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
@@ -292,7 +292,7 @@ fastify.post('/booking/release-deposit', {
     }
   }
 }, async (request, reply) => {
-  const sessionId = request.cookies.aria_session;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
@@ -332,7 +332,7 @@ async function pushToWalrus(data) {
 
 // Bookings History — guest (own bookings only)
 fastify.get('/bookings/history', async (request, reply) => {
-  const sessionId = request.cookies.aria_session;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
@@ -369,7 +369,7 @@ fastify.get('/bookings/history', async (request, reply) => {
 
 // Bookings All — HOST ONLY
 fastify.get('/bookings/all', async (request, reply) => {
-  const sessionId = request.cookies.aria_session;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
@@ -405,7 +405,7 @@ fastify.get('/bookings/all', async (request, reply) => {
 
 // DeepBook
 fastify.get('/deepbook/payout/:amount', async (request, reply) => {
-  const sessionId = request.cookies.aria_session;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
@@ -427,7 +427,7 @@ fastify.get('/ical/:propertyId', async (request, reply) => {
 });
 
 fastify.post('/ical/import', async (request, reply) => {
-  const sessionId = request.cookies.aria_session;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
@@ -447,7 +447,7 @@ fastify.get('/availability/:propertyId', async (request, reply) => {
 
 // Messages
 fastify.post('/messages/send', async (request, reply) => {
-  const sessionId = request.cookies.aria_session;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
@@ -463,7 +463,7 @@ fastify.post('/messages/send', async (request, reply) => {
 });
 
 fastify.get('/messages/:bookingRef', async (request, reply) => {
-  const sessionId = request.cookies.aria_session;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
@@ -478,7 +478,7 @@ fastify.get('/messages/:bookingRef', async (request, reply) => {
 });
 
 fastify.post('/messages/:bookingRef/read', async (request, reply) => {
-  const sessionId = request.cookies.aria_session;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
@@ -486,7 +486,7 @@ fastify.post('/messages/:bookingRef/read', async (request, reply) => {
 });
 
 fastify.get('/messages/:bookingRef/count', async (request, reply) => {
-  const sessionId = request.cookies.aria_session;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
@@ -502,7 +502,7 @@ fastify.get('/messages/:bookingRef/count', async (request, reply) => {
 
 // Reviews
 fastify.post('/reviews/submit', async (request, reply) => {
-  const sessionId = request.cookies.aria_session;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
@@ -535,7 +535,7 @@ fastify.get('/reviews/:propertyId', async (request, reply) => {
 
 // Reviews All — HOST ONLY
 fastify.get('/reviews/all', async (request, reply) => {
-  const sessionId = request.cookies.aria_session;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
   const session = getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
@@ -544,6 +544,139 @@ fastify.get('/reviews/all', async (request, reply) => {
     const result = await pool.query('SELECT * FROM reviews ORDER BY created_at DESC');
     return { reviews: result.rows };
   } catch (err) { return { reviews: [] }; }
+});
+
+// ─── Tax Routes — HOST ONLY ───────────────────────────────────────────────────
+
+// GET /tax/summary — all bookings with tax data + remittance status
+fastify.get('/tax/summary', async (request, reply) => {
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+  const session = getSession(sessionId);
+  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
+  try {
+    const result = await pool.query(`
+      SELECT
+        b.booking_ref, b.property_id, b.property_title, b.guest_name, b.guest_email,
+        b.check_in, b.check_out, b.nights, b.subtotal, b.taxes, b.total_amount,
+        b.payment_status, b.created_at,
+        tr.id AS remittance_id, tr.remitted_at, tr.remitted_by,
+        tr.jurisdiction, tr.notes
+      FROM bookings b
+      LEFT JOIN tax_remittances tr ON b.booking_ref = tr.booking_ref
+      WHERE b.payment_status != 'cancelled'
+      ORDER BY b.created_at DESC
+    `);
+    const rows = result.rows;
+    const totalCollected  = rows.reduce((sum, r) => sum + (r.taxes || 0), 0);
+    const totalRemitted   = rows.filter(r => r.remittance_id).reduce((sum, r) => sum + (r.taxes || 0), 0);
+    const totalOutstanding = totalCollected - totalRemitted;
+    return {
+      bookings: rows.map(r => ({
+        bookingRef:    r.booking_ref,
+        propertyId:    r.property_id,
+        property:      r.property_title,
+        guestName:     r.guest_name,
+        guestEmail:    r.guest_email,
+        checkIn:       r.check_in,
+        checkOut:      r.check_out,
+        nights:        r.nights,
+        subtotal:      r.subtotal,
+        taxAmount:     r.taxes || 0,
+        totalAmount:   r.total_amount,
+        bookedAt:      r.created_at,
+        remitted:      !!r.remittance_id,
+        remittedAt:    r.remitted_at || null,
+        remittedBy:    r.remitted_by || null,
+        jurisdiction:  r.jurisdiction || null,
+        notes:         r.notes || null,
+      })),
+      summary: {
+        totalCollected,
+        totalRemitted,
+        totalOutstanding,
+        bookingCount:   rows.length,
+        remittedCount:  rows.filter(r => r.remittance_id).length,
+        pendingCount:   rows.filter(r => !r.remittance_id).length,
+      }
+    };
+  } catch (err) {
+    fastify.log.error(err);
+    return reply.code(500).send({ error: 'Failed to fetch tax summary' });
+  }
+});
+
+// POST /tax/remit — mark a booking's taxes as remitted
+fastify.post('/tax/remit', async (request, reply) => {
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+  const session = getSession(sessionId);
+  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
+
+  const { bookingRef, jurisdiction, notes } = request.body;
+  if (!bookingRef || typeof bookingRef !== 'string' || !bookingRef.startsWith('ARIA-'))
+    return reply.code(400).send({ error: 'A valid bookingRef is required' });
+
+  try {
+    const bkResult = await pool.query(
+      'SELECT * FROM bookings WHERE booking_ref = $1 AND payment_status != $2',
+      [bookingRef, 'cancelled']
+    );
+    if (bkResult.rows.length === 0)
+      return reply.code(404).send({ error: 'Booking not found or is cancelled' });
+    const booking = bkResult.rows[0];
+
+    const existing = await pool.query(
+      'SELECT id FROM tax_remittances WHERE booking_ref = $1', [bookingRef]
+    );
+    if (existing.rows.length > 0)
+      return reply.code(400).send({ error: 'Taxes already marked as remitted for this booking' });
+
+    await pool.query(
+      `INSERT INTO tax_remittances
+        (booking_ref, property_id, property_title, tax_amount, jurisdiction, remitted_at, remitted_by, notes)
+       VALUES ($1, $2, $3, $4, $5, NOW(), $6, $7)`,
+      [bookingRef, booking.property_id, booking.property_title, booking.taxes || 0,
+       jurisdiction || null, session.email, notes || null]
+    );
+
+    return {
+      success: true,
+      bookingRef,
+      taxAmount: booking.taxes || 0,
+      remittedBy: session.email,
+      remittedAt: new Date().toISOString(),
+      message: `$${booking.taxes || 0} occupancy tax marked as remitted for ${booking.property_title}`
+    };
+  } catch (err) {
+    fastify.log.error(err);
+    return reply.code(500).send({ error: 'Failed to record tax remittance' });
+  }
+});
+
+// POST /tax/unremit — undo a remittance (correction use case)
+fastify.post('/tax/unremit', async (request, reply) => {
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+  const session = getSession(sessionId);
+  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
+
+  const { bookingRef } = request.body;
+  if (!bookingRef) return reply.code(400).send({ error: 'bookingRef is required' });
+
+  try {
+    const result = await pool.query(
+      'DELETE FROM tax_remittances WHERE booking_ref = $1 RETURNING *', [bookingRef]
+    );
+    if (result.rows.length === 0)
+      return reply.code(404).send({ error: 'No remittance record found for this booking' });
+    return { success: true, bookingRef, message: 'Remittance record removed' };
+  } catch (err) {
+    return reply.code(500).send({ error: 'Failed to remove remittance record' });
+  }
 });
 
 // ─── Start ────────────────────────────────────────────────────────────────────
