@@ -739,7 +739,30 @@ fastify.post('/host/apply', {
        payoutSuiAddress || session.suiAddress, payoutNotes || null]
     );
 
-    // Send welcome / confirmation email
+    // Send welcome / confirmation email + admin notification
+    try {
+      // Notify superadmin
+      await resend.emails.send({
+        from: 'ARIA <onboarding@resend.dev>',
+        to: HOST_ADDRESSES[0] || 'cwilliams36092@gmail.com',
+        subject: `New Host Application — ${name}`,
+        html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px">
+          <h1 style="color:#ffaa00;font-size:22px;margin:0 0 8px">🏡 New Host Application</h1>
+          <p style="color:#888;margin:0 0 20px">Someone wants to become an ARIA host.</p>
+          <div style="background:#111;border:1px solid #222;border-radius:8px;padding:16px;margin-bottom:20px;font-size:13px">
+            <table style="width:100%;border-collapse:collapse">
+              <tr><td style="color:#888;padding:5px 0">Name</td><td style="text-align:right">${name}</td></tr>
+              <tr><td style="color:#888;padding:5px 0">Email</td><td style="text-align:right">${email}</td></tr>
+              <tr><td style="color:#888;padding:5px 0">Sui Address</td><td style="text-align:right;font-family:monospace;font-size:11px">${session.suiAddress}</td></tr>
+              ${city ? `<tr><td style="color:#888;padding:5px 0">Location</td><td style="text-align:right">${city}${state ? ', ' + state : ''}</td></tr>` : ''}
+              ${strPermit ? `<tr><td style="color:#888;padding:5px 0">STR Permit</td><td style="text-align:right">${strPermit}</td></tr>` : ''}
+            </table>
+          </div>
+          <p style="color:#888;font-size:12px;margin:0">To approve, use the ARIA admin API with their Sui address.</p>
+        </div>`
+      });
+    } catch (err) { fastify.log.warn({ err }, 'Admin notification email failed'); }
+
     try {
       await resend.emails.send({
         from: 'ARIA <onboarding@resend.dev>',
