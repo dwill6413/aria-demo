@@ -41,10 +41,15 @@ export default function Host() {
   const [taxData, setTaxData] = useState(null);
   const [taxLoading, setTaxLoading] = useState(false);
   const [remittingId, setRemittingId] = useState(null);
-  const [remitModal, setRemitModal] = useState(null); // booking being remitted
+  const [remitModal, setRemitModal] = useState(null);
   const [remitJurisdiction, setRemitJurisdiction] = useState('');
   const [remitNotes, setRemitNotes] = useState('');
-  const [taxFilter, setTaxFilter] = useState('all'); // 'all' | 'pending' | 'remitted'
+  const [taxFilter, setTaxFilter] = useState('all');
+
+  // Applications state
+  const [applications, setApplications] = useState([]);
+  const [applicationsLoading, setApplicationsLoading] = useState(false);
+  const [approvingId, setApprovingId] = useState(null);
 
   useEffect(() => {
     authFetch(`${API}/auth/me`)
@@ -69,10 +74,46 @@ export default function Host() {
         const rvRes = await authFetch(`${API}/reviews/all`);
         const rvData = await rvRes.json();
         setReviews(rvData.reviews || []);
+        // Load applications count on mount
+        loadApplications(true);
         setLoading(false);
       })
       .catch(() => { router.push('/'); });
   }, []);
+
+  const loadApplications = async (silent = false) => {
+    if (!silent) setApplicationsLoading(true);
+    try {
+      const res = await authFetch(`${API}/host/applications`);
+      const data = await res.json();
+      setApplications(data.applications || []);
+    } catch {}
+    if (!silent) setApplicationsLoading(false);
+  };
+
+  useEffect(() => {
+    if (activeTab === 'applications') loadApplications();
+    if (activeTab === 'tax' && !taxData) loadTaxData();
+  }, [activeTab]);
+
+  const handleApprove = async (suiAddress, name) => {
+    if (!confirm(`Approve ${name} as a host? They will receive an email and gain access to the Host Dashboard.`)) return;
+    setApprovingId(suiAddress);
+    try {
+      const res = await authFetch(`${API}/host/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ suiAddress })
+      });
+      const data = await res.json();
+      if (data.success) {
+        await loadApplications();
+      } else {
+        alert(data.error || 'Failed to approve host');
+      }
+    } catch { alert('Connection error'); }
+    setApprovingId(null);
+  };
 
   const loadTaxData = async () => {
     setTaxLoading(true);
@@ -80,13 +121,9 @@ export default function Host() {
       const res = await authFetch(`${API}/tax/summary`);
       const data = await res.json();
       setTaxData(data);
-    } catch (err) { console.error('Tax load failed:', err); }
+    } catch {}
     setTaxLoading(false);
   };
-
-  useEffect(() => {
-    if (activeTab === 'tax' && !taxData) loadTaxData();
-  }, [activeTab]);
 
   const handleRemit = async () => {
     if (!remitModal) return;
@@ -95,37 +132,23 @@ export default function Host() {
       const res = await authFetch(`${API}/tax/remit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          bookingRef: remitModal.bookingRef,
-          jurisdiction: remitJurisdiction || null,
-          notes: remitNotes || null
-        })
+        body: JSON.stringify({ bookingRef: remitModal.bookingRef, jurisdiction: remitJurisdiction || null, notes: remitNotes || null })
       });
       const data = await res.json();
-      if (data.success) {
-        setRemitModal(null);
-        setRemitJurisdiction('');
-        setRemitNotes('');
-        await loadTaxData();
-      } else {
-        alert(data.error || 'Failed to record remittance');
-      }
-    } catch (err) { alert('Connection error'); }
+      if (data.success) { setRemitModal(null); setRemitJurisdiction(''); setRemitNotes(''); await loadTaxData(); }
+      else alert(data.error || 'Failed to record remittance');
+    } catch { alert('Connection error'); }
     setRemittingId(null);
   };
 
   const handleUnremit = async (bookingRef) => {
-    if (!confirm('Remove remittance record for this booking? This cannot be undone.')) return;
+    if (!confirm('Remove remittance record for this booking?')) return;
     try {
-      const res = await authFetch(`${API}/tax/unremit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ bookingRef })
-      });
+      const res = await authFetch(`${API}/tax/unremit`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bookingRef }) });
       const data = await res.json();
       if (data.success) await loadTaxData();
-      else alert(data.error || 'Failed to remove remittance');
-    } catch (err) { alert('Connection error'); }
+      else alert(data.error || 'Failed');
+    } catch { alert('Connection error'); }
   };
 
   const exportCSV = () => {
@@ -134,11 +157,9 @@ export default function Host() {
       ['Booking Ref', 'Property', 'Guest', 'Check-In', 'Check-Out', 'Nights', 'Subtotal', 'Tax (8%)', 'Total', 'Remitted', 'Remitted At', 'Jurisdiction', 'Notes'],
       ...taxData.bookings.map(b => [
         b.bookingRef, b.property, b.guestName,
-        new Date(b.checkIn).toLocaleDateString(),
-        new Date(b.checkOut).toLocaleDateString(),
+        new Date(b.checkIn).toLocaleDateString(), new Date(b.checkOut).toLocaleDateString(),
         b.nights, `$${b.subtotal}`, `$${b.taxAmount}`, `$${b.totalAmount}`,
-        b.remitted ? 'Yes' : 'No',
-        b.remittedAt ? new Date(b.remittedAt).toLocaleDateString() : '',
+        b.remitted ? 'Yes' : 'No', b.remittedAt ? new Date(b.remittedAt).toLocaleDateString() : '',
         b.jurisdiction || '', b.notes || ''
       ])
     ];
@@ -151,8 +172,7 @@ export default function Host() {
   };
 
   const copyICal = (propertyId) => {
-    const url = `${API}/ical/${propertyId}`;
-    navigator.clipboard.writeText(url);
+    navigator.clipboard.writeText(`${API}/ical/${propertyId}`);
     setCopiedId(propertyId);
     setTimeout(() => setCopiedId(null), 2000);
   };
@@ -161,64 +181,37 @@ export default function Host() {
     const url = icalInputs[propertyId];
     if (!url) return;
     setIcalSaving(prev => ({ ...prev, [propertyId]: true }));
-    const res = await authFetch(`${API}/ical/import`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ propertyId, platform: 'airbnb', icalUrl: url })
-    });
+    const res = await authFetch(`${API}/ical/import`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ propertyId, platform: 'airbnb', icalUrl: url }) });
     const data = await res.json();
     setIcalSaving(prev => ({ ...prev, [propertyId]: false }));
-    if (data.success) {
-      setIcalSaved(prev => ({ ...prev, [propertyId]: true }));
-      setTimeout(() => setIcalSaved(prev => ({ ...prev, [propertyId]: false })), 3000);
-    }
+    if (data.success) { setIcalSaved(prev => ({ ...prev, [propertyId]: true })); setTimeout(() => setIcalSaved(prev => ({ ...prev, [propertyId]: false })), 3000); }
   };
 
   const handleReleaseDeposit = async (bookingRef) => {
     if (!confirm('Release deposit back to guest? This cannot be undone.')) return;
     setReleasingId(bookingRef);
-    const res = await authFetch(`${API}/booking/release-deposit`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ bookingRef })
-    });
+    const res = await authFetch(`${API}/booking/release-deposit`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bookingRef }) });
     const data = await res.json();
-    if (data.success) {
-      const bkRes = await authFetch(`${API}/bookings/all`);
-      const bkData = await bkRes.json();
-      setBookings(bkData.bookings || []);
-    }
+    if (data.success) { const bkRes = await authFetch(`${API}/bookings/all`); const bkData = await bkRes.json(); setBookings(bkData.bookings || []); }
     setReleasingId(null);
   };
 
   const activeBookings    = bookings.filter(b => b.paymentStatus !== 'cancelled');
   const cancelledBookings = bookings.filter(b => b.paymentStatus === 'cancelled');
-  const totalRevenue      = activeBookings.reduce((sum, b) => {
-    const amt = b.breakdown?.totalPaid ? parseInt(b.breakdown.totalPaid.split(' ')[0].replace(/[^0-9]/g, '')) : (b.totalAmount || 0);
-    return sum + amt;
-  }, 0);
-  const totalAriaFees = activeBookings.reduce((sum, b) => {
-    const fee = b.breakdown?.ariaFee ? parseInt(b.breakdown.ariaFee.split(' ')[0].replace(/[^0-9]/g, '')) : 0;
-    return sum + fee;
-  }, 0);
-  const totalTaxes    = activeBookings.reduce((sum, b) => {
-    const t = b.breakdown?.taxes ? parseInt(b.breakdown.taxes.split(' ')[0].replace(/[^0-9]/g, '')) : 0;
-    return sum + t;
-  }, 0);
-  const hostEarnings  = totalRevenue - totalAriaFees - totalTaxes;
-  const depositsHeld  = activeBookings.filter(b => b.depositAmount && b.depositStatus === 'held').length;
-  const totalUnread   = Object.values(messageCounts).reduce((sum, c) => sum + c, 0);
-  const avgRating     = reviews.length ? (reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length).toFixed(1) : 0;
+  const totalRevenue      = activeBookings.reduce((sum, b) => sum + (b.breakdown?.totalPaid ? parseInt(b.breakdown.totalPaid.split(' ')[0].replace(/[^0-9]/g, '')) : (b.totalAmount || 0)), 0);
+  const totalAriaFees     = activeBookings.reduce((sum, b) => sum + (b.breakdown?.ariaFee ? parseInt(b.breakdown.ariaFee.split(' ')[0].replace(/[^0-9]/g, '')) : 0), 0);
+  const totalTaxes        = activeBookings.reduce((sum, b) => sum + (b.breakdown?.taxes ? parseInt(b.breakdown.taxes.split(' ')[0].replace(/[^0-9]/g, '')) : 0), 0);
+  const hostEarnings      = totalRevenue - totalAriaFees - totalTaxes;
+  const depositsHeld      = activeBookings.filter(b => b.depositAmount && b.depositStatus === 'held').length;
+  const totalUnread       = Object.values(messageCounts).reduce((sum, c) => sum + c, 0);
+  const avgRating         = reviews.length ? (reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length).toFixed(1) : 0;
+  const pendingApps       = applications.filter(a => a.status === 'pending').length;
 
   const bookingsByProperty = PROPERTIES.map(p => ({
     ...p,
     bookings: activeBookings.filter(b => b.propertyId === p.id || b.propertyId === String(p.id)),
-    revenue: activeBookings
-      .filter(b => b.propertyId === p.id || b.propertyId === String(p.id))
-      .reduce((sum, b) => {
-        const amt = b.breakdown?.totalPaid ? parseInt(b.breakdown.totalPaid.split(' ')[0].replace(/[^0-9]/g, '')) : (b.totalAmount || 0);
-        return sum + amt;
-      }, 0)
+    revenue: activeBookings.filter(b => b.propertyId === p.id || b.propertyId === String(p.id))
+      .reduce((sum, b) => sum + (b.breakdown?.totalPaid ? parseInt(b.breakdown.totalPaid.split(' ')[0].replace(/[^0-9]/g, '')) : (b.totalAmount || 0)), 0)
   }));
 
   const tabStyle = (tab) => ({
@@ -232,39 +225,19 @@ export default function Host() {
 
   const WalrusReceipts = ({ b }) => (
     <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-      {b.walrusBlobId && (
-        <a href={`https://aggregator.walrus-testnet.walrus.space/v1/blobs/${b.walrusBlobId}`} target="_blank" rel="noreferrer"
-          style={{ background: '#0a1a0a', border: '1px solid #1a3a1a', color: '#00ff44', fontSize: '11px', padding: '4px 10px', borderRadius: '6px', textDecoration: 'none', fontWeight: '600' }}>
-          📄 Booking
-        </a>
-      )}
-      {b.cancellationWalrusBlobId && (
-        <a href={`https://aggregator.walrus-testnet.walrus.space/v1/blobs/${b.cancellationWalrusBlobId}`} target="_blank" rel="noreferrer"
-          style={{ background: '#1a0a0a', border: '1px solid #3a1a1a', color: '#ff6666', fontSize: '11px', padding: '4px 10px', borderRadius: '6px', textDecoration: 'none', fontWeight: '600' }}>
-          ❌ Cancellation
-        </a>
-      )}
-      {b.depositReleaseWalrusBlobId && (
-        <a href={`https://aggregator.walrus-testnet.walrus.space/v1/blobs/${b.depositReleaseWalrusBlobId}`} target="_blank" rel="noreferrer"
-          style={{ background: '#0a0a1a', border: '1px solid #1a1a3a', color: '#4a9eff', fontSize: '11px', padding: '4px 10px', borderRadius: '6px', textDecoration: 'none', fontWeight: '600' }}>
-          🔓 Deposit
-        </a>
-      )}
+      {b.walrusBlobId && <a href={`https://aggregator.walrus-testnet.walrus.space/v1/blobs/${b.walrusBlobId}`} target="_blank" rel="noreferrer" style={{ background: '#0a1a0a', border: '1px solid #1a3a1a', color: '#00ff44', fontSize: '11px', padding: '4px 10px', borderRadius: '6px', textDecoration: 'none', fontWeight: '600' }}>📄 Booking</a>}
+      {b.cancellationWalrusBlobId && <a href={`https://aggregator.walrus-testnet.walrus.space/v1/blobs/${b.cancellationWalrusBlobId}`} target="_blank" rel="noreferrer" style={{ background: '#1a0a0a', border: '1px solid #3a1a1a', color: '#ff6666', fontSize: '11px', padding: '4px 10px', borderRadius: '6px', textDecoration: 'none', fontWeight: '600' }}>❌ Cancellation</a>}
+      {b.depositReleaseWalrusBlobId && <a href={`https://aggregator.walrus-testnet.walrus.space/v1/blobs/${b.depositReleaseWalrusBlobId}`} target="_blank" rel="noreferrer" style={{ background: '#0a0a1a', border: '1px solid #1a1a3a', color: '#4a9eff', fontSize: '11px', padding: '4px 10px', borderRadius: '6px', textDecoration: 'none', fontWeight: '600' }}>🔓 Deposit</a>}
     </div>
   );
 
-  if (loading) return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#0a0a0a', color: '#fff' }}>
-      Loading host dashboard...
-    </div>
-  );
-
-  // ─── Filtered tax bookings ────────────────────────────────────────────────
   const filteredTaxBookings = taxData?.bookings?.filter(b => {
     if (taxFilter === 'pending') return !b.remitted;
     if (taxFilter === 'remitted') return b.remitted;
     return true;
   }) || [];
+
+  if (loading) return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#0a0a0a', color: '#fff' }}>Loading host dashboard...</div>;
 
   return (
     <div style={{ minHeight: '100vh', background: '#0a0a0a', color: '#fff' }}>
@@ -293,7 +266,7 @@ export default function Host() {
           <p style={{ color: '#666', fontSize: '14px', margin: 0 }}>Manage your listings, bookings, and payouts</p>
         </div>
 
-        {/* Stats row */}
+        {/* Stats */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '16px', marginBottom: '32px' }}>
           {[
             { label: 'TOTAL BOOKINGS', value: activeBookings.length, color: '#00ff44', sub: `${cancelledBookings.length} cancelled` },
@@ -316,18 +289,20 @@ export default function Host() {
 
         {/* Tabs */}
         <div style={{ display: 'flex', gap: '8px', marginBottom: '24px', flexWrap: 'wrap' }}>
-          {['overview', 'bookings', 'listings', 'calendar', 'reviews', 'tax'].map(tab => (
+          {['overview', 'bookings', 'listings', 'calendar', 'reviews', 'tax', 'applications'].map(tab => (
             <button key={tab} onClick={() => setActiveTab(tab)} style={tabStyle(tab)}>
-              {tab === 'overview' ? '📊 Overview' :
-               tab === 'bookings' ? <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>📋 Bookings {totalUnread > 0 && <span style={{ background: '#ff4444', color: '#fff', borderRadius: '50%', fontSize: '10px', fontWeight: '700', padding: '1px 5px' }}>{totalUnread}</span>}</span> :
-               tab === 'listings' ? '🏠 Listings' :
-               tab === 'calendar' ? '📅 Calendar Sync' :
-               tab === 'reviews' ? '⭐ Reviews' : '💰 Tax'}
+              {tab === 'overview'      ? '📊 Overview' :
+               tab === 'bookings'     ? <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>📋 Bookings {totalUnread > 0 && <span style={{ background: '#ff4444', color: '#fff', borderRadius: '50%', fontSize: '10px', fontWeight: '700', padding: '1px 5px' }}>{totalUnread}</span>}</span> :
+               tab === 'listings'     ? '🏠 Listings' :
+               tab === 'calendar'     ? '📅 Calendar Sync' :
+               tab === 'reviews'      ? '⭐ Reviews' :
+               tab === 'tax'          ? '💰 Tax' :
+               <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>👥 Applications {pendingApps > 0 && <span style={{ background: '#ffaa00', color: '#000', borderRadius: '50%', fontSize: '10px', fontWeight: '700', padding: '1px 5px' }}>{pendingApps}</span>}</span>}
             </button>
           ))}
         </div>
 
-        {/* Overview tab */}
+        {/* Overview */}
         {activeTab === 'overview' && (
           <div>
             <h3 style={{ fontSize: '16px', fontWeight: '600', margin: '0 0 16px' }}>Revenue by Property</h3>
@@ -351,11 +326,7 @@ export default function Host() {
                     <div style={{ fontSize: '16px', fontWeight: '700', color: '#888' }}>${p.price}</div>
                     <div style={{ fontSize: '10px', color: '#555' }}>PER NIGHT</div>
                   </div>
-                  {p.bookings.length > 0 && (
-                    <div style={{ background: '#0a1a0a', border: '1px solid #1a3a1a', borderRadius: '6px', padding: '4px 10px' }}>
-                      <span style={{ fontSize: '11px', color: '#00ff44', fontWeight: '600' }}>● Active</span>
-                    </div>
-                  )}
+                  {p.bookings.length > 0 && <div style={{ background: '#0a1a0a', border: '1px solid #1a3a1a', borderRadius: '6px', padding: '4px 10px' }}><span style={{ fontSize: '11px', color: '#00ff44', fontWeight: '600' }}>● Active</span></div>}
                 </div>
               ))}
             </div>
@@ -367,15 +338,10 @@ export default function Host() {
               </div>
               <p style={{ color: '#888', fontSize: '13px', margin: '0 0 12px', lineHeight: '1.6' }}>Host payouts settle instantly via DeepBook on Sui. No 3–5 day bank delays.</p>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '12px' }}>
-                {[
-                  { label: 'Settlement Time', value: '< 1 second', color: '#00ff44' },
-                  { label: 'Airbnb Payout Delay', value: '3–5 days', color: '#ff4444' },
-                  { label: 'Your Net Rate', value: '97% of booking', color: '#4a9eff' },
-                  { label: 'Airbnb Net Rate', value: '85% of booking', color: '#ff4444' },
-                ].map((item, i) => (
+                {[['Settlement Time','< 1 second','#00ff44'],['Airbnb Payout Delay','3–5 days','#ff4444'],['Your Net Rate','97% of booking','#4a9eff'],['Airbnb Net Rate','85% of booking','#ff4444']].map(([label, val, color], i) => (
                   <div key={i} style={{ background: '#111', borderRadius: '8px', padding: '12px' }}>
-                    <div style={{ fontSize: '10px', color: '#555', marginBottom: '4px' }}>{item.label}</div>
-                    <div style={{ fontSize: '16px', fontWeight: '700', color: item.color }}>{item.value}</div>
+                    <div style={{ fontSize: '10px', color: '#555', marginBottom: '4px' }}>{label}</div>
+                    <div style={{ fontSize: '16px', fontWeight: '700', color }}>{val}</div>
                   </div>
                 ))}
               </div>
@@ -383,7 +349,7 @@ export default function Host() {
           </div>
         )}
 
-        {/* Bookings tab */}
+        {/* Bookings */}
         {activeTab === 'bookings' && (
           <div>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
@@ -416,9 +382,7 @@ export default function Host() {
                         </div>
                       </div>
                       <div style={{ textAlign: 'right' }}>
-                        <div style={{ fontSize: '18px', fontWeight: '700', color: b.paymentStatus === 'cancelled' ? '#555' : '#00ff44', textDecoration: b.paymentStatus === 'cancelled' ? 'line-through' : 'none' }}>
-                          {b.breakdown?.totalPaid || `$${b.totalAmount}`}
-                        </div>
+                        <div style={{ fontSize: '18px', fontWeight: '700', color: b.paymentStatus === 'cancelled' ? '#555' : '#00ff44', textDecoration: b.paymentStatus === 'cancelled' ? 'line-through' : 'none' }}>{b.breakdown?.totalPaid || `$${b.totalAmount}`}</div>
                         <div style={{ fontSize: '11px', color: '#555' }}>{fmtDate(b.checkIn)} → {fmtDate(b.checkOut)}</div>
                         <div style={{ fontSize: '11px', color: '#555' }}>{b.nights} night{b.nights > 1 ? 's' : ''}</div>
                       </div>
@@ -430,8 +394,7 @@ export default function Host() {
                         {b.paymentStatus !== 'cancelled' && (
                           <button onClick={() => router.push(`/messages?bookingRef=${b.bookingRef}&property=${encodeURIComponent(b.property)}`)}
                             style={{ background: messageCounts[b.bookingRef] > 0 ? '#1a0a0a' : 'transparent', border: `1px solid ${messageCounts[b.bookingRef] > 0 ? '#3a1a1a' : '#1a1a3a'}`, color: '#4a9eff', fontSize: '11px', padding: '4px 10px', borderRadius: '6px', cursor: 'pointer', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                            💬 Messages
-                            {messageCounts[b.bookingRef] > 0 && <span style={{ background: '#ff4444', color: '#fff', borderRadius: '50%', fontSize: '10px', fontWeight: '700', padding: '1px 5px' }}>{messageCounts[b.bookingRef]}</span>}
+                            💬 Messages {messageCounts[b.bookingRef] > 0 && <span style={{ background: '#ff4444', color: '#fff', borderRadius: '50%', fontSize: '10px', fontWeight: '700', padding: '1px 5px' }}>{messageCounts[b.bookingRef]}</span>}
                           </button>
                         )}
                         {b.depositAmount && b.paymentStatus !== 'cancelled' && b.depositStatus !== 'released' && (
@@ -449,7 +412,7 @@ export default function Host() {
           </div>
         )}
 
-        {/* Listings tab */}
+        {/* Listings */}
         {activeTab === 'listings' && (
           <div>
             <h3 style={{ fontSize: '16px', fontWeight: '600', margin: '0 0 16px' }}>Your Listings</h3>
@@ -468,7 +431,7 @@ export default function Host() {
                     </div>
                     <p style={{ color: '#666', fontSize: '12px', margin: '0 0 12px' }}>{p.location} · {p.beds} beds · {p.baths} baths</p>
                     <div style={{ background: '#1a1a1a', borderRadius: '8px', padding: '10px', marginBottom: '10px' }}>
-                      <div style={{ fontSize: '10px', color: '#555', marginBottom: '6px', fontWeight: '600' }}>ICAL EXPORT — paste into Airbnb/VRBO</div>
+                      <div style={{ fontSize: '10px', color: '#555', marginBottom: '6px', fontWeight: '600' }}>ICAL EXPORT</div>
                       <div style={{ display: 'flex', gap: '6px' }}>
                         <div style={{ flex: 1, background: '#111', border: '1px solid #333', borderRadius: '6px', padding: '6px 10px', fontSize: '11px', color: '#666', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{API}/ical/{p.id}</div>
                         <button onClick={() => copyICal(p.id)} style={{ background: copiedId === p.id ? '#0a1a0a' : '#1a1a1a', border: `1px solid ${copiedId === p.id ? '#00ff44' : '#333'}`, color: copiedId === p.id ? '#00ff44' : '#888', fontSize: '11px', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontWeight: '600', whiteSpace: 'nowrap' }}>
@@ -476,19 +439,15 @@ export default function Host() {
                         </button>
                       </div>
                     </div>
-                    <div style={{ display: 'flex', gap: '8px', fontSize: '12px' }}>
-                      <div style={{ flex: 1, background: '#1a1a1a', borderRadius: '6px', padding: '8px', textAlign: 'center' }}>
-                        <div style={{ fontSize: '10px', color: '#555', marginBottom: '2px' }}>BOOKINGS</div>
-                        <div style={{ fontWeight: '700', color: '#00ff44' }}>{activeBookings.filter(b => b.propertyId === p.id || b.propertyId === String(p.id)).length}</div>
-                      </div>
-                      <div style={{ flex: 1, background: '#1a1a1a', borderRadius: '6px', padding: '8px', textAlign: 'center' }}>
-                        <div style={{ fontSize: '10px', color: '#555', marginBottom: '2px' }}>REVENUE</div>
-                        <div style={{ fontWeight: '700', color: '#4a9eff' }}>${activeBookings.filter(b => b.propertyId === p.id || b.propertyId === String(p.id)).reduce((sum, b) => sum + (parseInt((b.breakdown?.totalPaid || '0').split(' ')[0].replace(/[^0-9]/g, '')) || 0), 0).toLocaleString()}</div>
-                      </div>
-                      <div style={{ flex: 1, background: '#1a1a1a', borderRadius: '6px', padding: '8px', textAlign: 'center' }}>
-                        <div style={{ fontSize: '10px', color: '#555', marginBottom: '2px' }}>ARIA FEE</div>
-                        <div style={{ fontWeight: '700', color: '#00ff44' }}>3%</div>
-                      </div>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      {[['BOOKINGS', activeBookings.filter(b => b.propertyId === p.id || b.propertyId === String(p.id)).length, '#00ff44'],
+                        ['REVENUE', `$${activeBookings.filter(b => b.propertyId === p.id || b.propertyId === String(p.id)).reduce((s, b) => s + (parseInt((b.breakdown?.totalPaid || '0').split(' ')[0].replace(/[^0-9]/g, '')) || 0), 0).toLocaleString()}`, '#4a9eff'],
+                        ['ARIA FEE', '3%', '#00ff44']].map(([label, val, color]) => (
+                        <div key={label} style={{ flex: 1, background: '#1a1a1a', borderRadius: '6px', padding: '8px', textAlign: 'center' }}>
+                          <div style={{ fontSize: '10px', color: '#555', marginBottom: '2px' }}>{label}</div>
+                          <div style={{ fontWeight: '700', color }}>{val}</div>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 </div>
@@ -497,43 +456,33 @@ export default function Host() {
           </div>
         )}
 
-        {/* Calendar tab */}
+        {/* Calendar */}
         {activeTab === 'calendar' && (
           <div>
             <div style={{ background: '#0a0a1a', border: '1px solid #1a1a3a', borderRadius: '12px', padding: '20px', marginBottom: '24px' }}>
               <h3 style={{ fontSize: '16px', fontWeight: '600', margin: '0 0 8px' }}>📅 Two-Way Calendar Sync</h3>
-              <p style={{ color: '#888', fontSize: '13px', margin: 0, lineHeight: '1.6' }}>ARIA prevents double bookings across all platforms. Export your ARIA calendar to Airbnb/VRBO, and import their calendars here.</p>
+              <p style={{ color: '#888', fontSize: '13px', margin: 0, lineHeight: '1.6' }}>Export your ARIA calendar to Airbnb/VRBO, and import their calendars here.</p>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               {PROPERTIES.map(p => (
                 <div key={p.id} style={{ background: '#111', border: '1px solid #222', borderRadius: '12px', padding: '20px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
                     <img src={p.image} alt={p.title} style={{ width: '48px', height: '48px', objectFit: 'cover', borderRadius: '8px' }} />
-                    <div>
-                      <div style={{ fontSize: '15px', fontWeight: '600' }}>{p.title}</div>
-                      <div style={{ fontSize: '12px', color: '#666' }}>{p.location}</div>
-                    </div>
+                    <div><div style={{ fontSize: '15px', fontWeight: '600' }}>{p.title}</div><div style={{ fontSize: '12px', color: '#666' }}>{p.location}</div></div>
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                     <div style={{ background: '#1a1a1a', borderRadius: '8px', padding: '12px' }}>
-                      <div style={{ fontSize: '11px', color: '#00ff44', fontWeight: '600', marginBottom: '6px' }}>↑ EXPORT — paste into Airbnb/VRBO</div>
+                      <div style={{ fontSize: '11px', color: '#00ff44', fontWeight: '600', marginBottom: '6px' }}>↑ EXPORT</div>
                       <div style={{ display: 'flex', gap: '6px' }}>
                         <div style={{ flex: 1, background: '#111', border: '1px solid #333', borderRadius: '6px', padding: '6px 8px', fontSize: '10px', color: '#666', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{API}/ical/{p.id}</div>
-                        <button onClick={() => copyICal(p.id)} style={{ background: copiedId === p.id ? '#0a1a0a' : '#111', border: `1px solid ${copiedId === p.id ? '#00ff44' : '#333'}`, color: copiedId === p.id ? '#00ff44' : '#888', fontSize: '11px', padding: '6px 8px', borderRadius: '6px', cursor: 'pointer', fontWeight: '600', whiteSpace: 'nowrap' }}>
-                          {copiedId === p.id ? '✓' : 'Copy'}
-                        </button>
+                        <button onClick={() => copyICal(p.id)} style={{ background: copiedId === p.id ? '#0a1a0a' : '#111', border: `1px solid ${copiedId === p.id ? '#00ff44' : '#333'}`, color: copiedId === p.id ? '#00ff44' : '#888', fontSize: '11px', padding: '6px 8px', borderRadius: '6px', cursor: 'pointer', fontWeight: '600' }}>{copiedId === p.id ? '✓' : 'Copy'}</button>
                       </div>
                     </div>
                     <div style={{ background: '#1a1a1a', borderRadius: '8px', padding: '12px' }}>
-                      <div style={{ fontSize: '11px', color: '#4a9eff', fontWeight: '600', marginBottom: '6px' }}>↓ IMPORT — paste Airbnb/VRBO iCal URL</div>
+                      <div style={{ fontSize: '11px', color: '#4a9eff', fontWeight: '600', marginBottom: '6px' }}>↓ IMPORT</div>
                       <div style={{ display: 'flex', gap: '6px' }}>
-                        <input value={icalInputs[p.id] || ''} onChange={e => setIcalInputs(prev => ({ ...prev, [p.id]: e.target.value }))}
-                          placeholder="https://airbnb.com/calendar/ical/..."
-                          style={{ flex: 1, background: '#111', border: '1px solid #333', borderRadius: '6px', padding: '6px 8px', fontSize: '10px', color: '#fff', outline: 'none' }} />
-                        <button onClick={() => handleIcalImport(p.id)} disabled={icalSaving[p.id] || !icalInputs[p.id]}
-                          style={{ background: icalSaved[p.id] ? '#0a1a0a' : '#111', border: `1px solid ${icalSaved[p.id] ? '#00ff44' : '#333'}`, color: icalSaved[p.id] ? '#00ff44' : '#888', fontSize: '11px', padding: '6px 8px', borderRadius: '6px', cursor: 'pointer', fontWeight: '600', whiteSpace: 'nowrap' }}>
-                          {icalSaving[p.id] ? '...' : icalSaved[p.id] ? '✓' : 'Sync'}
-                        </button>
+                        <input value={icalInputs[p.id] || ''} onChange={e => setIcalInputs(prev => ({ ...prev, [p.id]: e.target.value }))} placeholder="https://airbnb.com/calendar/ical/..." style={{ flex: 1, background: '#111', border: '1px solid #333', borderRadius: '6px', padding: '6px 8px', fontSize: '10px', color: '#fff', outline: 'none' }} />
+                        <button onClick={() => handleIcalImport(p.id)} disabled={icalSaving[p.id] || !icalInputs[p.id]} style={{ background: icalSaved[p.id] ? '#0a1a0a' : '#111', border: `1px solid ${icalSaved[p.id] ? '#00ff44' : '#333'}`, color: icalSaved[p.id] ? '#00ff44' : '#888', fontSize: '11px', padding: '6px 8px', borderRadius: '6px', cursor: 'pointer', fontWeight: '600' }}>{icalSaving[p.id] ? '...' : icalSaved[p.id] ? '✓' : 'Sync'}</button>
                       </div>
                     </div>
                   </div>
@@ -543,7 +492,7 @@ export default function Host() {
           </div>
         )}
 
-        {/* Reviews tab */}
+        {/* Reviews */}
         {activeTab === 'reviews' && (
           <div>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
@@ -553,7 +502,6 @@ export default function Host() {
             {reviews.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '60px 24px', background: '#111', borderRadius: '12px', border: '1px solid #222' }}>
                 <div style={{ fontSize: '48px', marginBottom: '16px' }}>⭐</div>
-                <h3 style={{ fontSize: '18px', fontWeight: '600', margin: '0 0 8px' }}>No reviews yet</h3>
                 <p style={{ color: '#666', fontSize: '14px', margin: 0 }}>Guest reviews will appear here after their stay</p>
               </div>
             ) : (
@@ -579,29 +527,24 @@ export default function Host() {
           </div>
         )}
 
-        {/* Tax tab */}
+        {/* Tax */}
         {activeTab === 'tax' && (
           <div>
-            {/* Legal notice */}
             <div style={{ background: '#0a0a0a', border: '1px solid #2a1a00', borderRadius: '12px', padding: '16px', marginBottom: '24px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
                 <span style={{ fontSize: '16px' }}>⚖️</span>
                 <span style={{ fontWeight: '600', fontSize: '14px', color: '#ffaa00' }}>Occupancy Tax Compliance</span>
               </div>
-              <p style={{ color: '#888', fontSize: '12px', margin: 0, lineHeight: '1.6' }}>
-                ARIA collects 8% occupancy tax on every booking. As the host, you are responsible for remitting these taxes to the appropriate local jurisdiction. Mark each booking as remitted after you file with your local tax authority.
-              </p>
+              <p style={{ color: '#888', fontSize: '12px', margin: 0, lineHeight: '1.6' }}>ARIA collects 8% occupancy tax on every booking. As the host, you are responsible for remitting these taxes to the appropriate local jurisdiction.</p>
             </div>
-
             {taxLoading ? (
               <div style={{ textAlign: 'center', padding: '60px', color: '#555' }}>Loading tax data...</div>
             ) : !taxData ? (
-              <div style={{ textAlign: 'center', padding: '60px', color: '#555' }}>
+              <div style={{ textAlign: 'center', padding: '60px' }}>
                 <button onClick={loadTaxData} style={{ background: '#00ff44', color: '#000', border: 'none', borderRadius: '8px', padding: '12px 24px', fontWeight: '700', cursor: 'pointer' }}>Load Tax Data</button>
               </div>
             ) : (
               <>
-                {/* Summary cards */}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '16px', marginBottom: '24px' }}>
                   {[
                     { label: 'TOTAL COLLECTED', value: `$${taxData.summary.totalCollected.toLocaleString()}`, color: '#ffaa00', sub: `${taxData.summary.bookingCount} bookings` },
@@ -616,8 +559,6 @@ export default function Host() {
                     </div>
                   ))}
                 </div>
-
-                {/* Controls */}
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', flexWrap: 'wrap', gap: '8px' }}>
                   <div style={{ display: 'flex', gap: '8px' }}>
                     {['all', 'pending', 'remitted'].map(f => (
@@ -627,17 +568,10 @@ export default function Host() {
                       </button>
                     ))}
                   </div>
-                  <button onClick={exportCSV}
-                    style={{ background: 'transparent', border: '1px solid #333', color: '#888', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
-                    ⬇ Export CSV
-                  </button>
+                  <button onClick={exportCSV} style={{ background: 'transparent', border: '1px solid #333', color: '#888', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>⬇ Export CSV</button>
                 </div>
-
-                {/* Booking rows */}
                 {filteredTaxBookings.length === 0 ? (
-                  <div style={{ textAlign: 'center', padding: '40px', background: '#111', borderRadius: '12px', border: '1px solid #222', color: '#555' }}>
-                    No bookings in this category
-                  </div>
+                  <div style={{ textAlign: 'center', padding: '40px', background: '#111', borderRadius: '12px', border: '1px solid #222', color: '#555' }}>No bookings in this category</div>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                     {filteredTaxBookings.map((b, i) => (
@@ -648,7 +582,6 @@ export default function Host() {
                             <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>{b.guestName} · {fmtDate(b.checkIn)} → {fmtDate(b.checkOut)} · {b.nights} night{b.nights > 1 ? 's' : ''}</div>
                             <div style={{ fontSize: '11px', color: '#555', fontFamily: 'monospace' }}>{b.bookingRef}</div>
                           </div>
-
                           <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
                             <div style={{ textAlign: 'center' }}>
                               <div style={{ fontSize: '10px', color: '#555', marginBottom: '2px' }}>SUBTOTAL</div>
@@ -658,19 +591,12 @@ export default function Host() {
                               <div style={{ fontSize: '10px', color: '#555', marginBottom: '2px' }}>TAX (8%)</div>
                               <div style={{ fontSize: '16px', fontWeight: '700', color: '#ffaa00' }}>${b.taxAmount}</div>
                             </div>
-
                             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
                               {b.remitted ? (
                                 <>
-                                  <span style={{ background: '#0a1a0a', border: '1px solid #1a3a1a', color: '#00ff44', fontSize: '11px', fontWeight: '600', padding: '3px 10px', borderRadius: '20px' }}>
-                                    ✅ Remitted {b.remittedAt ? fmtDate(b.remittedAt) : ''}
-                                  </span>
+                                  <span style={{ background: '#0a1a0a', border: '1px solid #1a3a1a', color: '#00ff44', fontSize: '11px', fontWeight: '600', padding: '3px 10px', borderRadius: '20px' }}>✅ Remitted {b.remittedAt ? fmtDate(b.remittedAt) : ''}</span>
                                   {b.jurisdiction && <span style={{ fontSize: '11px', color: '#555' }}>{b.jurisdiction}</span>}
-                                  {b.notes && <span style={{ fontSize: '11px', color: '#555', fontStyle: 'italic' }}>{b.notes}</span>}
-                                  <button onClick={() => handleUnremit(b.bookingRef)}
-                                    style={{ background: 'transparent', border: '1px solid #333', color: '#555', fontSize: '10px', padding: '2px 8px', borderRadius: '4px', cursor: 'pointer' }}>
-                                    Undo
-                                  </button>
+                                  <button onClick={() => handleUnremit(b.bookingRef)} style={{ background: 'transparent', border: '1px solid #333', color: '#555', fontSize: '10px', padding: '2px 8px', borderRadius: '4px', cursor: 'pointer' }}>Undo</button>
                                 </>
                               ) : (
                                 <button onClick={() => { setRemitModal(b); setRemitJurisdiction(''); setRemitNotes(''); }}
@@ -689,6 +615,76 @@ export default function Host() {
             )}
           </div>
         )}
+
+        {/* Applications */}
+        {activeTab === 'applications' && (
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+              <h3 style={{ fontSize: '16px', fontWeight: '600', margin: 0 }}>Host Applications</h3>
+              <button onClick={() => loadApplications()} style={{ background: 'transparent', border: '1px solid #333', color: '#888', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>↻ Refresh</button>
+            </div>
+
+            {applicationsLoading ? (
+              <div style={{ textAlign: 'center', padding: '60px', color: '#555' }}>Loading applications...</div>
+            ) : applications.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '60px 24px', background: '#111', borderRadius: '12px', border: '1px solid #222' }}>
+                <div style={{ fontSize: '48px', marginBottom: '16px' }}>👥</div>
+                <h3 style={{ fontSize: '18px', fontWeight: '600', margin: '0 0 8px' }}>No applications yet</h3>
+                <p style={{ color: '#666', fontSize: '14px', margin: 0 }}>Host applications will appear here when users sign up</p>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                {/* Summary row */}
+                <div style={{ display: 'flex', gap: '12px', marginBottom: '8px' }}>
+                  {[
+                    { label: 'TOTAL', value: applications.length, color: '#888' },
+                    { label: 'PENDING', value: applications.filter(a => a.status === 'pending').length, color: '#ffaa00' },
+                    { label: 'APPROVED', value: applications.filter(a => a.status === 'approved').length, color: '#00ff44' },
+                  ].map((s, i) => (
+                    <div key={i} style={{ background: '#111', border: '1px solid #222', borderRadius: '8px', padding: '12px 20px', textAlign: 'center' }}>
+                      <div style={{ fontSize: '10px', color: '#555', marginBottom: '4px', fontWeight: '600' }}>{s.label}</div>
+                      <div style={{ fontSize: '20px', fontWeight: '700', color: s.color }}>{s.value}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {applications.map((a, i) => (
+                  <div key={i} style={{ background: '#111', border: `1px solid ${a.status === 'pending' ? '#2a2000' : '#1a2a1a'}`, borderRadius: '12px', padding: '20px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', flexWrap: 'wrap', gap: '12px' }}>
+                      <div style={{ flex: 1, minWidth: '200px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                          <div style={{ fontSize: '15px', fontWeight: '600' }}>{a.name}</div>
+                          <span style={{
+                            background: a.status === 'pending' ? '#1a1a00' : '#0a1a0a',
+                            border: `1px solid ${a.status === 'pending' ? '#3a3000' : '#1a3a1a'}`,
+                            color: a.status === 'pending' ? '#ffaa00' : '#00ff44',
+                            fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '10px'
+                          }}>
+                            {a.status === 'pending' ? '⏳ Pending' : '✅ Approved'}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: '13px', color: '#888', marginBottom: '4px' }}>{a.email}</div>
+                        {a.city && <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>📍 {a.city}{a.state ? ', ' + a.state : ''}{a.jurisdiction ? ` · ${a.jurisdiction}` : ''}</div>}
+                        {a.str_permit && <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>🪪 STR Permit: {a.str_permit}</div>}
+                        <div style={{ fontSize: '11px', color: '#555', fontFamily: 'monospace', marginTop: '4px' }}>{a.sui_address}</div>
+                        <div style={{ fontSize: '11px', color: '#555', marginTop: '4px' }}>Applied {fmtDateTime(a.created_at)}</div>
+                        {a.approved_at && <div style={{ fontSize: '11px', color: '#00ff44', marginTop: '2px' }}>Approved {fmtDateTime(a.approved_at)}</div>}
+                      </div>
+
+                      {a.status === 'pending' && (
+                        <button onClick={() => handleApprove(a.sui_address, a.name)} disabled={approvingId === a.sui_address}
+                          style={{ background: approvingId === a.sui_address ? '#333' : '#00ff44', color: approvingId === a.sui_address ? '#555' : '#000', border: 'none', borderRadius: '8px', padding: '10px 20px', fontSize: '13px', fontWeight: '700', cursor: approvingId === a.sui_address ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}>
+                          {approvingId === a.sui_address ? 'Approving...' : '✅ Approve Host'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
       </div>
 
       {/* Remit Modal */}
@@ -697,7 +693,6 @@ export default function Host() {
           <div style={{ background: '#111', border: '1px solid #333', borderRadius: '16px', width: '100%', maxWidth: '480px', padding: '32px' }}>
             <h3 style={{ margin: '0 0 4px', fontSize: '20px', fontWeight: '700' }}>Mark Tax as Remitted</h3>
             <p style={{ color: '#666', fontSize: '14px', margin: '0 0 20px' }}>{remitModal.property} · {fmtDate(remitModal.checkIn)}</p>
-
             <div style={{ background: '#1a1a0a', border: '1px solid #3a3a00', borderRadius: '8px', padding: '12px', marginBottom: '20px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                 <span style={{ color: '#888', fontSize: '13px' }}>Subtotal</span>
@@ -708,26 +703,18 @@ export default function Host() {
                 <span style={{ color: '#ffaa00', fontSize: '16px', fontWeight: '700' }}>${remitModal.taxAmount}</span>
               </div>
             </div>
-
             <div style={{ marginBottom: '16px' }}>
               <div style={{ fontSize: '12px', color: '#888', marginBottom: '6px', fontWeight: '600' }}>JURISDICTION (optional)</div>
-              <input value={remitJurisdiction} onChange={e => setRemitJurisdiction(e.target.value)}
-                placeholder="e.g. Miami-Dade County, FL"
+              <input value={remitJurisdiction} onChange={e => setRemitJurisdiction(e.target.value)} placeholder="e.g. Miami-Dade County, FL"
                 style={{ width: '100%', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '10px 12px', color: '#fff', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
             </div>
-
             <div style={{ marginBottom: '24px' }}>
               <div style={{ fontSize: '12px', color: '#888', marginBottom: '6px', fontWeight: '600' }}>NOTES (optional)</div>
-              <input value={remitNotes} onChange={e => setRemitNotes(e.target.value)}
-                placeholder="e.g. Confirmation #12345, filed via county portal"
+              <input value={remitNotes} onChange={e => setRemitNotes(e.target.value)} placeholder="e.g. Confirmation #12345"
                 style={{ width: '100%', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '10px 12px', color: '#fff', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
             </div>
-
             <div style={{ display: 'flex', gap: '8px' }}>
-              <button onClick={() => setRemitModal(null)}
-                style={{ flex: 1, background: 'transparent', border: '1px solid #333', color: '#888', borderRadius: '8px', padding: '12px', fontSize: '14px', cursor: 'pointer' }}>
-                Cancel
-              </button>
+              <button onClick={() => setRemitModal(null)} style={{ flex: 1, background: 'transparent', border: '1px solid #333', color: '#888', borderRadius: '8px', padding: '12px', fontSize: '14px', cursor: 'pointer' }}>Cancel</button>
               <button onClick={handleRemit} disabled={!!remittingId}
                 style={{ flex: 2, background: remittingId ? '#333' : '#ffaa00', color: remittingId ? '#555' : '#000', border: 'none', borderRadius: '8px', padding: '12px', fontSize: '14px', fontWeight: '700', cursor: remittingId ? 'not-allowed' : 'pointer' }}>
                 {remittingId ? 'Recording...' : `Confirm Remittance — $${remitModal.taxAmount}`}
