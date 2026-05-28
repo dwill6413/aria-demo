@@ -77,6 +77,7 @@ export default function Home() {
   const [searched, setSearched] = useState(false);
   const [liveRatings, setLiveRatings] = useState({});
   const [photoIndex, setPhotoIndex] = useState(0);
+  const [termsAccepted, setTermsAccepted] = useState(false);
 
   const nights = checkIn && checkOut ? Math.round((checkOut - checkIn) / (1000 * 60 * 60 * 24)) : 0;
 
@@ -89,8 +90,8 @@ export default function Home() {
   const getCardTotal   = (p, n) => (getChargeTotal(p, n) * 1.029 + 0.30).toFixed(2);
   const getCardFee     = (p, n) => (getChargeTotal(p, n) * 0.029 + 0.30).toFixed(2);
 
-  const openModal  = (p) => { setSelected(p); setBooking(null); setCheckIn(null); setCheckOut(null); setPhotoIndex(0); };
-  const closeModal = () => { setSelected(null); setBooking(null); setCheckIn(null); setCheckOut(null); setPhotoIndex(0); };
+  const openModal  = (p) => { setSelected(p); setBooking(null); setCheckIn(null); setCheckOut(null); setPhotoIndex(0); setTermsAccepted(false); };
+  const closeModal = () => { setSelected(null); setBooking(null); setCheckIn(null); setCheckOut(null); setPhotoIndex(0); setTermsAccepted(false); };
 
   const handleSearch = () => {
     let results = PROPERTIES;
@@ -358,7 +359,7 @@ export default function Home() {
         <p style={{ color: '#444', fontSize: '11px', margin: '0 0 6px', lineHeight: '1.7', maxWidth: '700px', marginLeft: 'auto', marginRight: 'auto' }}>
           ⚠️ ARIA is a non-custodial platform. We do not hold your funds. All payments execute directly on the Sui blockchain. ARIA has no ability to reverse, freeze, or recover transactions. You are solely responsible for your wallet and transactions.
         </p>
-        <p style={{ color: '#333', fontSize: '11px', margin: 0 }}>© 2026 ARIA · Built on Sui · Powered by DeepBook & Walrus · <span style={{ color: '#444' }}>Non-custodial · You stay in control</span></p>
+        <p style={{ color: '#333', fontSize: '11px', margin: 0 }}>© 2026 ARIA · Built on Sui · Powered by DeepBook & Walrus · <span style={{ color: '#444' }}>Non-custodial · You stay in control</span> · <span onClick={() => router.push('/terms')} style={{ color: '#444', cursor: 'pointer', textDecoration: 'underline' }}>Terms of Service</span></p>
       </div>
 
       {/* Booking Modal */}
@@ -491,9 +492,20 @@ export default function Home() {
                 </>
               )}
 
-              <button onClick={handleBooking} disabled={bookingLoading || !checkIn || !checkOut}
-                style={{ width: '100%', background: bookingLoading ? '#444' : (!checkIn || !checkOut) ? '#1a2a1a' : '#00ff44', color: (!checkIn || !checkOut) ? '#555' : '#000', border: 'none', borderRadius: '8px', padding: '14px', fontWeight: '700', fontSize: '15px', cursor: (!checkIn || !checkOut) ? 'not-allowed' : 'pointer', marginBottom: '8px' }}>
-                {bookingLoading ? 'Processing on Sui...' : (!checkIn || !checkOut) ? 'Select dates to book' : `Book Now – Pay $${getChargeTotal(selected, nights)} SuiUSD`}
+              {checkIn && checkOut && nights > 0 && (
+                <label style={{ display: 'flex', alignItems: 'start', gap: '10px', marginBottom: '12px', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={termsAccepted} onChange={e => setTermsAccepted(e.target.checked)}
+                    style={{ marginTop: '2px', accentColor: '#00ff44', width: '16px', height: '16px', flexShrink: 0 }} />
+                  <span style={{ fontSize: '12px', color: '#888', lineHeight: '1.5' }}>
+                    I understand ARIA is non-custodial. Payments execute on the Sui blockchain and cannot be reversed by ARIA. I accept the{' '}
+                    <span onClick={(e) => { e.preventDefault(); window.open('/terms', '_blank'); }} style={{ color: '#00ff44', cursor: 'pointer', textDecoration: 'underline' }}>Terms of Service</span>.
+                  </span>
+                </label>
+              )}
+
+              <button onClick={handleBooking} disabled={bookingLoading || !checkIn || !checkOut || (checkIn && checkOut && !termsAccepted)}
+                style={{ width: '100%', background: bookingLoading ? '#444' : (!checkIn || !checkOut || !termsAccepted) ? '#1a2a1a' : '#00ff44', color: (!checkIn || !checkOut || !termsAccepted) ? '#555' : '#000', border: 'none', borderRadius: '8px', padding: '14px', fontWeight: '700', fontSize: '15px', cursor: (!checkIn || !checkOut || !termsAccepted) ? 'not-allowed' : 'pointer', marginBottom: '8px' }}>
+                {bookingLoading ? 'Processing on Sui...' : (!checkIn || !checkOut) ? 'Select dates to book' : !termsAccepted ? 'Accept terms to continue' : `Book Now – Pay $${getChargeTotal(selected, nights)} SuiUSD`}
               </button>
               <button onClick={handleCardPayment} disabled={bookingLoading || !checkIn || !checkOut}
                 style={{ width: '100%', background: 'transparent', color: (!checkIn || !checkOut) ? '#444' : '#fff', border: '1px solid #444', borderRadius: '8px', padding: '14px', fontWeight: '600', fontSize: '15px', cursor: (!checkIn || !checkOut) ? 'not-allowed' : 'pointer' }}>
