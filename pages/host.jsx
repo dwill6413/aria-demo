@@ -5,6 +5,14 @@ const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
 const fmtDate = (d) => new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
+const getStoredSid = () => { try { return localStorage.getItem('aria_sid') || ''; } catch { return ''; } };
+const authFetch = (url, options = {}) => {
+  const sid = getStoredSid();
+  const headers = { ...(options.headers || {}) };
+  if (sid) headers['x-session-id'] = sid;
+  return fetch(url, { ...options, credentials: 'include', headers });
+};
+
 const PROPERTIES = [
   { id: 1, title: 'Oceanfront Villa', location: 'Miami Beach, FL', price: 285, beds: 4, baths: 3, tag: 'Beachfront', image: 'https://images.unsplash.com/photo-1499793983690-e29da59ef1c2?w=600&q=80' },
   { id: 2, title: 'Downtown Loft', location: 'Austin, TX', price: 145, beds: 2, baths: 1, tag: 'City View', image: 'https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?w=600&q=80' },
@@ -29,26 +37,26 @@ export default function Host() {
   const [messageCounts, setMessageCounts] = useState({});
 
   useEffect(() => {
-    fetch(`${API}/auth/me`, { credentials: 'include' })
+    authFetch(`${API}/auth/me`)
       .then(res => res.json())
       .then(async data => {
         if (!data.address) { router.push('/'); return; }
         if (!data.isHost) { router.push('/?error=access_denied'); return; }
         setUser(data);
-        const bkRes = await fetch(`${API}/bookings/all`, { credentials: 'include' });
+        const bkRes = await authFetch(`${API}/bookings/all`);
         const bkData = await bkRes.json();
         const bks = bkData.bookings || [];
         setBookings(bks);
         const counts = {};
         await Promise.all(bks.filter(b => b.paymentStatus !== 'cancelled').map(async b => {
           try {
-            const r = await fetch(`${API}/messages/${b.bookingRef}/count`, { credentials: 'include' });
+            const r = await authFetch(`${API}/messages/${b.bookingRef}/count`);
             const d = await r.json();
             counts[b.bookingRef] = d.count || 0;
           } catch { counts[b.bookingRef] = 0; }
         }));
         setMessageCounts(counts);
-        const rvRes = await fetch(`${API}/reviews/all`, { credentials: 'include' });
+        const rvRes = await authFetch(`${API}/reviews/all`);
         const rvData = await rvRes.json();
         setReviews(rvData.reviews || []);
         setLoading(false);
@@ -67,10 +75,9 @@ export default function Host() {
     const url = icalInputs[propertyId];
     if (!url) return;
     setIcalSaving(prev => ({ ...prev, [propertyId]: true }));
-    const res = await fetch(`${API}/ical/import`, {
+    const res = await authFetch(`${API}/ical/import`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
       body: JSON.stringify({ propertyId, platform: 'airbnb', icalUrl: url })
     });
     const data = await res.json();
@@ -84,15 +91,14 @@ export default function Host() {
   const handleReleaseDeposit = async (bookingRef) => {
     if (!confirm('Release deposit back to guest? This cannot be undone.')) return;
     setReleasingId(bookingRef);
-    const res = await fetch(`${API}/booking/release-deposit`, {
+    const res = await authFetch(`${API}/booking/release-deposit`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
       body: JSON.stringify({ bookingRef })
     });
     const data = await res.json();
     if (data.success) {
-      const bkRes = await fetch(`${API}/bookings/all`, { credentials: 'include' });
+      const bkRes = await authFetch(`${API}/bookings/all`);
       const bkData = await bkRes.json();
       setBookings(bkData.bookings || []);
     }
@@ -141,22 +147,19 @@ export default function Host() {
   const WalrusReceipts = ({ b }) => (
     <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
       {b.walrusBlobId && (
-        <a href={`https://aggregator.walrus-testnet.walrus.space/v1/blobs/${b.walrusBlobId}`}
-          target="_blank" rel="noreferrer"
+        <a href={`https://aggregator.walrus-testnet.walrus.space/v1/blobs/${b.walrusBlobId}`} target="_blank" rel="noreferrer"
           style={{ background: '#0a1a0a', border: '1px solid #1a3a1a', color: '#00ff44', fontSize: '11px', padding: '4px 10px', borderRadius: '6px', textDecoration: 'none', fontWeight: '600' }}>
           📄 Booking
         </a>
       )}
       {b.cancellationWalrusBlobId && (
-        <a href={`https://aggregator.walrus-testnet.walrus.space/v1/blobs/${b.cancellationWalrusBlobId}`}
-          target="_blank" rel="noreferrer"
+        <a href={`https://aggregator.walrus-testnet.walrus.space/v1/blobs/${b.cancellationWalrusBlobId}`} target="_blank" rel="noreferrer"
           style={{ background: '#1a0a0a', border: '1px solid #3a1a1a', color: '#ff6666', fontSize: '11px', padding: '4px 10px', borderRadius: '6px', textDecoration: 'none', fontWeight: '600' }}>
           ❌ Cancellation
         </a>
       )}
       {b.depositReleaseWalrusBlobId && (
-        <a href={`https://aggregator.walrus-testnet.walrus.space/v1/blobs/${b.depositReleaseWalrusBlobId}`}
-          target="_blank" rel="noreferrer"
+        <a href={`https://aggregator.walrus-testnet.walrus.space/v1/blobs/${b.depositReleaseWalrusBlobId}`} target="_blank" rel="noreferrer"
           style={{ background: '#0a0a1a', border: '1px solid #1a1a3a', color: '#4a9eff', fontSize: '11px', padding: '4px 10px', borderRadius: '6px', textDecoration: 'none', fontWeight: '600' }}>
           🔓 Deposit
         </a>
@@ -172,8 +175,6 @@ export default function Host() {
 
   return (
     <div style={{ minHeight: '100vh', background: '#0a0a0a', color: '#fff' }}>
-
-      {/* Header */}
       <div style={{ background: '#111', borderBottom: '1px solid #222', padding: '0 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '60px', position: 'sticky', top: 0, zIndex: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <span onClick={() => router.push('/')} style={{ fontSize: '20px', cursor: 'pointer' }}>🏠</span>
@@ -197,7 +198,6 @@ export default function Host() {
           <p style={{ color: '#666', fontSize: '14px', margin: 0 }}>Manage your listings, bookings, and payouts</p>
         </div>
 
-        {/* Stats row */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '16px', marginBottom: '32px' }}>
           {[
             { label: 'TOTAL BOOKINGS', value: activeBookings.length, color: '#00ff44', sub: `${cancelledBookings.length} cancelled` },
@@ -218,7 +218,6 @@ export default function Host() {
           ))}
         </div>
 
-        {/* Tabs */}
         <div style={{ display: 'flex', gap: '8px', marginBottom: '24px', flexWrap: 'wrap' }}>
           {['overview', 'bookings', 'listings', 'calendar', 'reviews'].map(tab => (
             <button key={tab} onClick={() => setActiveTab(tab)} style={tabStyle(tab)}>
@@ -230,7 +229,6 @@ export default function Host() {
           ))}
         </div>
 
-        {/* Overview tab */}
         {activeTab === 'overview' && (
           <div>
             <h3 style={{ fontSize: '16px', fontWeight: '600', margin: '0 0 16px' }}>Revenue by Property</h3>
@@ -268,9 +266,7 @@ export default function Host() {
                 <span style={{ fontWeight: '600', fontSize: '15px' }}>DeepBook Settlement</span>
                 <span style={{ background: '#1a1a3a', border: '1px solid #2a2a5a', color: '#4a9eff', fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '10px' }}>LIVE</span>
               </div>
-              <p style={{ color: '#888', fontSize: '13px', margin: '0 0 12px', lineHeight: '1.6' }}>
-                Host payouts settle instantly via DeepBook on Sui. No 3–5 day bank delays.
-              </p>
+              <p style={{ color: '#888', fontSize: '13px', margin: '0 0 12px', lineHeight: '1.6' }}>Host payouts settle instantly via DeepBook on Sui. No 3–5 day bank delays.</p>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '12px' }}>
                 {[
                   { label: 'Settlement Time', value: '< 1 second', color: '#00ff44' },
@@ -288,7 +284,6 @@ export default function Host() {
           </div>
         )}
 
-        {/* Bookings tab */}
         {activeTab === 'bookings' && (
           <div>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
@@ -310,21 +305,11 @@ export default function Host() {
                         <div style={{ fontSize: '15px', fontWeight: '600', marginBottom: '4px' }}>{b.property}</div>
                         <div style={{ fontSize: '12px', color: '#666', marginBottom: '6px' }}>{b.guestName || 'Guest'} · {b.guestEmail || ''}</div>
                         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                          <span style={{
-                            background: b.paymentStatus === 'cancelled' ? '#1a0a0a' : '#0a1a0a',
-                            border: `1px solid ${b.paymentStatus === 'cancelled' ? '#3a1a1a' : '#1a3a1a'}`,
-                            color: b.paymentStatus === 'cancelled' ? '#ff4444' : '#00ff44',
-                            fontSize: '11px', fontWeight: '600', padding: '2px 8px', borderRadius: '20px'
-                          }}>
+                          <span style={{ background: b.paymentStatus === 'cancelled' ? '#1a0a0a' : '#0a1a0a', border: `1px solid ${b.paymentStatus === 'cancelled' ? '#3a1a1a' : '#1a3a1a'}`, color: b.paymentStatus === 'cancelled' ? '#ff4444' : '#00ff44', fontSize: '11px', fontWeight: '600', padding: '2px 8px', borderRadius: '20px' }}>
                             {b.paymentStatus === 'cancelled' ? '✕ cancelled' : '✅ confirmed'}
                           </span>
                           {b.depositAmount && b.paymentStatus !== 'cancelled' && (
-                            <span style={{
-                              background: b.depositStatus === 'released' ? '#0a1a0a' : '#0a0a1a',
-                              border: `1px solid ${b.depositStatus === 'released' ? '#1a3a1a' : '#1a1a3a'}`,
-                              color: b.depositStatus === 'released' ? '#00ff44' : '#4a9eff',
-                              fontSize: '11px', fontWeight: '600', padding: '2px 8px', borderRadius: '20px'
-                            }}>
+                            <span style={{ background: b.depositStatus === 'released' ? '#0a1a0a' : '#0a0a1a', border: `1px solid ${b.depositStatus === 'released' ? '#1a3a1a' : '#1a1a3a'}`, color: b.depositStatus === 'released' ? '#00ff44' : '#4a9eff', fontSize: '11px', fontWeight: '600', padding: '2px 8px', borderRadius: '20px' }}>
                               {b.depositStatus === 'released' ? '🔓 Deposit released' : `🔒 Deposit $${b.depositAmount} held`}
                             </span>
                           )}
@@ -343,21 +328,14 @@ export default function Host() {
                       <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
                         <WalrusReceipts b={b} />
                         {b.paymentStatus !== 'cancelled' && (
-                          <button
-                            onClick={() => router.push(`/messages?bookingRef=${b.bookingRef}&property=${encodeURIComponent(b.property)}`)}
+                          <button onClick={() => router.push(`/messages?bookingRef=${b.bookingRef}&property=${encodeURIComponent(b.property)}`)}
                             style={{ background: messageCounts[b.bookingRef] > 0 ? '#1a0a0a' : 'transparent', border: `1px solid ${messageCounts[b.bookingRef] > 0 ? '#3a1a1a' : '#1a1a3a'}`, color: '#4a9eff', fontSize: '11px', padding: '4px 10px', borderRadius: '6px', cursor: 'pointer', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '4px' }}>
                             💬 Messages
-                            {messageCounts[b.bookingRef] > 0 && (
-                              <span style={{ background: '#ff4444', color: '#fff', borderRadius: '50%', fontSize: '10px', fontWeight: '700', padding: '1px 5px' }}>
-                                {messageCounts[b.bookingRef]}
-                              </span>
-                            )}
+                            {messageCounts[b.bookingRef] > 0 && <span style={{ background: '#ff4444', color: '#fff', borderRadius: '50%', fontSize: '10px', fontWeight: '700', padding: '1px 5px' }}>{messageCounts[b.bookingRef]}</span>}
                           </button>
                         )}
                         {b.depositAmount && b.paymentStatus !== 'cancelled' && b.depositStatus !== 'released' && (
-                          <button
-                            onClick={() => handleReleaseDeposit(b.bookingRef)}
-                            disabled={releasingId === b.bookingRef}
+                          <button onClick={() => handleReleaseDeposit(b.bookingRef)} disabled={releasingId === b.bookingRef}
                             style={{ background: '#0a0a1a', border: '1px solid #1a1a3a', color: releasingId === b.bookingRef ? '#555' : '#4a9eff', fontSize: '11px', padding: '4px 10px', borderRadius: '6px', cursor: releasingId === b.bookingRef ? 'not-allowed' : 'pointer', fontWeight: '600' }}>
                             {releasingId === b.bookingRef ? 'Releasing...' : '🔓 Release Deposit'}
                           </button>
@@ -371,7 +349,6 @@ export default function Host() {
           </div>
         )}
 
-        {/* Listings tab */}
         {activeTab === 'listings' && (
           <div>
             <h3 style={{ fontSize: '16px', fontWeight: '600', margin: '0 0 16px' }}>Your Listings</h3>
@@ -392,9 +369,7 @@ export default function Host() {
                     <div style={{ background: '#1a1a1a', borderRadius: '8px', padding: '10px', marginBottom: '10px' }}>
                       <div style={{ fontSize: '10px', color: '#555', marginBottom: '6px', fontWeight: '600' }}>ICAL EXPORT — paste into Airbnb/VRBO</div>
                       <div style={{ display: 'flex', gap: '6px' }}>
-                        <div style={{ flex: 1, background: '#111', border: '1px solid #333', borderRadius: '6px', padding: '6px 10px', fontSize: '11px', color: '#666', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {API}/ical/{p.id}
-                        </div>
+                        <div style={{ flex: 1, background: '#111', border: '1px solid #333', borderRadius: '6px', padding: '6px 10px', fontSize: '11px', color: '#666', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{API}/ical/{p.id}</div>
                         <button onClick={() => copyICal(p.id)} style={{ background: copiedId === p.id ? '#0a1a0a' : '#1a1a1a', border: `1px solid ${copiedId === p.id ? '#00ff44' : '#333'}`, color: copiedId === p.id ? '#00ff44' : '#888', fontSize: '11px', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontWeight: '600', whiteSpace: 'nowrap' }}>
                           {copiedId === p.id ? '✓ Copied' : 'Copy'}
                         </button>
@@ -407,9 +382,7 @@ export default function Host() {
                       </div>
                       <div style={{ flex: 1, background: '#1a1a1a', borderRadius: '6px', padding: '8px', textAlign: 'center' }}>
                         <div style={{ fontSize: '10px', color: '#555', marginBottom: '2px' }}>REVENUE</div>
-                        <div style={{ fontWeight: '700', color: '#4a9eff' }}>
-                          ${activeBookings.filter(b => b.propertyId === p.id || b.propertyId === String(p.id)).reduce((sum, b) => sum + (parseInt((b.breakdown?.totalPaid || '0').split(' ')[0].replace(/[^0-9]/g, '')) || 0), 0).toLocaleString()}
-                        </div>
+                        <div style={{ fontWeight: '700', color: '#4a9eff' }}>${activeBookings.filter(b => b.propertyId === p.id || b.propertyId === String(p.id)).reduce((sum, b) => sum + (parseInt((b.breakdown?.totalPaid || '0').split(' ')[0].replace(/[^0-9]/g, '')) || 0), 0).toLocaleString()}</div>
                       </div>
                       <div style={{ flex: 1, background: '#1a1a1a', borderRadius: '6px', padding: '8px', textAlign: 'center' }}>
                         <div style={{ fontSize: '10px', color: '#555', marginBottom: '2px' }}>ARIA FEE</div>
@@ -423,14 +396,11 @@ export default function Host() {
           </div>
         )}
 
-        {/* Calendar tab */}
         {activeTab === 'calendar' && (
           <div>
             <div style={{ background: '#0a0a1a', border: '1px solid #1a1a3a', borderRadius: '12px', padding: '20px', marginBottom: '24px' }}>
               <h3 style={{ fontSize: '16px', fontWeight: '600', margin: '0 0 8px' }}>📅 Two-Way Calendar Sync</h3>
-              <p style={{ color: '#888', fontSize: '13px', margin: 0, lineHeight: '1.6' }}>
-                ARIA prevents double bookings across all platforms. Export your ARIA calendar to Airbnb/VRBO, and import their calendars here.
-              </p>
+              <p style={{ color: '#888', fontSize: '13px', margin: 0, lineHeight: '1.6' }}>ARIA prevents double bookings across all platforms. Export your ARIA calendar to Airbnb/VRBO, and import their calendars here.</p>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               {PROPERTIES.map(p => (
@@ -446,9 +416,7 @@ export default function Host() {
                     <div style={{ background: '#1a1a1a', borderRadius: '8px', padding: '12px' }}>
                       <div style={{ fontSize: '11px', color: '#00ff44', fontWeight: '600', marginBottom: '6px' }}>↑ EXPORT — paste into Airbnb/VRBO</div>
                       <div style={{ display: 'flex', gap: '6px' }}>
-                        <div style={{ flex: 1, background: '#111', border: '1px solid #333', borderRadius: '6px', padding: '6px 8px', fontSize: '10px', color: '#666', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {API}/ical/{p.id}
-                        </div>
+                        <div style={{ flex: 1, background: '#111', border: '1px solid #333', borderRadius: '6px', padding: '6px 8px', fontSize: '10px', color: '#666', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{API}/ical/{p.id}</div>
                         <button onClick={() => copyICal(p.id)} style={{ background: copiedId === p.id ? '#0a1a0a' : '#111', border: `1px solid ${copiedId === p.id ? '#00ff44' : '#333'}`, color: copiedId === p.id ? '#00ff44' : '#888', fontSize: '11px', padding: '6px 8px', borderRadius: '6px', cursor: 'pointer', fontWeight: '600', whiteSpace: 'nowrap' }}>
                           {copiedId === p.id ? '✓' : 'Copy'}
                         </button>
@@ -473,7 +441,6 @@ export default function Host() {
           </div>
         )}
 
-        {/* Reviews tab */}
         {activeTab === 'reviews' && (
           <div>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
@@ -508,7 +475,6 @@ export default function Host() {
             )}
           </div>
         )}
-
       </div>
     </div>
   );

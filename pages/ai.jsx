@@ -3,6 +3,14 @@ import { useRouter } from 'next/router';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
+const getStoredSid = () => { try { return localStorage.getItem('aria_sid') || ''; } catch { return ''; } };
+const authFetch = (url, options = {}) => {
+  const sid = getStoredSid();
+  const headers = { ...(options.headers || {}) };
+  if (sid) headers['x-session-id'] = sid;
+  return fetch(url, { ...options, credentials: 'include', headers });
+};
+
 const GUEST_SUGGESTIONS = [
   'Show me my bookings',
   'Book the Mountain Cabin for June 10–13',
@@ -23,33 +31,27 @@ const HOST_SUGGESTIONS = [
 
 function renderMarkdown(text) {
   if (!text) return '';
-  const lines   = text.split('\n');
-  const output  = [];
-  let inList    = false;
+  const lines = text.split('\n');
+  const output = [];
   let listItems = [];
-
   const flushList = () => {
     if (listItems.length > 0) {
       output.push(`<ul style="margin:8px 0 8px 16px;padding:0;list-style:disc">${listItems.join('')}</ul>`);
       listItems = [];
-      inList    = false;
     }
   };
-
   const inlineFormat = (line) =>
     line
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-      .replace(/\*(.+?)\*/g,     '<em>$1</em>')
-      .replace(/`(.+?)`/g,       '<code style="background:#2a2a2a;padding:1px 5px;border-radius:4px;font-size:12px;font-family:monospace">$1</code>');
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+      .replace(/\*(.+?)\*/g, '<em>$1</em>')
+      .replace(/`(.+?)`/g, '<code style="background:#2a2a2a;padding:1px 5px;border-radius:4px;font-size:12px;font-family:monospace">$1</code>');
+  for (const line of lines) {
     if (/^---+$/.test(line.trim())) { flushList(); output.push('<hr style="border:none;border-top:1px solid #333;margin:12px 0"/>'); continue; }
     if (line.startsWith('### ')) { flushList(); output.push(`<div style="font-size:15px;font-weight:700;color:#fff;margin:14px 0 6px">${inlineFormat(line.slice(4))}</div>`); continue; }
     if (line.startsWith('## '))  { flushList(); output.push(`<div style="font-size:16px;font-weight:700;color:#fff;margin:16px 0 6px">${inlineFormat(line.slice(3))}</div>`); continue; }
     if (line.startsWith('# '))   { flushList(); output.push(`<div style="font-size:18px;font-weight:700;color:#fff;margin:16px 0 8px">${inlineFormat(line.slice(2))}</div>`); continue; }
-    if (/^[-*] /.test(line))     { inList = true; listItems.push(`<li style="margin:3px 0;color:#ccc">${inlineFormat(line.slice(2))}</li>`); continue; }
-    if (/^\d+\. /.test(line))    { inList = true; listItems.push(`<li style="margin:3px 0;color:#ccc">${inlineFormat(line.replace(/^\d+\. /, ''))}</li>`); continue; }
+    if (/^[-*] /.test(line))     { listItems.push(`<li style="margin:3px 0;color:#ccc">${inlineFormat(line.slice(2))}</li>`); continue; }
+    if (/^\d+\. /.test(line))    { listItems.push(`<li style="margin:3px 0;color:#ccc">${inlineFormat(line.replace(/^\d+\. /, ''))}</li>`); continue; }
     if (line.trim() === '')      { flushList(); output.push('<div style="height:6px"></div>'); continue; }
     flushList();
     output.push(`<div>${inlineFormat(line)}</div>`);
@@ -69,8 +71,7 @@ function MessageBubble({ message, isHost }) {
   }
   return (
     <div style={{ background: '#1a1a1a', color: '#ccc', padding: '12px 16px', borderRadius: '12px 12px 12px 2px', maxWidth: '85%', fontSize: '14px', lineHeight: '1.6', border: '1px solid #333' }}
-      dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content) }}
-    />
+      dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content) }} />
   );
 }
 
@@ -87,13 +88,11 @@ export default function AI() {
   useEffect(() => {
     const storedMode = sessionStorage.getItem('aria_ai_mode');
     if (storedMode === 'host') setIsHost(true);
-
-    fetch(`${API}/auth/me`, { credentials: 'include' })
+    authFetch(`${API}/auth/me`)
       .then(r => r.json())
       .then(data => {
         if (!data.address) { router.push('/'); return; }
         setUser(data);
-        // Auto-set host mode if user is a host
         if (data.isHost && !storedMode) setIsHost(true);
         setLoading(false);
       })
@@ -112,16 +111,15 @@ export default function AI() {
 
   const sendMessage = async () => {
     if (!input.trim() || sending) return;
-    const userMsg     = { role: 'user', content: input.trim() };
+    const userMsg = { role: 'user', content: input.trim() };
     const newMessages = [...messages, userMsg];
     setMessages(newMessages);
     setInput('');
     setSending(true);
     try {
-      const res = await fetch(`${API}/api/ai/chat`, {
+      const res = await authFetch(`${API}/api/ai/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({ messages: newMessages, mode: isHost ? 'host' : 'guest' })
       });
       const data = await res.json();
@@ -147,8 +145,6 @@ export default function AI() {
 
   return (
     <div style={{ minHeight: '100vh', background: '#0a0a0a', color: '#fff', display: 'flex', flexDirection: 'column' }}>
-
-      {/* Header */}
       <div style={{ background: '#111', borderBottom: '1px solid #222', padding: '0 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '60px', position: 'sticky', top: 0, zIndex: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <span onClick={() => router.push('/')} style={{ fontSize: '20px', cursor: 'pointer' }}>🏠</span>
@@ -160,23 +156,13 @@ export default function AI() {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <div style={{ display: 'flex', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', overflow: 'hidden' }}>
-            <button onClick={() => toggleMode(false)}
-              style={{ background: !isHost ? '#aa44ff' : 'transparent', color: !isHost ? '#fff' : '#666', border: 'none', padding: '6px 14px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
-              Guest
-            </button>
-            <button onClick={() => toggleMode(true)}
-              style={{ background: isHost ? '#ff8800' : 'transparent', color: isHost ? '#fff' : '#666', border: 'none', padding: '6px 14px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
-              Host
-            </button>
+            <button onClick={() => toggleMode(false)} style={{ background: !isHost ? '#aa44ff' : 'transparent', color: !isHost ? '#fff' : '#666', border: 'none', padding: '6px 14px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>Guest</button>
+            <button onClick={() => toggleMode(true)} style={{ background: isHost ? '#ff8800' : 'transparent', color: isHost ? '#fff' : '#666', border: 'none', padding: '6px 14px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>Host</button>
           </div>
-          <button onClick={() => router.back()}
-            style={{ background: 'transparent', border: '1px solid #333', color: '#888', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>
-            ← Back
-          </button>
+          <button onClick={() => router.back()} style={{ background: 'transparent', border: '1px solid #333', color: '#888', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>← Back</button>
         </div>
       </div>
 
-      {/* Chat area */}
       <div style={{ flex: 1, maxWidth: '800px', width: '100%', margin: '0 auto', padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
         {messages.length === 0 && (
           <div style={{ textAlign: 'center', padding: '40px 24px' }}>
@@ -189,10 +175,7 @@ export default function AI() {
             <p style={{ color: '#555', fontSize: '13px', margin: '0 0 16px' }}>Try asking:</p>
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'center' }}>
               {SUGGESTIONS.map((s, i) => (
-                <button key={i} onClick={() => setInput(s)}
-                  style={{ background: '#111', border: '1px solid #333', color: '#888', fontSize: '12px', padding: '8px 14px', borderRadius: '20px', cursor: 'pointer' }}>
-                  {s}
-                </button>
+                <button key={i} onClick={() => setInput(s)} style={{ background: '#111', border: '1px solid #333', color: '#888', fontSize: '12px', padding: '8px 14px', borderRadius: '20px', cursor: 'pointer' }}>{s}</button>
               ))}
             </div>
           </div>
@@ -200,9 +183,7 @@ export default function AI() {
 
         {messages.map((m, i) => (
           <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: m.role === 'user' ? 'flex-end' : 'flex-start' }}>
-            <div style={{ fontSize: '11px', color: '#555', marginBottom: '4px' }}>
-              {m.role === 'user' ? 'You' : isHost ? '🏡 ARIA Host Agent' : '🤖 ARIA Agent'}
-            </div>
+            <div style={{ fontSize: '11px', color: '#555', marginBottom: '4px' }}>{m.role === 'user' ? 'You' : isHost ? '🏡 ARIA Host Agent' : '🤖 ARIA Agent'}</div>
             <MessageBubble message={m} isHost={isHost} />
           </div>
         ))}
@@ -214,22 +195,15 @@ export default function AI() {
             </div>
           </div>
         )}
-
         <div ref={bottomRef} />
       </div>
 
-      {/* Input bar */}
       <div style={{ background: '#111', borderTop: '1px solid #222', padding: '16px 24px', position: 'sticky', bottom: 0 }}>
         <div style={{ maxWidth: '800px', margin: '0 auto', display: 'flex', gap: '8px' }}>
-          <textarea
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
+          <textarea value={input} onChange={e => setInput(e.target.value)} onKeyDown={handleKeyDown}
             placeholder={isHost ? 'Ask anything — check messages, revenue, release deposits...' : 'Ask anything or say "Book the Mountain Cabin for June 10–13"...'}
-            disabled={sending}
-            rows={2}
-            style={{ flex: 1, background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '10px 14px', color: '#fff', fontSize: '14px', outline: 'none', resize: 'none', fontFamily: 'inherit', lineHeight: '1.5' }}
-          />
+            disabled={sending} rows={2}
+            style={{ flex: 1, background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '10px 14px', color: '#fff', fontSize: '14px', outline: 'none', resize: 'none', fontFamily: 'inherit', lineHeight: '1.5' }} />
           <button onClick={sendMessage} disabled={sending || !input.trim()}
             style={{ background: (sending || !input.trim()) ? '#1a1a1a' : (isHost ? '#ff8800' : '#aa44ff'), color: (sending || !input.trim()) ? '#555' : '#fff', border: 'none', borderRadius: '8px', padding: '0 20px', fontWeight: '700', fontSize: '14px', cursor: (sending || !input.trim()) ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}>
             {sending ? '...' : 'Send →'}

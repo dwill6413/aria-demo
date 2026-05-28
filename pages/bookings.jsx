@@ -5,6 +5,14 @@ const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
 const fmtDate = (d) => new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
+const getStoredSid = () => { try { return localStorage.getItem('aria_sid') || ''; } catch { return ''; } };
+const authFetch = (url, options = {}) => {
+  const sid = getStoredSid();
+  const headers = { ...(options.headers || {}) };
+  if (sid) headers['x-session-id'] = sid;
+  return fetch(url, { ...options, credentials: 'include', headers });
+};
+
 export default function Bookings() {
   const router = useRouter();
   const [user, setUser] = useState(null);
@@ -20,10 +28,9 @@ export default function Bookings() {
   const handleSubmitReview = async () => {
     if (!reviewText.trim()) return;
     setReviewSubmitting(true);
-    const res = await fetch(`${API}/reviews/submit`, {
+    const res = await authFetch(`${API}/reviews/submit`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
       body: JSON.stringify({
         propertyId: reviewingBooking.propertyId,
         bookingRef: reviewingBooking.bookingRef,
@@ -44,15 +51,14 @@ export default function Bookings() {
   const handleCancel = async (bookingRef) => {
     if (!confirm('Cancel this booking? You will receive a full refund within 24 hours.')) return;
     setCancellingId(bookingRef);
-    const res = await fetch(`${API}/booking/cancel`, {
+    const res = await authFetch(`${API}/booking/cancel`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
       body: JSON.stringify({ bookingRef })
     });
     const data = await res.json();
     if (data.success) {
-      const updated = await fetch(`${API}/bookings/history`, { credentials: 'include' });
+      const updated = await authFetch(`${API}/bookings/history`);
       const updatedData = await updated.json();
       setBookings(updatedData.bookings || []);
     }
@@ -60,12 +66,12 @@ export default function Bookings() {
   };
 
   useEffect(() => {
-    fetch(`${API}/auth/me`, { credentials: 'include' })
+    authFetch(`${API}/auth/me`)
       .then(res => res.json())
       .then(data => {
         if (!data.address) { router.push('/'); return; }
         setUser(data);
-        return fetch(`${API}/bookings/history`, { credentials: 'include' });
+        return authFetch(`${API}/bookings/history`);
       })
       .then(res => res.json())
       .then(data => {
@@ -124,8 +130,6 @@ export default function Bookings() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             {bookings.map((b, i) => (
               <div key={i} style={{ background: '#111', border: `1px solid ${b.paymentStatus === 'cancelled' ? '#2a1a1a' : '#222'}`, borderRadius: '12px', padding: '24px', opacity: b.paymentStatus === 'cancelled' ? 0.85 : 1 }}>
-
-                {/* Title + Status */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '16px', flexWrap: 'wrap', gap: '8px' }}>
                   <div>
                     <h3 style={{ margin: '0 0 4px', fontSize: '18px', fontWeight: '600' }}>{b.property}</h3>
@@ -158,7 +162,6 @@ export default function Bookings() {
                   </div>
                 </div>
 
-                {/* Date grid */}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '12px', marginBottom: '16px' }}>
                   <div style={{ background: '#1a1a1a', borderRadius: '8px', padding: '12px' }}>
                     <div style={{ fontSize: '10px', color: '#555', marginBottom: '4px' }}>CHECK-IN</div>
@@ -178,7 +181,6 @@ export default function Bookings() {
                   </div>
                 </div>
 
-                {/* Price breakdown */}
                 {b.breakdown && (
                   <div style={{ background: '#1a1a1a', borderRadius: '8px', padding: '12px', marginBottom: '16px', fontSize: '13px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
@@ -210,7 +212,6 @@ export default function Bookings() {
                   </div>
                 )}
 
-                {/* Walrus receipts */}
                 {b.paymentStatus === 'cancelled' && (b.walrusBlobId || b.cancellationWalrusBlobId) && (
                   <div style={{ background: '#0d0d0d', border: '1px solid #1a1a1a', borderRadius: '8px', padding: '12px', marginBottom: '16px' }}>
                     <div style={{ fontSize: '10px', color: '#555', marginBottom: '10px', fontWeight: '600', letterSpacing: '0.08em' }}>ON-CHAIN AUDIT TRAIL</div>
@@ -239,7 +240,6 @@ export default function Bookings() {
                   </div>
                 )}
 
-                {/* Action buttons */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
                   <div style={{ fontSize: '11px', color: '#555', fontFamily: 'monospace' }}>Ref: {b.bookingRef}</div>
                   <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
