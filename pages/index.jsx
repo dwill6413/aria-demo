@@ -13,6 +13,15 @@ const authFetch = (url, options = {}) => {
   return fetch(url, { ...options, credentials: 'include', headers });
 };
 
+const JURISDICTION_TAX_RATES = {
+  1: { rate: 0.13,   name: 'Miami-Dade County, FL' },
+  2: { rate: 0.17,   name: 'City of Austin, TX' },
+  3: { rate: 0.13,   name: 'Buncombe County, NC' },
+  4: { rate: 0.0805, name: 'City of Scottsdale, AZ' },
+  5: { rate: 0.10,   name: 'Placer County, CA' },
+  6: { rate: 0.1475, name: 'New York City, NY' },
+};
+
 const PROPERTIES = [
   {
     id: 1, title: 'Oceanfront Villa', location: 'Miami Beach, FL', price: 285, rating: 4.97, reviews: 124,
@@ -81,14 +90,15 @@ export default function Home() {
 
   const nights = checkIn && checkOut ? Math.round((checkOut - checkIn) / (1000 * 60 * 60 * 24)) : 0;
 
-  const getSubtotal    = (p, n) => p.price * n;
-  const getAriaFee     = (p, n) => Math.round(getSubtotal(p, n) * 0.03);
-  const getTax         = (p, n) => Math.round(getSubtotal(p, n) * 0.08);
-  const getBookingTotal= (p, n) => getSubtotal(p, n) + getAriaFee(p, n) + getTax(p, n);
-  const getDeposit     = (p, n) => Math.round(getBookingTotal(p, n) * 0.20);
-  const getChargeTotal = (p, n) => getBookingTotal(p, n) + getDeposit(p, n);
-  const getCardTotal   = (p, n) => (getChargeTotal(p, n) * 1.029 + 0.30).toFixed(2);
-  const getCardFee     = (p, n) => (getChargeTotal(p, n) * 0.029 + 0.30).toFixed(2);
+  const getJurisdiction  = (p) => JURISDICTION_TAX_RATES[p?.id] || { rate: 0.08, name: 'Occupancy Tax' };
+  const getSubtotal      = (p, n) => p.price * n;
+  const getAriaFee       = (p, n) => Math.round(getSubtotal(p, n) * 0.03);
+  const getTax           = (p, n) => Math.round(getSubtotal(p, n) * getJurisdiction(p).rate);
+  const getBookingTotal  = (p, n) => getSubtotal(p, n) + getAriaFee(p, n) + getTax(p, n);
+  const getDeposit       = (p, n) => Math.round(getBookingTotal(p, n) * 0.20);
+  const getChargeTotal   = (p, n) => getBookingTotal(p, n) + getDeposit(p, n);
+  const getCardTotal     = (p, n) => (getChargeTotal(p, n) * 1.029 + 0.30).toFixed(2);
+  const getCardFee       = (p, n) => (getChargeTotal(p, n) * 0.029 + 0.30).toFixed(2);
 
   const openModal  = (p) => { setSelected(p); setBooking(null); setCheckIn(null); setCheckOut(null); setPhotoIndex(0); setTermsAccepted(false); };
   const closeModal = () => { setSelected(null); setBooking(null); setCheckIn(null); setCheckOut(null); setPhotoIndex(0); setTermsAccepted(false); };
@@ -169,7 +179,6 @@ export default function Home() {
 
   if (!user) return (
     <div style={{ minHeight: '100vh', background: '#0a0a0a', display: 'flex', flexDirection: 'column' }}>
-      {/* Login hero */}
       <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '40px 24px' }}>
         <div style={{ width: '100%', maxWidth: '420px' }}>
           <div style={{ textAlign: 'center', marginBottom: '40px' }}>
@@ -182,8 +191,6 @@ export default function Home() {
             </button>
             <p style={{ color: '#555', fontSize: '12px', marginTop: '12px' }}>No wallet needed. No seed phrase. Just Google.</p>
           </div>
-
-          {/* Why ARIA — shown on login screen */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
             {WHY_ARIA.slice(0, 3).map((item, i) => (
               <div key={i} style={{ display: 'flex', alignItems: 'start', gap: '12px', background: '#111', border: '1px solid #222', borderRadius: '10px', padding: '14px' }}>
@@ -197,7 +204,6 @@ export default function Home() {
           </div>
         </div>
       </div>
-      {/* Footer */}
       <div style={{ borderTop: '1px solid #1a1a1a', padding: '20px 24px', textAlign: 'center' }}>
         <p style={{ color: '#444', fontSize: '11px', margin: 0, lineHeight: '1.7' }}>
           ⚠️ ARIA is a non-custodial platform. We do not hold your funds. All payments execute directly on the Sui blockchain. ARIA has no ability to reverse, freeze, or recover transactions. You are solely responsible for your wallet and transactions.
@@ -421,7 +427,9 @@ export default function Home() {
                     <span style={{ fontSize: '14px', color: '#00ff44' }}>${getAriaFee(selected, nights)}</span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px', paddingBottom: '12px', borderBottom: '1px solid #333' }}>
-                    <span style={{ color: '#888', fontSize: '14px' }}>Occupancy tax (8%)</span>
+                    <span style={{ color: '#888', fontSize: '14px' }}>
+                      Occupancy tax ({(getJurisdiction(selected).rate * 100).toFixed(2)}% — {getJurisdiction(selected).name})
+                    </span>
                     <span style={{ fontSize: '14px', color: '#888' }}>${getTax(selected, nights)}</span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
@@ -471,7 +479,6 @@ export default function Home() {
                 </div>
               ) : (
                 <>
-                  {/* Non-custodial disclaimer in booking flow */}
                   <div style={{ background: '#0a0a0a', border: '1px solid #1a1a1a', borderRadius: '8px', padding: '12px', marginBottom: '12px' }}>
                     <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '8px' }}>
                       {['🔑 Your wallet, your funds','⚡ Instant on-chain settlement','✅ You control deposit release'].map((item, i) => (
