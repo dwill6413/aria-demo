@@ -9,9 +9,8 @@
 //   mode     = "guest" or "host"
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { join } from 'path';
-import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { calculateHostPayout } from './deepbook.mjs';
+import { pool } from './db.mjs';
 
 const GROK_MODEL   = 'grok-3-latest';
 const XAI_BASE_URL = 'https://api.x.ai/v1/chat/completions';
@@ -187,9 +186,9 @@ const HOST_TOOLS = [
 // ─── System prompts ───────────────────────────────────────────────────────────
 
 function buildGuestSystemPrompt(session, bookings) {
-  const active = (bookings || []).filter(b => b.paymentStatus !== 'cancelled');
+  const active = (bookings || []).filter(b => b.payment_status !== 'cancelled');
   const bkSummary = active.length > 0
-    ? active.map(b => `- ${b.property} (ref: ${b.bookingRef}, ${b.checkIn} to ${b.checkOut}, ${b.nights} nights, ${b.breakdown?.totalPaid || '$' + b.totalAmount})`).join('\n')
+    ? active.map(b => `- ${b.property_title} (ref: ${b.booking_ref}, ${b.check_in} to ${b.check_out}, ${b.nights} nights, $${b.total_amount} SuiUSD)`).join('\n')
     : 'No active bookings yet.';
 
   return `You are ARIA Assistant, an AI agent built into ARIA — a vacation rental platform on Sui blockchain. You can take real actions: book properties, cancel bookings, fetch booking history, read and send messages.
@@ -280,45 +279,50 @@ async function callGrok(messages, tools) {
   return res.json();
 }
 
+// ─── Walrus helper ────────────────────────────────────────────────────────────
+
+async function pushToWalrus(data) {
+  try {
+    const res = await fetch('https://publisher.walrus-testnet.walrus.space/v1/blobs?epochs=3', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: Buffer.from(JSON.stringify(data))
+    });
+    const json = await res.json();
+    return json?.newlyCreated?.blobObject?.blobId ?? json?.alreadyCertified?.blobId ?? null;
+  } catch (err) {
+    console.warn('Walrus push failed:', err.message);
+    return null;
+  }
+}
+
 // ─── Tool executor ────────────────────────────────────────────────────────────
 
 async function executeTool(toolName, toolInput, session) {
-  const receiptsDir = join(process.cwd(), 'receipts');
-  const messagesDir = join(process.cwd(), 'messages');
-  const reviewsDir  = join(process.cwd(), 'reviews');
-
   try {
 
-    // ── Guest: get own bookings ───────────────────────────────────────────────
+    // ── Guest: get own bookings from Postgres ─────────────────────────────────
     if (toolName === 'get_bookings') {
-      if (!existsSync(receiptsDir)) return JSON.stringify([]);
-      const files = readdirSync(receiptsDir).filter(f => f.endsWith('.json'));
-      const bookings = files
-        .map(f => { try { return JSON.parse(readFileSync(join(receiptsDir, f), 'utf8')); } catch { return null; } })
-        .filter(b => b && b.walletAddress === session.suiAddress)
-        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-      return JSON.stringify(bookings);
+      const result = await pool.query(
+        'SELECT * FROM bookings WHERE wallet_address = $1 ORDER BY created_at DESC',
+        [session.suiAddress]
+      );
+      return JSON.stringify(result.rows);
     }
 
-    // ── Guest: create booking ─────────────────────────────────────────────────
+    // ── Guest: create booking in Postgres ─────────────────────────────────────
     if (toolName === 'create_booking') {
-      const { propertyId, propertyTitle, nights, pricePerNight, totalAmount, checkIn, checkOut } = toolInput;
+      const { propertyId, propertyTitle, nights, pricePerNight, checkIn, checkOut } = toolInput;
 
-      // Double-booking guard
-      if (existsSync(receiptsDir)) {
-        const files = readdirSync(receiptsDir).filter(f => f.endsWith('.json'));
-        for (const file of files) {
-          try {
-            const existing = JSON.parse(readFileSync(join(receiptsDir, file), 'utf8'));
-            if (String(existing.propertyId) === String(propertyId) && existing.paymentStatus !== 'cancelled') {
-              const exIn  = new Date(existing.checkIn), exOut = new Date(existing.checkOut);
-              const newIn = new Date(checkIn),          newOut = new Date(checkOut);
-              if (newIn < exOut && newOut > exIn) {
-                return JSON.stringify({ error: 'Property not available for selected dates', conflicts: [{ checkIn: existing.checkIn, checkOut: existing.checkOut }] });
-              }
-            }
-          } catch {}
-        }
+      // Double-booking guard against DB
+      const conflict = await pool.query(
+        `SELECT booking_ref FROM bookings
+         WHERE property_id = $1 AND payment_status != 'cancelled'
+         AND check_in < $3 AND check_out > $2`,
+        [propertyId, checkIn, checkOut]
+      );
+      if (conflict.rows.length > 0) {
+        return JSON.stringify({ error: 'Property not available for selected dates', conflicts: conflict.rows });
       }
 
       const bookingRef    = `ARIA-${propertyId}-${Date.now()}`;
@@ -329,7 +333,18 @@ async function executeTool(toolName, toolInput, session) {
       const depositAmount = Math.round(total * 0.20);
       const hostPayout    = calculateHostPayout(subtotal);
 
-      const receipt = {
+      // Insert into Postgres
+      await pool.query(
+        `INSERT INTO bookings (booking_ref, property_id, property_title, wallet_address, guest_name, guest_email,
+          check_in, check_out, nights, price_per_night, subtotal, aria_fee, taxes, total_amount,
+          deposit_amount, payment_status, payment_method)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'confirmed','SuiUSD')`,
+        [bookingRef, propertyId, propertyTitle, session.suiAddress, session.name, session.email,
+         checkIn, checkOut, nights, pricePerNight, subtotal, ariaFee, taxes, total, depositAmount]
+      );
+
+      // Push to Walrus
+      const walrusBlobId = await pushToWalrus({
         bookingRef, app: 'ARIA Demo', network: 'sui:testnet',
         timestamp: new Date().toISOString(), property: propertyTitle, propertyId,
         checkIn, checkOut, nights,
@@ -345,33 +360,16 @@ async function executeTool(toolName, toolInput, session) {
         },
         walletAddress: session.suiAddress, guestName: session.name, guestEmail: session.email,
         paymentMethod: 'SuiUSD', paymentStatus: 'confirmed', depositAmount, depositStatus: 'held'
-      };
-
-      // Write receipt immediately to block race conditions
-      if (!existsSync(receiptsDir)) mkdirSync(receiptsDir);
-      writeFileSync(join(receiptsDir, `${bookingRef}.json`), JSON.stringify(receipt, null, 2));
-
-      // Push to Walrus
-      try {
-        const walrusRes  = await fetch('https://publisher.walrus-testnet.walrus.space/v1/blobs?epochs=3', {
-          method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' },
-          body: Buffer.from(JSON.stringify(receipt))
-        });
-        const walrusData = await walrusRes.json();
-        const walrusBlobId = walrusData?.newlyCreated?.blobObject?.blobId ?? walrusData?.alreadyCertified?.blobId ?? null;
-        if (walrusBlobId) {
-          receipt.walrusBlobId = walrusBlobId;
-          writeFileSync(join(receiptsDir, `${bookingRef}.json`), JSON.stringify(receipt, null, 2));
-        }
-      } catch (walrusErr) {
-        console.warn('AI booking Walrus push failed:', walrusErr.message);
+      });
+      if (walrusBlobId) {
+        await pool.query('UPDATE bookings SET walrus_blob_id = $1 WHERE booking_ref = $2', [walrusBlobId, bookingRef]);
       }
 
-      // ── Confirmation email ────────────────────────────────────────────────
+      // Confirmation email
       try {
         const { Resend } = await import('resend');
-        const resend     = new Resend(process.env.RESEND_API_KEY);
-        const emailRows  = [
+        const resend    = new Resend(process.env.RESEND_API_KEY);
+        const emailRows = [
           ['Booking Ref',     bookingRef],
           ['Check-in',        checkIn],
           ['Check-out',       checkOut],
@@ -384,8 +382,8 @@ async function executeTool(toolName, toolInput, session) {
         const rowsHtml   = emailRows.map(([l, v]) => `<tr><td style="color:#888;padding:6px 0">${l}</td><td style="text-align:right">${v}</td></tr>`).join('');
         const totalRow   = `<tr style="border-top:1px solid #333"><td style="padding:10px 0;font-weight:700">Total Charged</td><td style="text-align:right;font-weight:700;color:#00ff44">$${total} SuiUSD</td></tr>`;
         const depositRow = `<tr><td style="color:#4a9eff;padding:6px 0">Refundable Deposit (held in escrow)</td><td style="text-align:right;color:#4a9eff">$${depositAmount} SuiUSD</td></tr>`;
-        const walrusHtml = receipt.walrusBlobId
-          ? `<div style="background:#111;border:1px solid #222;border-radius:8px;padding:16px;margin-bottom:20px"><p style="margin:0 0 8px;font-size:12px;color:#555">WALRUS RECEIPT — PERMANENT ON-CHAIN RECORD</p><p style="margin:0;font-size:11px;color:#00ff44;word-break:break-all;font-family:monospace">${receipt.walrusBlobId}</p></div>`
+        const walrusHtml = walrusBlobId
+          ? `<div style="background:#111;border:1px solid #222;border-radius:8px;padding:16px;margin-bottom:20px"><p style="margin:0 0 8px;font-size:12px;color:#555">WALRUS RECEIPT — PERMANENT ON-CHAIN RECORD</p><p style="margin:0;font-size:11px;color:#00ff44;word-break:break-all;font-family:monospace">${walrusBlobId}</p></div>`
           : '';
         await resend.emails.send({
           from: 'ARIA <onboarding@resend.dev>',
@@ -411,67 +409,59 @@ async function executeTool(toolName, toolInput, session) {
         success: true, bookingRef, property: propertyTitle,
         checkIn, checkOut, nights, totalAmount: total,
         depositAmount, depositNote: 'Refundable security deposit held in Sui escrow — returned after checkout',
-        network: 'sui:testnet', walrusBlobId: receipt.walrusBlobId,
-        message: 'Booking confirmed on Sui testnet! Confirmation email sent.'
+        network: 'sui:testnet', walrusBlobId,
+        message: 'Booking confirmed and saved! Confirmation email sent.'
       });
     }
 
-    // ── Cancel booking ────────────────────────────────────────────────────────
+    // ── Cancel booking in Postgres ────────────────────────────────────────────
     if (toolName === 'cancel_booking') {
-      const filePath = join(receiptsDir, toolInput.bookingRef + '.json');
-      if (!existsSync(filePath)) return JSON.stringify({ error: 'Booking not found' });
-      const booking = JSON.parse(readFileSync(filePath, 'utf8'));
-      if (booking.paymentStatus === 'cancelled') return JSON.stringify({ error: 'Already cancelled' });
-      booking.paymentStatus = 'cancelled';
-      booking.cancelledAt   = new Date().toISOString();
-      const today = new Date(); today.setHours(0,0,0,0);
-      if (today < new Date(booking.checkIn)) {
-        booking.depositStatus     = 'released';
-        booking.depositReleasedAt = new Date().toISOString();
-        booking.depositNote       = 'Auto-released on pre-check-in cancellation';
-      }
-      writeFileSync(filePath, JSON.stringify(booking, null, 2));
+      const result = await pool.query('SELECT * FROM bookings WHERE booking_ref = $1', [toolInput.bookingRef]);
+      if (result.rows.length === 0) return JSON.stringify({ error: 'Booking not found' });
+      const booking = result.rows[0];
+      if (booking.wallet_address !== session.suiAddress) return JSON.stringify({ error: 'Not your booking' });
+      if (booking.payment_status === 'cancelled') return JSON.stringify({ error: 'Already cancelled' });
 
-      // ── Walrus cancellation receipt ───────────────────────────────────────
-      try {
-        const walrusRes  = await fetch('https://publisher.walrus-testnet.walrus.space/v1/blobs?epochs=3', {
-          method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' },
-          body: Buffer.from(JSON.stringify({ ...booking, walrusReceiptType: 'cancellation', cancellationTimestamp: booking.cancelledAt }))
-        });
-        const walrusData = await walrusRes.json();
-        const cancellationWalrusBlobId = walrusData?.newlyCreated?.blobObject?.blobId ?? walrusData?.alreadyCertified?.blobId ?? null;
-        if (cancellationWalrusBlobId) {
-          booking.cancellationWalrusBlobId = cancellationWalrusBlobId;
-          writeFileSync(filePath, JSON.stringify(booking, null, 2));
-        }
-      } catch (walrusErr) {
-        console.warn('AI cancellation Walrus push failed:', walrusErr.message);
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      const depositAutoReleased = today < new Date(booking.check_in);
+      const cancelledAt = new Date().toISOString();
+
+      await pool.query(
+        `UPDATE bookings SET payment_status='cancelled', cancelled_at=$1, deposit_status=$2 WHERE booking_ref=$3`,
+        [cancelledAt, depositAutoReleased ? 'released' : 'held', toolInput.bookingRef]
+      );
+
+      // Walrus cancellation receipt
+      const cancellationWalrusBlobId = await pushToWalrus({
+        ...booking, walrusReceiptType: 'cancellation', cancellationTimestamp: cancelledAt
+      });
+      if (cancellationWalrusBlobId) {
+        await pool.query('UPDATE bookings SET cancellation_walrus_blob_id=$1 WHERE booking_ref=$2',
+          [cancellationWalrusBlobId, toolInput.bookingRef]);
       }
 
-      // ── Cancellation email ────────────────────────────────────────────────
+      // Cancellation email
       try {
         const { Resend } = await import('resend');
-        const resend          = new Resend(process.env.RESEND_API_KEY);
-        const depositAutoReleased = booking.depositStatus === 'released' && booking.depositNote?.includes('Auto-released');
-        const refundAmount    = booking.breakdown?.totalPaid || `$${booking.totalAmount} SuiUSD`;
-        const depositNote     = depositAutoReleased
-          ? `<div style="background:#0a1a0a;border:1px solid #1a4a1a;border-radius:6px;padding:10px;margin-top:10px"><p style="color:#00ff44;font-size:12px;font-weight:600;margin:0 0 4px">🔓 Security deposit auto-released</p><p style="color:#888;font-size:12px;margin:0">Your damage deposit has been automatically returned since you cancelled before check-in.</p></div>`
+        const resend = new Resend(process.env.RESEND_API_KEY);
+        const depositNote = depositAutoReleased
+          ? `<div style="background:#0a1a0a;border:1px solid #1a4a1a;border-radius:6px;padding:10px;margin-top:10px"><p style="color:#00ff44;font-size:12px;font-weight:600;margin:0 0 4px">🔓 Security deposit auto-released</p><p style="color:#888;font-size:12px;margin:0">Your $${booking.deposit_amount} deposit has been automatically returned since you cancelled before check-in.</p></div>`
           : `<div style="background:#0a0a1a;border:1px solid #1a1a3a;border-radius:6px;padding:10px;margin-top:10px"><p style="color:#4a9eff;font-size:12px;font-weight:600;margin:0 0 4px">🔒 Security deposit pending release</p><p style="color:#888;font-size:12px;margin:0">Your deposit will be reviewed and released by the host.</p></div>`;
         await resend.emails.send({
           from: 'ARIA <onboarding@resend.dev>',
-          to: booking.guestEmail,
-          subject: `Booking Cancelled — ${booking.property} | Ref: ${toolInput.bookingRef}`,
+          to: booking.guest_email,
+          subject: `Booking Cancelled — ${booking.property_title} | Ref: ${toolInput.bookingRef}`,
           html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px">
             <h1 style="color:#ff4444;font-size:24px;margin:0 0 8px">❌ Booking Cancelled</h1>
-            <p style="color:#888;margin:0 0 24px">Your cancellation confirmation — ${booking.guestName}</p>
+            <p style="color:#888;margin:0 0 24px">Your cancellation confirmation — ${booking.guest_name}</p>
             <div style="background:#111;border:1px solid #222;border-radius:8px;padding:20px;margin-bottom:20px">
-              <h2 style="margin:0 0 16px;font-size:18px">${booking.property}</h2>
+              <h2 style="margin:0 0 16px;font-size:18px">${booking.property_title}</h2>
               <table style="width:100%;border-collapse:collapse">
                 <tr><td style="color:#888;padding:6px 0">Booking Ref</td><td style="text-align:right">${toolInput.bookingRef}</td></tr>
-                <tr><td style="color:#888;padding:6px 0">Check-in</td><td style="text-align:right">${booking.checkIn}</td></tr>
-                <tr><td style="color:#888;padding:6px 0">Check-out</td><td style="text-align:right">${booking.checkOut}</td></tr>
+                <tr><td style="color:#888;padding:6px 0">Check-in</td><td style="text-align:right">${booking.check_in}</td></tr>
+                <tr><td style="color:#888;padding:6px 0">Check-out</td><td style="text-align:right">${booking.check_out}</td></tr>
                 <tr><td style="color:#888;padding:6px 0">Nights</td><td style="text-align:right">${booking.nights}</td></tr>
-                <tr style="border-top:1px solid #333"><td style="padding:10px 0;font-weight:700">Refund Amount</td><td style="text-align:right;font-weight:700;color:#00ff44">${refundAmount}</td></tr>
+                <tr style="border-top:1px solid #333"><td style="padding:10px 0;font-weight:700">Refund Amount</td><td style="text-align:right;font-weight:700;color:#00ff44">$${booking.total_amount} SuiUSD</td></tr>
               </table>
               ${depositNote}
             </div>
@@ -486,104 +476,113 @@ async function executeTool(toolName, toolInput, session) {
         console.warn('AI cancellation email failed:', emailErr.message);
       }
 
-      return JSON.stringify({ success: true, bookingRef: toolInput.bookingRef, message: 'Booking cancelled. Cancellation confirmation email sent.' });
+      return JSON.stringify({
+        success: true, bookingRef: toolInput.bookingRef, depositAutoReleased,
+        message: depositAutoReleased
+          ? 'Booking cancelled. Deposit auto-released.'
+          : 'Booking cancelled. Deposit pending host review.'
+      });
     }
 
-    // ── Host: get all bookings ────────────────────────────────────────────────
+    // ── Host: get all bookings from Postgres ──────────────────────────────────
     if (toolName === 'get_all_bookings') {
-      if (!existsSync(receiptsDir)) return JSON.stringify([]);
-      const files = readdirSync(receiptsDir).filter(f => f.endsWith('.json'));
-      const bookings = files
-        .map(f => { try { return JSON.parse(readFileSync(join(receiptsDir, f), 'utf8')); } catch { return null; } })
-        .filter(Boolean)
-        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-      return JSON.stringify(bookings);
+      const result = await pool.query('SELECT * FROM bookings ORDER BY created_at DESC');
+      return JSON.stringify(result.rows);
     }
 
-    // ── Host: revenue summary ─────────────────────────────────────────────────
+    // ── Host: revenue summary from Postgres ───────────────────────────────────
     if (toolName === 'get_revenue_summary') {
-      if (!existsSync(receiptsDir)) return JSON.stringify({ totalBookings: 0, totalGross: 0, totalNet: 0, byProperty: {} });
-      const files    = readdirSync(receiptsDir).filter(f => f.endsWith('.json'));
-      const bookings = files
-        .map(f => { try { return JSON.parse(readFileSync(join(receiptsDir, f), 'utf8')); } catch { return null; } })
-        .filter(b => b && b.paymentStatus !== 'cancelled');
+      const result = await pool.query(`SELECT * FROM bookings WHERE payment_status != 'cancelled'`);
+      const bookings = result.rows;
       const byProperty = {};
       let totalGross = 0, totalFees = 0, totalTaxes = 0, totalNet = 0, totalDeposits = 0;
       bookings.forEach(b => {
-        const pricePer = b.breakdown?.pricePerNight ? parseInt(b.breakdown.pricePerNight.replace('$','')) : 0;
-        const subtotal = pricePer * (b.nights || 1);
-        const fee      = Math.round(subtotal * 0.03);
-        const tax      = Math.round(subtotal * 0.08);
-        totalGross += subtotal + fee + tax;
+        const subtotal = Number(b.subtotal) || 0;
+        const fee      = Number(b.aria_fee) || 0;
+        const tax      = Number(b.taxes) || 0;
+        totalGross += Number(b.total_amount) || 0;
         totalFees  += fee;
         totalTaxes += tax;
         totalNet   += subtotal - fee;
-        if (b.depositStatus === 'held') totalDeposits += (b.depositAmount || 0);
-        const prop = b.property || 'Unknown';
+        if (b.deposit_status === 'held') totalDeposits += Number(b.deposit_amount) || 0;
+        const prop = b.property_title || 'Unknown';
         if (!byProperty[prop]) byProperty[prop] = { bookings: 0, gross: 0, net: 0 };
         byProperty[prop].bookings++;
-        byProperty[prop].gross += subtotal + fee + tax;
+        byProperty[prop].gross += Number(b.total_amount) || 0;
         byProperty[prop].net   += subtotal - fee;
       });
       return JSON.stringify({ totalBookings: bookings.length, totalGross, totalFees, totalTaxes, totalNet, totalDepositsHeld: totalDeposits, byProperty });
     }
 
-    // ── Get messages for a booking ────────────────────────────────────────────
+    // ── Get messages for a booking from Postgres ──────────────────────────────
     if (toolName === 'get_messages') {
-      const filePath = join(messagesDir, toolInput.bookingRef + '.json');
-      if (!existsSync(filePath)) return JSON.stringify([]);
-      return readFileSync(filePath, 'utf8');
+      const result = await pool.query(
+        'SELECT * FROM messages WHERE booking_ref = $1 ORDER BY created_at ASC',
+        [toolInput.bookingRef]
+      );
+      return JSON.stringify(result.rows);
     }
 
-    // ── Host: scan all message threads ────────────────────────────────────────
+    // ── Host: scan all message threads from Postgres ──────────────────────────
     if (toolName === 'get_all_messages') {
-      if (!existsSync(receiptsDir)) return JSON.stringify('No bookings found.');
-      const files    = readdirSync(receiptsDir).filter(f => f.endsWith('.json'));
-      const bookings = files.map(f => { try { return JSON.parse(readFileSync(join(receiptsDir, f), 'utf8')); } catch { return null; } }).filter(Boolean);
+      const bookings = await pool.query('SELECT booking_ref, property_title, guest_name FROM bookings ORDER BY created_at DESC');
       const threads  = [];
-      for (const b of bookings) {
-        const mPath = join(messagesDir, b.bookingRef + '.json');
-        if (existsSync(mPath)) {
-          const msgs = JSON.parse(readFileSync(mPath, 'utf8'));
-          if (msgs.length > 0) threads.push({ bookingRef: b.bookingRef, property: b.property, guestName: b.guestName, messageCount: msgs.length, latestMessage: msgs[msgs.length - 1], allMessages: msgs });
+      for (const b of bookings.rows) {
+        const msgs = await pool.query(
+          'SELECT * FROM messages WHERE booking_ref = $1 ORDER BY created_at ASC',
+          [b.booking_ref]
+        );
+        if (msgs.rows.length > 0) {
+          threads.push({
+            bookingRef: b.booking_ref, property: b.property_title, guestName: b.guest_name,
+            messageCount: msgs.rows.length,
+            latestMessage: msgs.rows[msgs.rows.length - 1],
+            allMessages: msgs.rows
+          });
         }
       }
       return JSON.stringify(threads.length > 0 ? threads : 'No messages found.');
     }
 
-    // ── Send message ──────────────────────────────────────────────────────────
+    // ── Send message — write to Postgres ──────────────────────────────────────
     if (toolName === 'send_message') {
-      if (!existsSync(messagesDir)) mkdirSync(messagesDir);
-      const filePath = join(messagesDir, toolInput.bookingRef + '.json');
-      const thread   = existsSync(filePath) ? JSON.parse(readFileSync(filePath, 'utf8')) : [];
-      thread.push({ from: session.name, email: session.email, message: toolInput.message, timestamp: new Date().toISOString() });
-      writeFileSync(filePath, JSON.stringify(thread, null, 2));
+      await pool.query(
+        'INSERT INTO messages (booking_ref, from_name, from_email, message) VALUES ($1,$2,$3,$4)',
+        [toolInput.bookingRef, session.name, session.email, toolInput.message]
+      );
       return JSON.stringify({ success: true, message: 'Message sent.' });
     }
 
-    // ── Host: release deposit ─────────────────────────────────────────────────
+    // ── Host: release deposit in Postgres ─────────────────────────────────────
     if (toolName === 'release_deposit') {
-      const filePath = join(receiptsDir, toolInput.bookingRef + '.json');
-      if (!existsSync(filePath)) return JSON.stringify({ error: 'Booking not found' });
-      const booking = JSON.parse(readFileSync(filePath, 'utf8'));
-      if (booking.depositStatus === 'released') return JSON.stringify({ error: 'Deposit already released' });
-      booking.depositStatus     = 'released';
-      booking.depositReleasedAt = new Date().toISOString();
-      writeFileSync(filePath, JSON.stringify(booking, null, 2));
+      const result = await pool.query('SELECT * FROM bookings WHERE booking_ref = $1', [toolInput.bookingRef]);
+      if (result.rows.length === 0) return JSON.stringify({ error: 'Booking not found' });
+      const booking = result.rows[0];
+      if (booking.deposit_status === 'released') return JSON.stringify({ error: 'Deposit already released' });
+      await pool.query(
+        `UPDATE bookings SET deposit_status='released' WHERE booking_ref=$1`,
+        [toolInput.bookingRef]
+      );
+      const walrusBlobId = await pushToWalrus({
+        ...booking, walrusReceiptType: 'deposit_release', depositReleaseTimestamp: new Date().toISOString()
+      });
+      if (walrusBlobId) {
+        await pool.query('UPDATE bookings SET deposit_release_walrus_blob_id=$1 WHERE booking_ref=$2',
+          [walrusBlobId, toolInput.bookingRef]);
+      }
       return JSON.stringify({ success: true, bookingRef: toolInput.bookingRef, message: 'Deposit released to guest.' });
     }
 
-    // ── Host: get all reviews ─────────────────────────────────────────────────
+    // ── Host: get all reviews from Postgres ───────────────────────────────────
     if (toolName === 'get_reviews') {
-      if (!existsSync(reviewsDir)) return JSON.stringify([]);
-      const files = readdirSync(reviewsDir).filter(f => f.endsWith('.json'));
-      const allReviews = files.flatMap(f => { try { return JSON.parse(readFileSync(join(reviewsDir, f), 'utf8')); } catch { return []; } });
-      return JSON.stringify(allReviews);
+      const result = await pool.query('SELECT * FROM reviews ORDER BY created_at DESC');
+      return JSON.stringify(result.rows);
     }
 
     return JSON.stringify({ error: `Unknown tool: ${toolName}` });
 
   } catch (err) {
+    console.error('Tool execution error:', err);
     return JSON.stringify({ error: err.message });
   }
 }
@@ -593,8 +592,8 @@ async function executeTool(toolName, toolInput, session) {
 export async function registerAIRoute(fastify) {
   fastify.post('/api/ai/chat', async (request, reply) => {
 
-    // Must be logged in
-    const sessionId = request.cookies.aria_session;
+    // Must be logged in — support both cookie and x-session-id header
+    const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
     if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
     const { getSession } = await import('./auth.mjs');
     const session = getSession(sessionId);
@@ -606,17 +605,15 @@ export async function registerAIRoute(fastify) {
     const isHost = mode === 'host';
     const tools  = isHost ? HOST_TOOLS : GUEST_TOOLS;
 
-    // Load guest bookings for system prompt context
+    // Load guest bookings from Postgres for system prompt context
     let guestBookings = [];
     if (!isHost) {
       try {
-        const receiptsDir = join(process.cwd(), 'receipts');
-        if (existsSync(receiptsDir)) {
-          const files = readdirSync(receiptsDir).filter(f => f.endsWith('.json'));
-          guestBookings = files
-            .map(f => { try { return JSON.parse(readFileSync(join(receiptsDir, f), 'utf8')); } catch { return null; } })
-            .filter(b => b && b.walletAddress === session.suiAddress);
-        }
+        const result = await pool.query(
+          'SELECT * FROM bookings WHERE wallet_address = $1 ORDER BY created_at DESC',
+          [session.suiAddress]
+        );
+        guestBookings = result.rows;
       } catch {}
     }
 
