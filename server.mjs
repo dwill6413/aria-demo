@@ -77,7 +77,7 @@ fastify.get('/auth/zklogin/callback', async (request, reply) => {
 fastify.get('/auth/me', async (request, reply) => {
   const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = getSession(sessionId);
+  const session = await getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
 
   // Check DB host status if not already a superadmin
@@ -113,7 +113,7 @@ fastify.get('/auth/logout', async (request, reply) => {
 fastify.post('/payment/create-intent', async (request, reply) => {
   const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = getSession(sessionId);
+  const session = await getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
   const { amount, propertyTitle } = request.body;
   const paymentIntent = await stripe.paymentIntents.create({
@@ -136,7 +136,7 @@ fastify.post('/booking/create', {
 }, async (request, reply) => {
   const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = getSession(sessionId);
+  const session = await getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
 
   const { propertyId, propertyTitle, nights, totalAmount } = request.body;
@@ -273,7 +273,7 @@ fastify.post('/booking/cancel', {
 }, async (request, reply) => {
   const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = getSession(sessionId);
+  const session = await getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
 
   const { bookingRef } = request.body;
@@ -330,7 +330,7 @@ fastify.post('/booking/release-deposit', {
 }, async (request, reply) => {
   const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = getSession(sessionId);
+  const session = await getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
   if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
 
@@ -370,7 +370,7 @@ async function pushToWalrus(data) {
 fastify.get('/bookings/history', async (request, reply) => {
   const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = getSession(sessionId);
+  const session = await getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
   try {
     const result = await pool.query(
@@ -407,7 +407,7 @@ fastify.get('/bookings/history', async (request, reply) => {
 fastify.get('/bookings/all', async (request, reply) => {
   const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = getSession(sessionId);
+  const session = await getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
   if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
   try {
@@ -443,7 +443,7 @@ fastify.get('/bookings/all', async (request, reply) => {
 fastify.get('/deepbook/payout/:amount', async (request, reply) => {
   const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = getSession(sessionId);
+  const session = await getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
   const amount = parseFloat(request.params.amount);
   if (!amount || amount <= 0) return reply.code(400).send({ error: 'Invalid amount' });
@@ -465,7 +465,7 @@ fastify.get('/ical/:propertyId', async (request, reply) => {
 fastify.post('/ical/import', async (request, reply) => {
   const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = getSession(sessionId);
+  const session = await getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
   const { propertyId, platform, icalUrl } = request.body;
   if (!propertyId || !platform || !icalUrl) return reply.code(400).send({ error: 'propertyId, platform and icalUrl required' });
@@ -485,7 +485,7 @@ fastify.get('/availability/:propertyId', async (request, reply) => {
 fastify.post('/messages/send', async (request, reply) => {
   const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = getSession(sessionId);
+  const session = await getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
   const { bookingRef, message } = request.body;
   if (!bookingRef || !message) return reply.code(400).send({ error: 'bookingRef and message required' });
@@ -501,7 +501,7 @@ fastify.post('/messages/send', async (request, reply) => {
 fastify.get('/messages/:bookingRef', async (request, reply) => {
   const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = getSession(sessionId);
+  const session = await getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
   const { bookingRef } = request.params;
   try {
@@ -516,7 +516,7 @@ fastify.get('/messages/:bookingRef', async (request, reply) => {
 fastify.post('/messages/:bookingRef/read', async (request, reply) => {
   const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = getSession(sessionId);
+  const session = await getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
   return { success: true };
 });
@@ -524,7 +524,7 @@ fastify.post('/messages/:bookingRef/read', async (request, reply) => {
 fastify.get('/messages/:bookingRef/count', async (request, reply) => {
   const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = getSession(sessionId);
+  const session = await getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
   const { bookingRef } = request.params;
   try {
@@ -540,7 +540,7 @@ fastify.get('/messages/:bookingRef/count', async (request, reply) => {
 fastify.post('/reviews/submit', async (request, reply) => {
   const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = getSession(sessionId);
+  const session = await getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
   const { propertyId, bookingRef, rating, review } = request.body;
   if (!propertyId || !bookingRef || !rating || !review) return reply.code(400).send({ error: 'All fields required' });
@@ -573,7 +573,7 @@ fastify.get('/reviews/:propertyId', async (request, reply) => {
 fastify.get('/reviews/all', async (request, reply) => {
   const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = getSession(sessionId);
+  const session = await getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
   if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
   try {
@@ -587,7 +587,7 @@ fastify.get('/reviews/all', async (request, reply) => {
 fastify.get('/tax/summary', async (request, reply) => {
   const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = getSession(sessionId);
+  const session = await getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
   if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
   try {
@@ -628,7 +628,7 @@ fastify.get('/tax/summary', async (request, reply) => {
 fastify.post('/tax/remit', async (request, reply) => {
   const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = getSession(sessionId);
+  const session = await getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
   if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
   const { bookingRef, jurisdiction, notes } = request.body;
@@ -652,7 +652,7 @@ fastify.post('/tax/remit', async (request, reply) => {
 fastify.post('/tax/unremit', async (request, reply) => {
   const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = getSession(sessionId);
+  const session = await getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
   if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
   const { bookingRef } = request.body;
@@ -669,7 +669,7 @@ fastify.post('/tax/unremit', async (request, reply) => {
 fastify.get('/host/profile', async (request, reply) => {
   const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = getSession(sessionId);
+  const session = await getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
   try {
     const result = await pool.query(
@@ -695,7 +695,7 @@ fastify.post('/host/apply', {
 }, async (request, reply) => {
   const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = getSession(sessionId);
+  const session = await getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
 
   const {
@@ -798,7 +798,7 @@ fastify.post('/host/apply', {
 fastify.post('/host/approve', async (request, reply) => {
   const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = getSession(sessionId);
+  const session = await getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
   if (!HOST_ADDRESSES.includes(session.email.toLowerCase()))
     return reply.code(403).send({ error: 'Superadmin access required' });
@@ -847,7 +847,7 @@ fastify.post('/host/approve', async (request, reply) => {
 fastify.get('/host/applications', async (request, reply) => {
   const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = getSession(sessionId);
+  const session = await getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
   if (!HOST_ADDRESSES.includes(session.email.toLowerCase()))
     return reply.code(403).send({ error: 'Superadmin access required' });
