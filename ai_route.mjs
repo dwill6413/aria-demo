@@ -15,6 +15,16 @@ import { pool } from './db.mjs';
 const GROK_MODEL   = 'grok-3-latest';
 const XAI_BASE_URL = 'https://api.x.ai/v1/chat/completions';
 
+// ─── Jurisdiction Tax Rates ───────────────────────────────────────────────────
+const JURISDICTION_TAX_RATES = {
+  1: { rate: 0.13,   name: 'Miami-Dade County, FL',  breakdown: '6% FL sales tax + 7% Miami-Dade tourist tax' },
+  2: { rate: 0.17,   name: 'City of Austin, TX',      breakdown: '6% TX state HOT + 11% City of Austin HOT' },
+  3: { rate: 0.13,   name: 'Buncombe County, NC',     breakdown: '6.75% NC sales tax + 6% Buncombe County occupancy tax' },
+  4: { rate: 0.0805, name: 'City of Scottsdale, AZ',  breakdown: 'AZ state + city Transaction Privilege Tax combined' },
+  5: { rate: 0.10,   name: 'Placer County, CA',       breakdown: '10% Transient Occupancy Tax (Tahoe area)' },
+  6: { rate: 0.1475, name: 'New York City, NY',        breakdown: '4% NY state + 4.5% local sales tax + 5.875% NYC hotel occupancy tax' },
+};
+
 // ─── Tool definitions ─────────────────────────────────────────────────────────
 
 const GUEST_TOOLS = [
@@ -195,13 +205,13 @@ function buildGuestSystemPrompt(session, bookings) {
 
 IMPORTANT RULES:
 - Always confirm details with the user BEFORE calling create_booking or cancel_booking
-- Cost formula: subtotal = pricePerNight * nights. ARIA fee = subtotal * 0.03. Taxes = subtotal * 0.08. Total = subtotal + ariaFee + taxes.
-- Security deposit = 20% of total (e.g. if total is $1,776 then deposit = $355). The deposit is FULLY REFUNDABLE after checkout and is held separately in Sui escrow.
-- Always show the COMPLETE breakdown before booking so there are no surprises at checkout:
+- Cost formula: subtotal = pricePerNight * nights. ARIA fee = subtotal * 0.03. Taxes vary by property location (see below). Total = subtotal + ariaFee + taxes.
+- Security deposit = 20% of total. The deposit is FULLY REFUNDABLE after checkout and is held separately in Sui escrow.
+- Always show the COMPLETE breakdown before booking:
     • Price per night
     • Subtotal (nights × price)
     • ARIA fee (3%)
-    • Occupancy tax (8%)
+    • Occupancy tax (rate varies by jurisdiction — see below)
     • Total charge
     • Refundable security deposit (20% of total) — held in Sui escrow, returned after checkout
     • Grand total due at checkout (total + deposit)
@@ -209,7 +219,15 @@ IMPORTANT RULES:
 - Dates must be YYYY-MM-DD format. Pass pricePerNight as the exact property price.
 - Be conversational and friendly
 
-ABOUT ARIA: 3% fee vs 15% Airbnb. Instant Sui settlement. Walrus receipts. SuiUSD payments. Refundable damage deposits held in Sui escrow (20% of total, returned after checkout).
+JURISDICTION TAX RATES (use these for accurate tax calculations):
+1. Oceanfront Villa (Miami Beach, FL) — 13.00% (6% FL sales + 7% Miami-Dade tourist tax)
+2. Downtown Loft (Austin, TX) — 17.00% (6% TX state + 11% City of Austin HOT)
+3. Mountain Cabin (Asheville, NC) — 13.00% (6.75% NC sales + 6% Buncombe County occupancy)
+4. Desert Retreat (Scottsdale, AZ) — 8.05% (AZ state + city Transaction Privilege Tax)
+5. Lake House (Lake Tahoe, CA) — 10.00% (Placer County Transient Occupancy Tax)
+6. Historic Brownstone (Brooklyn, NY) — 14.75% (4% NY state + 4.5% local + 5.875% NYC hotel occupancy)
+
+ABOUT ARIA: 3% fee vs 15% Airbnb. Instant Sui settlement. Walrus receipts. SuiUSD payments. Refundable damage deposits held in Sui escrow.
 
 CURRENT USER: ${session.name} (${session.email})
 Wallet: ${session.suiAddress}
@@ -235,11 +253,19 @@ You have FULL access to host operations. You can fetch all bookings, calculate r
 
 IMPORTANT RULES:
 - Always confirm before release_deposit or cancel_booking
-- When showing revenue, break it down: gross → ARIA fee (3%) → taxes (8%) → net earnings
+- When showing revenue, break it down: gross → ARIA fee (3%) → taxes → net earnings
 - Be proactive — if asked about messages, check them; if asked about revenue, compute it live
 - Format numbers as USD. Be clear and concise. You are talking to the HOST.
 
-ABOUT ARIA: 3% fee vs 15% Airbnb. Instant Sui settlement. Walrus receipts. SuiUSD. Refundable damage deposits held in Sui escrow (20% of booking total, returned to guest after checkout).
+JURISDICTION TAX RATES for your properties:
+1. Oceanfront Villa (Miami Beach, FL) — 13.00%
+2. Downtown Loft (Austin, TX) — 17.00%
+3. Mountain Cabin (Asheville, NC) — 13.00%
+4. Desert Retreat (Scottsdale, AZ) — 8.05%
+5. Lake House (Lake Tahoe, CA) — 10.00%
+6. Historic Brownstone (Brooklyn, NY) — 14.75%
+
+ABOUT ARIA: 3% fee vs 15% Airbnb. Instant Sui settlement. Walrus receipts. SuiUSD. Refundable damage deposits held in Sui escrow.
 
 HOST USER: ${session.name} (${session.email})
 Wallet: ${session.suiAddress}
@@ -253,7 +279,7 @@ YOUR 6 PROPERTIES:
 6. Historic Brownstone — Brooklyn, NY — $175/night (id:6)`;
 }
 
-// ─── Grok API call (plain fetch — no npm packages) ────────────────────────────
+// ─── Grok API call ────────────────────────────────────────────────────────────
 
 async function callGrok(messages, tools) {
   const res = await fetch(XAI_BASE_URL, {
@@ -314,7 +340,7 @@ async function executeTool(toolName, toolInput, session) {
     if (toolName === 'create_booking') {
       const { propertyId, propertyTitle, nights, pricePerNight, checkIn, checkOut } = toolInput;
 
-      // Double-booking guard against DB
+      // Double-booking guard
       const conflict = await pool.query(
         `SELECT booking_ref FROM bookings
          WHERE property_id = $1 AND payment_status != 'cancelled'
@@ -325,13 +351,15 @@ async function executeTool(toolName, toolInput, session) {
         return JSON.stringify({ error: 'Property not available for selected dates', conflicts: conflict.rows });
       }
 
+      const jurisdiction  = JURISDICTION_TAX_RATES[Number(propertyId)] || { rate: 0.08, name: 'Unknown', breakdown: '8% occupancy tax' };
       const bookingRef    = `ARIA-${propertyId}-${Date.now()}`;
       const subtotal      = pricePerNight * nights;
       const ariaFee       = Math.round(subtotal * 0.03);
-      const taxes         = Math.round(subtotal * 0.08);
+      const taxes         = Math.round(subtotal * jurisdiction.rate);
       const total         = subtotal + ariaFee + taxes;
       const depositAmount = Math.round(total * 0.20);
       const hostPayout    = calculateHostPayout(subtotal);
+      const taxPct        = (jurisdiction.rate * 100).toFixed(2);
 
       // Insert into Postgres
       await pool.query(
@@ -351,13 +379,15 @@ async function executeTool(toolName, toolInput, session) {
         breakdown: {
           pricePerNight: `$${pricePerNight}`, nights,
           subtotal: `$${subtotal}`, ariaFee: `$${ariaFee} (3%)`,
-          taxes: `$${taxes} (8% occupancy tax)`, totalPaid: `$${total} SuiUSD`
+          taxes: `$${taxes} (${taxPct}% — ${jurisdiction.name})`,
+          totalPaid: `$${total} SuiUSD`
         },
         hostPayout: {
           amount: `$${hostPayout.hostPayout} SuiUSD`,
           ariaFee: `$${hostPayout.ariaFee} SuiUSD`,
           settlementMethod: hostPayout.settlementMethod
         },
+        jurisdiction: jurisdiction.name, jurisdictionBreakdown: jurisdiction.breakdown,
         walletAddress: session.suiAddress, guestName: session.name, guestEmail: session.email,
         paymentMethod: 'SuiUSD', paymentStatus: 'confirmed', depositAmount, depositStatus: 'held'
       });
@@ -377,7 +407,7 @@ async function executeTool(toolName, toolInput, session) {
           ['Price per night', `$${pricePerNight}`],
           ['Subtotal',        `$${subtotal}`],
           ['ARIA Fee (3%)',   `$${ariaFee}`],
-          ['Taxes (8%)',      `$${taxes}`],
+          [`Taxes (${taxPct}% — ${jurisdiction.name})`, `$${taxes}`],
         ];
         const rowsHtml   = emailRows.map(([l, v]) => `<tr><td style="color:#888;padding:6px 0">${l}</td><td style="text-align:right">${v}</td></tr>`).join('');
         const totalRow   = `<tr style="border-top:1px solid #333"><td style="padding:10px 0;font-weight:700">Total Charged</td><td style="text-align:right;font-weight:700;color:#00ff44">$${total} SuiUSD</td></tr>`;
@@ -408,7 +438,9 @@ async function executeTool(toolName, toolInput, session) {
       return JSON.stringify({
         success: true, bookingRef, property: propertyTitle,
         checkIn, checkOut, nights, totalAmount: total,
-        depositAmount, depositNote: 'Refundable security deposit held in Sui escrow — returned after checkout',
+        depositAmount, jurisdiction: jurisdiction.name,
+        taxRate: `${taxPct}%`,
+        depositNote: 'Refundable security deposit held in Sui escrow — returned after checkout',
         network: 'sui:testnet', walrusBlobId,
         message: 'Booking confirmed and saved! Confirmation email sent.'
       });
@@ -431,7 +463,6 @@ async function executeTool(toolName, toolInput, session) {
         [cancelledAt, depositAutoReleased ? 'released' : 'held', toolInput.bookingRef]
       );
 
-      // Walrus cancellation receipt
       const cancellationWalrusBlobId = await pushToWalrus({
         ...booking, walrusReceiptType: 'cancellation', cancellationTimestamp: cancelledAt
       });
@@ -440,7 +471,6 @@ async function executeTool(toolName, toolInput, session) {
           [cancellationWalrusBlobId, toolInput.bookingRef]);
       }
 
-      // Cancellation email
       try {
         const { Resend } = await import('resend');
         const resend = new Resend(process.env.RESEND_API_KEY);
@@ -500,13 +530,14 @@ async function executeTool(toolName, toolInput, session) {
         const subtotal = Number(b.subtotal) || 0;
         const fee      = Number(b.aria_fee) || 0;
         const tax      = Number(b.taxes) || 0;
+        const jur      = JURISDICTION_TAX_RATES[Number(b.property_id)] || { rate: 0.08, name: 'Unknown' };
         totalGross += Number(b.total_amount) || 0;
         totalFees  += fee;
         totalTaxes += tax;
         totalNet   += subtotal - fee;
         if (b.deposit_status === 'held') totalDeposits += Number(b.deposit_amount) || 0;
         const prop = b.property_title || 'Unknown';
-        if (!byProperty[prop]) byProperty[prop] = { bookings: 0, gross: 0, net: 0 };
+        if (!byProperty[prop]) byProperty[prop] = { bookings: 0, gross: 0, net: 0, jurisdiction: jur.name, taxRate: `${(jur.rate * 100).toFixed(2)}%` };
         byProperty[prop].bookings++;
         byProperty[prop].gross += Number(b.total_amount) || 0;
         byProperty[prop].net   += subtotal - fee;
@@ -592,11 +623,10 @@ async function executeTool(toolName, toolInput, session) {
 export async function registerAIRoute(fastify) {
   fastify.post('/api/ai/chat', async (request, reply) => {
 
-    // Must be logged in — support both cookie and x-session-id header
     const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
     if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
     const { getSession } = await import('./auth.mjs');
-    const session = getSession(sessionId);
+    const session = await getSession(sessionId);
     if (!session) return reply.code(401).send({ error: 'Session expired' });
 
     const { messages, mode } = request.body;
@@ -605,7 +635,6 @@ export async function registerAIRoute(fastify) {
     const isHost = mode === 'host';
     const tools  = isHost ? HOST_TOOLS : GUEST_TOOLS;
 
-    // Load guest bookings from Postgres for system prompt context
     let guestBookings = [];
     if (!isHost) {
       try {
@@ -621,7 +650,6 @@ export async function registerAIRoute(fastify) {
       ? buildHostSystemPrompt(session)
       : buildGuestSystemPrompt(session, guestBookings);
 
-    // ── Agentic loop ──────────────────────────────────────────────────────────
     let apiMessages = [
       { role: 'system', content: systemPrompt },
       ...messages.map(m => ({ role: m.role, content: m.content }))
@@ -636,20 +664,17 @@ export async function registerAIRoute(fastify) {
       const choice    = data.choices[0];
       const toolCalls = choice.message.tool_calls;
 
-      // No tool calls — Grok is done, return the text
       if (!toolCalls || toolCalls.length === 0) {
         finalText = choice.message.content || '';
         break;
       }
 
-      // Add the assistant's tool-call message to history
       apiMessages.push({
         role: 'assistant',
         content: choice.message.content || null,
         tool_calls: toolCalls
       });
 
-      // Execute each tool and add results to history
       for (const toolCall of toolCalls) {
         const toolName  = toolCall.function.name;
         const toolInput = JSON.parse(toolCall.function.arguments);

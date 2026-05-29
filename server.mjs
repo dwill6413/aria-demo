@@ -15,17 +15,25 @@ dotenvConfig();
 
 try { await initDB(); } catch (err) { console.error('DB init failed:', err.message); }
 
+// ─── Jurisdiction Tax Rates ───────────────────────────────────────────────────
+const JURISDICTION_TAX_RATES = {
+  1: { rate: 0.13,   name: 'Miami-Dade County, FL',  breakdown: '6% FL sales tax + 7% Miami-Dade tourist tax' },
+  2: { rate: 0.17,   name: 'City of Austin, TX',      breakdown: '6% TX state HOT + 11% City of Austin HOT' },
+  3: { rate: 0.13,   name: 'Buncombe County, NC',     breakdown: '6.75% NC sales tax + 6% Buncombe County occupancy tax' },
+  4: { rate: 0.0805, name: 'City of Scottsdale, AZ',  breakdown: 'AZ state + city Transaction Privilege Tax combined' },
+  5: { rate: 0.10,   name: 'Placer County, CA',       breakdown: '10% Transient Occupancy Tax (Tahoe area)' },
+  6: { rate: 0.1475, name: 'New York City, NY',        breakdown: '4% NY state + 4.5% local sales tax + 5.875% NYC hotel occupancy tax' },
+};
+
 // ─── Role-Based Access Control ────────────────────────────────────────────────
 const HOST_ADDRESSES = (process.env.HOST_ADDRESSES || '').split(',').map(e => e.trim().toLowerCase());
 
-// Superadmin fallback (HOST_ADDRESSES env var) OR database-approved host
 function isHost(session) {
   if (!session?.email) return false;
   if (HOST_ADDRESSES.includes(session.email.toLowerCase())) return true;
   return session.dbHostApproved === true;
 }
 
-// Check DB for approved host profile — called at login
 async function checkDbHost(email) {
   try {
     const result = await pool.query(
@@ -80,12 +88,10 @@ fastify.get('/auth/me', async (request, reply) => {
   const session = await getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
 
-  // Check DB host status if not already a superadmin
   if (!HOST_ADDRESSES.includes(session.email.toLowerCase()) && !session.dbHostApproved) {
     session.dbHostApproved = await checkDbHost(session.email);
   }
 
-  // Check if user has a pending host application
   let hostStatus = null;
   try {
     const hp = await pool.query(
@@ -171,10 +177,11 @@ fastify.post('/booking/create', {
     }
   } catch (err) { fastify.log.warn({ err }, 'Availability check failed'); }
 
-  const pricePerNight = request.body.pricePerNight || Math.round(totalAmount / nights / 1.03 / 1.08);
+  const jurisdiction  = JURISDICTION_TAX_RATES[Number(propertyId)] || { rate: 0.08, name: 'Unknown', breakdown: '8% occupancy tax' };
+  const pricePerNight = request.body.pricePerNight || Math.round(totalAmount / nights / 1.03 / (1 + jurisdiction.rate));
   const subtotal      = pricePerNight * nights;
   const ariaFee       = Math.round(subtotal * 0.03);
-  const taxes         = Math.round(subtotal * 0.08);
+  const taxes         = Math.round(subtotal * jurisdiction.rate);
   const bookingTotal  = subtotal + ariaFee + taxes;
   const depositAmount = Math.round(bookingTotal * 0.20);
   const chargeAmount  = bookingTotal + depositAmount;
@@ -202,7 +209,7 @@ fastify.post('/booking/create', {
         pricePerNight: `$${pricePerNight}`, nights,
         subtotal: `$${subtotal}`,
         ariaFee: `$${ariaFee} (3% of subtotal — not charged on deposit)`,
-        taxes: `$${taxes} (8% occupancy tax)`,
+        taxes: `$${taxes} (${(jurisdiction.rate * 100).toFixed(2)}% — ${jurisdiction.name})`,
         bookingTotal: `$${bookingTotal} SuiUSD`,
         depositAmount: `$${depositAmount} (refundable, held in Sui escrow — no ARIA fee)`,
         chargeAmount: `$${chargeAmount} SuiUSD (total charged at booking)`
@@ -210,7 +217,8 @@ fastify.post('/booking/create', {
       hostPayout: { amount: `$${hostPayout.hostPayout} SuiUSD`, ariaFee: `$${hostPayout.ariaFee} SuiUSD`, settlementMethod: hostPayout.settlementMethod },
       walletAddress: session.suiAddress, guestName: session.name, guestEmail: session.email,
       paymentMethod: 'SuiUSD', paymentStatus: 'confirmed',
-      depositAmount, depositStatus: 'held', chargeAmount
+      depositAmount, depositStatus: 'held', chargeAmount,
+      jurisdiction: jurisdiction.name, jurisdictionBreakdown: jurisdiction.breakdown
     };
     const walrusRes  = await fetch('https://publisher.walrus-testnet.walrus.space/v1/blobs?epochs=3', {
       method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' },
@@ -224,6 +232,7 @@ fastify.post('/booking/create', {
   } catch (err) { fastify.log.warn({ err }, 'Walrus storage failed'); }
 
   try {
+    const taxPct     = (jurisdiction.rate * 100).toFixed(2);
     const walrusHtml = walrusBlobId ? `<div style="background:#111;border:1px solid #222;border-radius:8px;padding:16px;margin-bottom:20px"><p style="margin:0 0 8px;font-size:12px;color:#555">WALRUS RECEIPT</p><p style="margin:0;font-size:11px;color:#00ff44;word-break:break-all;font-family:monospace">${walrusBlobId}</p></div>` : '';
     await resend.emails.send({
       from: 'ARIA <onboarding@resend.dev>', to: session.email,
@@ -240,7 +249,7 @@ fastify.post('/booking/create', {
             <tr><td style="color:#888;padding:6px 0">Nights</td><td style="text-align:right">${nights}</td></tr>
             <tr><td style="color:#888;padding:6px 0">Subtotal</td><td style="text-align:right">$${subtotal}</td></tr>
             <tr><td style="color:#888;padding:6px 0">ARIA Fee (3% of subtotal only)</td><td style="text-align:right;color:#00ff44">$${ariaFee}</td></tr>
-            <tr><td style="color:#888;padding:6px 0">Taxes (8%)</td><td style="text-align:right">$${taxes}</td></tr>
+            <tr><td style="color:#888;padding:6px 0">Taxes (${taxPct}% — ${jurisdiction.name})</td><td style="text-align:right">$${taxes}</td></tr>
             <tr style="border-top:1px solid #333"><td style="padding:8px 0;font-weight:700">Booking Total</td><td style="text-align:right;font-weight:700;color:#00ff44">$${bookingTotal} SuiUSD</td></tr>
             <tr><td style="color:#4a9eff;padding:6px 0">🔒 Refundable Security Deposit</td><td style="text-align:right;color:#4a9eff">$${depositAmount} SuiUSD</td></tr>
             <tr style="border-top:1px solid #444"><td style="padding:10px 0;font-weight:700;font-size:15px">Total Charged</td><td style="text-align:right;font-weight:700;font-size:15px;color:#fff">$${chargeAmount} SuiUSD</td></tr>
@@ -256,6 +265,7 @@ fastify.post('/booking/create', {
   return {
     success: true, bookingRef, property: propertyTitle, nights,
     bookingTotal, depositAmount, chargeAmount,
+    jurisdiction: jurisdiction.name,
     depositNote: 'Refundable security deposit held in Sui escrow — no ARIA fee charged on deposit',
     walletAddress: session.suiAddress, network: 'sui:testnet',
     message: 'Booking confirmed on Sui testnet', walrusBlobId
@@ -379,6 +389,7 @@ fastify.get('/bookings/history', async (request, reply) => {
     );
     return { bookings: result.rows.map(b => {
       const chargeAmount = (b.total_amount || 0) + (b.deposit_amount || 0);
+      const jur = JURISDICTION_TAX_RATES[Number(b.property_id)] || { rate: 0.08, name: 'Occupancy Tax' };
       return {
         bookingRef: b.booking_ref, property: b.property_title, propertyId: b.property_id,
         checkIn: b.check_in, checkOut: b.check_out, nights: b.nights,
@@ -392,7 +403,7 @@ fastify.get('/bookings/history', async (request, reply) => {
           pricePerNight: `$${b.price_per_night}`, nights: b.nights,
           subtotal: `$${b.subtotal}`,
           ariaFee: `$${b.aria_fee} (3% of subtotal only)`,
-          taxes: `$${b.taxes} (8% occupancy tax)`,
+          taxes: `$${b.taxes} (${(jur.rate * 100).toFixed(2)}% — ${jur.name})`,
           bookingTotal: `$${b.total_amount} SuiUSD`,
           depositAmount: `$${b.deposit_amount} (refundable — no ARIA fee)`,
           totalCharged: `$${chargeAmount} SuiUSD`,
@@ -414,6 +425,7 @@ fastify.get('/bookings/all', async (request, reply) => {
     const result = await pool.query('SELECT * FROM bookings ORDER BY created_at DESC');
     return { bookings: result.rows.map(b => {
       const chargeAmount = (b.total_amount || 0) + (b.deposit_amount || 0);
+      const jur = JURISDICTION_TAX_RATES[Number(b.property_id)] || { rate: 0.08, name: 'Occupancy Tax' };
       return {
         bookingRef: b.booking_ref, property: b.property_title, propertyId: b.property_id,
         checkIn: b.check_in, checkOut: b.check_out, nights: b.nights,
@@ -424,11 +436,12 @@ fastify.get('/bookings/all', async (request, reply) => {
         cancellationWalrusBlobId: b.cancellation_walrus_blob_id,
         guestName: b.guest_name, guestEmail: b.guest_email,
         walletAddress: b.wallet_address, timestamp: b.created_at,
+        jurisdiction: jur.name,
         breakdown: {
           pricePerNight: `$${b.price_per_night}`, nights: b.nights,
           subtotal: `$${b.subtotal}`,
           ariaFee: `$${b.aria_fee} (3% of subtotal only)`,
-          taxes: `$${b.taxes} (8% occupancy tax)`,
+          taxes: `$${b.taxes} (${(jur.rate * 100).toFixed(2)}% — ${jur.name})`,
           bookingTotal: `$${b.total_amount} SuiUSD`,
           depositAmount: `$${b.deposit_amount} (refundable — no ARIA fee)`,
           totalCharged: `$${chargeAmount} SuiUSD`,
@@ -452,7 +465,7 @@ fastify.get('/deepbook/payout/:amount', async (request, reply) => {
   return { ...payout, liquidity, timestamp: new Date().toISOString() };
 });
 
-// iCal — now async
+// iCal
 fastify.get('/ical/:propertyId', async (request, reply) => {
   const { propertyId } = request.params;
   const propertyTitles = { '1': 'Oceanfront Villa', '2': 'Downtown Loft', '3': 'Mountain Cabin', '4': 'Desert Retreat', '5': 'Lake House', '6': 'Historic Brownstone' };
@@ -569,7 +582,6 @@ fastify.get('/reviews/:propertyId', async (request, reply) => {
   } catch (err) { return { reviews: [], averageRating: 0, count: 0 }; }
 });
 
-// Reviews All — HOST ONLY
 fastify.get('/reviews/all', async (request, reply) => {
   const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
@@ -606,15 +618,19 @@ fastify.get('/tax/summary', async (request, reply) => {
     const totalRemitted    = rows.filter(r => r.remittance_id).reduce((sum, r) => sum + (r.taxes || 0), 0);
     const totalOutstanding = totalCollected - totalRemitted;
     return {
-      bookings: rows.map(r => ({
-        bookingRef: r.booking_ref, propertyId: r.property_id, property: r.property_title,
-        guestName: r.guest_name, guestEmail: r.guest_email,
-        checkIn: r.check_in, checkOut: r.check_out, nights: r.nights,
-        subtotal: r.subtotal, taxAmount: r.taxes || 0, totalAmount: r.total_amount,
-        bookedAt: r.created_at, remitted: !!r.remittance_id,
-        remittedAt: r.remitted_at || null, remittedBy: r.remitted_by || null,
-        jurisdiction: r.jurisdiction || null, notes: r.notes || null,
-      })),
+      bookings: rows.map(r => {
+        const jur = JURISDICTION_TAX_RATES[Number(r.property_id)] || { rate: 0.08, name: 'Unknown' };
+        return {
+          bookingRef: r.booking_ref, propertyId: r.property_id, property: r.property_title,
+          guestName: r.guest_name, guestEmail: r.guest_email,
+          checkIn: r.check_in, checkOut: r.check_out, nights: r.nights,
+          subtotal: r.subtotal, taxAmount: r.taxes || 0, totalAmount: r.total_amount,
+          taxRate: `${(jur.rate * 100).toFixed(2)}%`, jurisdiction: jur.name,
+          bookedAt: r.created_at, remitted: !!r.remittance_id,
+          remittedAt: r.remitted_at || null, remittedBy: r.remitted_by || null,
+          notes: r.notes || null,
+        };
+      }),
       summary: {
         totalCollected, totalRemitted, totalOutstanding,
         bookingCount: rows.length,
@@ -638,12 +654,13 @@ fastify.post('/tax/remit', async (request, reply) => {
     const bkResult = await pool.query('SELECT * FROM bookings WHERE booking_ref = $1 AND payment_status != $2', [bookingRef, 'cancelled']);
     if (bkResult.rows.length === 0) return reply.code(404).send({ error: 'Booking not found or is cancelled' });
     const booking = bkResult.rows[0];
+    const jur = JURISDICTION_TAX_RATES[Number(booking.property_id)] || { name: jurisdiction || 'Unknown' };
     const existing = await pool.query('SELECT id FROM tax_remittances WHERE booking_ref = $1', [bookingRef]);
     if (existing.rows.length > 0) return reply.code(400).send({ error: 'Taxes already marked as remitted for this booking' });
     await pool.query(
       `INSERT INTO tax_remittances (booking_ref, property_id, property_title, tax_amount, jurisdiction, remitted_at, remitted_by, notes)
        VALUES ($1, $2, $3, $4, $5, NOW(), $6, $7)`,
-      [bookingRef, booking.property_id, booking.property_title, booking.taxes || 0, jurisdiction || null, session.email, notes || null]
+      [bookingRef, booking.property_id, booking.property_title, booking.taxes || 0, jurisdiction || jur.name, session.email, notes || null]
     );
     return { success: true, bookingRef, taxAmount: booking.taxes || 0, remittedBy: session.email, remittedAt: new Date().toISOString() };
   } catch (err) { fastify.log.error(err); return reply.code(500).send({ error: 'Failed to record tax remittance' }); }
@@ -672,10 +689,7 @@ fastify.get('/host/profile', async (request, reply) => {
   const session = await getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
   try {
-    const result = await pool.query(
-      'SELECT * FROM host_profiles WHERE sui_address = $1',
-      [session.suiAddress]
-    );
+    const result = await pool.query('SELECT * FROM host_profiles WHERE sui_address = $1', [session.suiAddress]);
     if (result.rows.length === 0) return { profile: null };
     const p = result.rows[0];
     return { profile: {
@@ -698,18 +712,11 @@ fastify.post('/host/apply', {
   const session = await getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
 
-  const {
-    name, email, phone,
-    propertyAddress, city, state, zip, country,
-    jurisdiction, strPermit,
-    payoutSuiAddress, payoutNotes,
-    termsAgreed, complianceConfirmed
-  } = request.body;
+  const { name, email, phone, propertyAddress, city, state, zip, country,
+          jurisdiction, strPermit, payoutSuiAddress, payoutNotes, termsAgreed, complianceConfirmed } = request.body;
 
   if (!name || !email || !termsAgreed || !complianceConfirmed)
     return reply.code(400).send({ error: 'Name, email, terms agreement, and compliance confirmation are required' });
-  if (!termsAgreed) return reply.code(400).send({ error: 'You must agree to the terms' });
-  if (!complianceConfirmed) return reply.code(400).send({ error: 'You must confirm regulatory compliance' });
 
   try {
     const existing = await pool.query('SELECT id, status FROM host_profiles WHERE sui_address = $1', [session.suiAddress]);
@@ -741,20 +748,7 @@ fastify.post('/host/apply', {
         from: 'ARIA <onboarding@resend.dev>',
         to: HOST_ADDRESSES[0] || 'cwilliams36092@gmail.com',
         subject: `New Host Application — ${name}`,
-        html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px">
-          <h1 style="color:#ffaa00;font-size:22px;margin:0 0 8px">🏡 New Host Application</h1>
-          <p style="color:#888;margin:0 0 20px">Someone wants to become an ARIA host.</p>
-          <div style="background:#111;border:1px solid #222;border-radius:8px;padding:16px;margin-bottom:20px;font-size:13px">
-            <table style="width:100%;border-collapse:collapse">
-              <tr><td style="color:#888;padding:5px 0">Name</td><td style="text-align:right">${name}</td></tr>
-              <tr><td style="color:#888;padding:5px 0">Email</td><td style="text-align:right">${email}</td></tr>
-              <tr><td style="color:#888;padding:5px 0">Sui Address</td><td style="text-align:right;font-family:monospace;font-size:11px">${session.suiAddress}</td></tr>
-              ${city ? `<tr><td style="color:#888;padding:5px 0">Location</td><td style="text-align:right">${city}${state ? ', ' + state : ''}</td></tr>` : ''}
-              ${strPermit ? `<tr><td style="color:#888;padding:5px 0">STR Permit</td><td style="text-align:right">${strPermit}</td></tr>` : ''}
-            </table>
-          </div>
-          <p style="color:#888;font-size:12px;margin:0">To approve, use the ARIA admin API with their Sui address.</p>
-        </div>`
+        html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px"><h1 style="color:#ffaa00;font-size:22px;margin:0 0 8px">🏡 New Host Application</h1><p style="color:#888;margin:0 0 20px">Someone wants to become an ARIA host.</p><div style="background:#111;border:1px solid #222;border-radius:8px;padding:16px;margin-bottom:20px;font-size:13px"><table style="width:100%;border-collapse:collapse"><tr><td style="color:#888;padding:5px 0">Name</td><td style="text-align:right">${name}</td></tr><tr><td style="color:#888;padding:5px 0">Email</td><td style="text-align:right">${email}</td></tr><tr><td style="color:#888;padding:5px 0">Sui Address</td><td style="text-align:right;font-family:monospace;font-size:11px">${session.suiAddress}</td></tr>${city ? `<tr><td style="color:#888;padding:5px 0">Location</td><td style="text-align:right">${city}${state ? ', ' + state : ''}</td></tr>` : ''}${strPermit ? `<tr><td style="color:#888;padding:5px 0">STR Permit</td><td style="text-align:right">${strPermit}</td></tr>` : ''}</table></div><p style="color:#888;font-size:12px;margin:0">To approve, use the ARIA admin API with their Sui address.</p></div>`
       });
     } catch (err) { fastify.log.warn({ err }, 'Admin notification email failed'); }
 
@@ -763,28 +757,7 @@ fastify.post('/host/apply', {
         from: 'ARIA <onboarding@resend.dev>',
         to: email,
         subject: 'ARIA Host Application Received',
-        html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px">
-          <h1 style="color:#00ff44;font-size:24px;margin:0 0 8px">🏠 Host Application Received</h1>
-          <p style="color:#888;margin:0 0 24px">Thanks for applying to host on ARIA, ${name}.</p>
-          <div style="background:#111;border:1px solid #222;border-radius:8px;padding:20px;margin-bottom:20px">
-            <p style="margin:0 0 12px;font-size:14px;color:#ccc">Your application is under review. Here's what happens next:</p>
-            <ul style="color:#888;font-size:13px;line-height:1.8;padding-left:16px">
-              <li>We'll review your application within 1–2 business days</li>
-              <li>You'll receive an email when your account is approved</li>
-              <li>Once approved, you can list properties and receive bookings</li>
-            </ul>
-          </div>
-          <div style="background:#0a1a0a;border:1px solid #1a3a1a;border-radius:8px;padding:16px;margin-bottom:20px">
-            <div style="font-size:12px;color:#555;margin-bottom:8px;font-weight:600">YOUR APPLICATION DETAILS</div>
-            <table style="width:100%;border-collapse:collapse;font-size:13px">
-              <tr><td style="color:#888;padding:4px 0">Name</td><td style="text-align:right">${name}</td></tr>
-              <tr><td style="color:#888;padding:4px 0">Email</td><td style="text-align:right">${email}</td></tr>
-              ${city ? `<tr><td style="color:#888;padding:4px 0">Location</td><td style="text-align:right">${city}, ${state || ''}</td></tr>` : ''}
-              ${strPermit ? `<tr><td style="color:#888;padding:4px 0">STR Permit</td><td style="text-align:right">${strPermit}</td></tr>` : ''}
-            </table>
-          </div>
-          <p style="color:#555;font-size:12px;text-align:center;margin:0">Powered by ARIA — Built on Sui</p>
-        </div>`
+        html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px"><h1 style="color:#00ff44;font-size:24px;margin:0 0 8px">🏠 Host Application Received</h1><p style="color:#888;margin:0 0 24px">Thanks for applying to host on ARIA, ${name}.</p><div style="background:#111;border:1px solid #222;border-radius:8px;padding:20px;margin-bottom:20px"><p style="margin:0 0 12px;font-size:14px;color:#ccc">Your application is under review. Here's what happens next:</p><ul style="color:#888;font-size:13px;line-height:1.8;padding-left:16px"><li>We'll review your application within 1–2 business days</li><li>You'll receive an email when your account is approved</li><li>Once approved, you can list properties and receive bookings</li></ul></div><p style="color:#555;font-size:12px;text-align:center;margin:0">Powered by ARIA — Built on Sui</p></div>`
       });
     } catch (err) { fastify.log.warn({ err }, 'Host application email failed'); }
 
@@ -808,8 +781,7 @@ fastify.post('/host/approve', async (request, reply) => {
 
   try {
     const result = await pool.query(
-      `UPDATE host_profiles SET status='approved', approved_at=NOW(), approved_by=$1, updated_at=NOW()
-       WHERE sui_address=$2 RETURNING *`,
+      `UPDATE host_profiles SET status='approved', approved_at=NOW(), approved_by=$1, updated_at=NOW() WHERE sui_address=$2 RETURNING *`,
       [session.email, suiAddress]
     );
     if (result.rows.length === 0) return reply.code(404).send({ error: 'Host profile not found' });
@@ -820,21 +792,7 @@ fastify.post('/host/approve', async (request, reply) => {
         from: 'ARIA <onboarding@resend.dev>',
         to: host.email,
         subject: '🎉 Your ARIA Host Account is Approved!',
-        html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px">
-          <h1 style="color:#00ff44;font-size:24px;margin:0 0 8px">🎉 You're an ARIA Host!</h1>
-          <p style="color:#888;margin:0 0 24px">Congratulations ${host.name} — your host account has been approved.</p>
-          <div style="background:#0a1a0a;border:1px solid #1a3a1a;border-radius:8px;padding:20px;margin-bottom:20px">
-            <p style="color:#00ff44;font-size:14px;font-weight:600;margin:0 0 8px">You can now:</p>
-            <ul style="color:#888;font-size:13px;line-height:1.8;padding-left:16px">
-              <li>Access your Host Dashboard</li>
-              <li>Receive bookings from guests</li>
-              <li>Manage deposits and payouts</li>
-              <li>Track occupancy tax compliance</li>
-            </ul>
-          </div>
-          <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}" style="display:block;background:#00ff44;color:#000;text-align:center;padding:14px;border-radius:8px;font-weight:700;font-size:15px;text-decoration:none;margin-bottom:20px">Go to ARIA →</a>
-          <p style="color:#555;font-size:12px;text-align:center;margin:0">Powered by ARIA — Built on Sui</p>
-        </div>`
+        html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px"><h1 style="color:#00ff44;font-size:24px;margin:0 0 8px">🎉 You're an ARIA Host!</h1><p style="color:#888;margin:0 0 24px">Congratulations ${host.name} — your host account has been approved.</p><div style="background:#0a1a0a;border:1px solid #1a3a1a;border-radius:8px;padding:20px;margin-bottom:20px"><p style="color:#00ff44;font-size:14px;font-weight:600;margin:0 0 8px">You can now:</p><ul style="color:#888;font-size:13px;line-height:1.8;padding-left:16px"><li>Access your Host Dashboard</li><li>Receive bookings from guests</li><li>Manage deposits and payouts</li><li>Track occupancy tax compliance</li></ul></div><a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}" style="display:block;background:#00ff44;color:#000;text-align:center;padding:14px;border-radius:8px;font-weight:700;font-size:15px;text-decoration:none;margin-bottom:20px">Go to ARIA →</a><p style="color:#555;font-size:12px;text-align:center;margin:0">Powered by ARIA — Built on Sui</p></div>`
       });
     } catch (err) { fastify.log.warn({ err }, 'Host approval email failed'); }
 
