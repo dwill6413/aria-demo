@@ -1,15 +1,50 @@
 import { generateNonce, generateRandomness, jwtToAddress } from '@mysten/sui/zklogin';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { dotenvConfig } from './config.mjs';
+import { pool } from './db.mjs';
 
 dotenvConfig();
 
-// In-memory session store (fine for demo)
-const sessions = new Map();
+// ─── Session helpers — Postgres-backed ───────────────────────────────────────
 
-export function getSession(sessionId) {
-  return sessions.get(sessionId) || null;
+export async function getSession(sessionId) {
+  try {
+    const result = await pool.query(
+      `SELECT data FROM sessions WHERE id = $1 AND expires_at > NOW()`,
+      [sessionId]
+    );
+    if (result.rows.length === 0) return null;
+    return result.rows[0].data;
+  } catch {
+    return null;
+  }
 }
+
+async function saveSession(sessionId, data) {
+  const expiresAt = new Date(Date.now() + 86400 * 1000); // 24 hours
+  await pool.query(
+    `INSERT INTO sessions (id, data, expires_at)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (id) DO UPDATE SET data = $2, expires_at = $3`,
+    [sessionId, JSON.stringify(data), expiresAt]
+  );
+}
+
+async function deleteSession(sessionId) {
+  await pool.query('DELETE FROM sessions WHERE id = $1', [sessionId]);
+}
+
+// Purge expired sessions — called occasionally to keep the table clean
+async function purgeExpiredSessions() {
+  try {
+    await pool.query('DELETE FROM sessions WHERE expires_at < NOW()');
+  } catch {}
+}
+
+// Run cleanup every hour
+setInterval(purgeExpiredSessions, 60 * 60 * 1000);
+
+// ─── zkLogin URL ──────────────────────────────────────────────────────────────
 
 export async function getZkLoginUrl(request, reply) {
   const ephemeralKeypair = new Ed25519Keypair();
@@ -45,6 +80,8 @@ export async function getZkLoginUrl(request, reply) {
   return { url: googleUrl };
 }
 
+// ─── zkLogin Callback ─────────────────────────────────────────────────────────
+
 export async function handleZkLoginCallback(request, reply) {
   const { state, id_token } = request.query;
 
@@ -71,7 +108,7 @@ export async function handleZkLoginCallback(request, reply) {
     const suiAddress = jwtToAddress(id_token, salt, true);
 
     const sessionId = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
-    sessions.set(sessionId, {
+    const sessionData = {
       suiAddress,
       email: payload.email,
       name: payload.name,
@@ -81,7 +118,10 @@ export async function handleZkLoginCallback(request, reply) {
       randomness: pending.randomness,
       idToken: id_token,
       createdAt: Date.now()
-    });
+    };
+
+    // Save to Postgres — survives Railway redeploys
+    await saveSession(sessionId, sessionData);
 
     reply.setCookie('aria_session', sessionId, {
       httpOnly: true,
