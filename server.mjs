@@ -452,11 +452,11 @@ fastify.get('/deepbook/payout/:amount', async (request, reply) => {
   return { ...payout, liquidity, timestamp: new Date().toISOString() };
 });
 
-// iCal
+// iCal — now async
 fastify.get('/ical/:propertyId', async (request, reply) => {
   const { propertyId } = request.params;
   const propertyTitles = { '1': 'Oceanfront Villa', '2': 'Downtown Loft', '3': 'Mountain Cabin', '4': 'Desert Retreat', '5': 'Lake House', '6': 'Historic Brownstone' };
-  const icalData = generateICal(propertyId, propertyTitles[propertyId] || 'Property ' + propertyId);
+  const icalData = await generateICal(propertyId, propertyTitles[propertyId] || 'Property ' + propertyId);
   reply.header('Content-Type', 'text/calendar; charset=utf-8');
   reply.header('Content-Disposition', `attachment; filename="aria-property-${propertyId}.ics"`);
   return reply.send(icalData);
@@ -469,7 +469,7 @@ fastify.post('/ical/import', async (request, reply) => {
   if (!session) return reply.code(401).send({ error: 'Session expired' });
   const { propertyId, platform, icalUrl } = request.body;
   if (!propertyId || !platform || !icalUrl) return reply.code(400).send({ error: 'propertyId, platform and icalUrl required' });
-  const saved = saveExternalCalendar(propertyId, platform, icalUrl);
+  const saved = await saveExternalCalendar(propertyId, platform, icalUrl);
   return { success: true, message: `${platform} calendar synced for property ${propertyId}`, calendars: saved };
 });
 
@@ -666,7 +666,6 @@ fastify.post('/tax/unremit', async (request, reply) => {
 
 // ─── Host Onboarding Routes ───────────────────────────────────────────────────
 
-// GET /host/profile — get current user's host profile
 fastify.get('/host/profile', async (request, reply) => {
   const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
@@ -691,7 +690,6 @@ fastify.get('/host/profile', async (request, reply) => {
   } catch (err) { return reply.code(500).send({ error: 'Failed to fetch host profile' }); }
 });
 
-// POST /host/apply — submit host application
 fastify.post('/host/apply', {
   config: { rateLimit: { max: 3, timeWindow: '1 hour', errorResponseBuilder: () => ({ error: 'Too many applications. Please wait and try again.' }) } }
 }, async (request, reply) => {
@@ -714,7 +712,6 @@ fastify.post('/host/apply', {
   if (!complianceConfirmed) return reply.code(400).send({ error: 'You must confirm regulatory compliance' });
 
   try {
-    // Check for existing application
     const existing = await pool.query('SELECT id, status FROM host_profiles WHERE sui_address = $1', [session.suiAddress]);
     if (existing.rows.length > 0) {
       const status = existing.rows[0].status;
@@ -739,9 +736,7 @@ fastify.post('/host/apply', {
        payoutSuiAddress || session.suiAddress, payoutNotes || null]
     );
 
-    // Send welcome / confirmation email + admin notification
     try {
-      // Notify superadmin
       await resend.emails.send({
         from: 'ARIA <onboarding@resend.dev>',
         to: HOST_ADDRESSES[0] || 'cwilliams36092@gmail.com',
@@ -800,7 +795,6 @@ fastify.post('/host/apply', {
   }
 });
 
-// POST /host/approve — superadmin approves a host (HOST_ADDRESSES only)
 fastify.post('/host/approve', async (request, reply) => {
   const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
@@ -821,7 +815,6 @@ fastify.post('/host/approve', async (request, reply) => {
     if (result.rows.length === 0) return reply.code(404).send({ error: 'Host profile not found' });
     const host = result.rows[0];
 
-    // Send approval email
     try {
       await resend.emails.send({
         from: 'ARIA <onboarding@resend.dev>',
@@ -851,7 +844,6 @@ fastify.post('/host/approve', async (request, reply) => {
   }
 });
 
-// GET /host/applications — list all pending applications (superadmin only)
 fastify.get('/host/applications', async (request, reply) => {
   const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
