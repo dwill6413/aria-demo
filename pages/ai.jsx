@@ -29,6 +29,18 @@ const HOST_SUGGESTIONS = [
   'What are guests saying in reviews?',
 ];
 
+// Escape HTML before any formatting so model output (which can echo
+// user-controlled content) can never inject markup. Markdown tokens
+// (#, -, *, `, digits, ---) are unaffected by these substitutions.
+function escapeHtml(s) {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function renderMarkdown(text) {
   if (!text) return '';
   const lines = text.split('\n');
@@ -45,7 +57,8 @@ function renderMarkdown(text) {
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
       .replace(/\*(.+?)\*/g, '<em>$1</em>')
       .replace(/`(.+?)`/g, '<code style="background:#2a2a2a;padding:1px 5px;border-radius:4px;font-size:12px;font-family:monospace">$1</code>');
-  for (const line of lines) {
+  for (const rawLine of lines) {
+    const line = escapeHtml(rawLine);
     if (/^---+$/.test(line.trim())) { flushList(); output.push('<hr style="border:none;border-top:1px solid #333;margin:12px 0"/>'); continue; }
     if (line.startsWith('### ')) { flushList(); output.push(`<div style="font-size:15px;font-weight:700;color:#fff;margin:14px 0 6px">${inlineFormat(line.slice(4))}</div>`); continue; }
     if (line.startsWith('## '))  { flushList(); output.push(`<div style="font-size:16px;font-weight:700;color:#fff;margin:16px 0 6px">${inlineFormat(line.slice(3))}</div>`); continue; }

@@ -5,6 +5,10 @@ if (!process.env.DATABASE_URL) console.warn('WARNING: DATABASE_URL not set');
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
+  // NOTE: rejectUnauthorized:false is kept because Railway's managed Postgres
+  // presents a cert that won't validate against the default CA bundle.
+  // To harden later, provide the Railway CA via `ssl: { ca: ... }` and set
+  // rejectUnauthorized:true. Changing this now can break the DB connection.
   ssl: { rejectUnauthorized: false }
 });
 
@@ -46,6 +50,7 @@ export async function initDB() {
       payment_method TEXT DEFAULT 'SuiUSD',
       walrus_blob_id TEXT,
       cancellation_walrus_blob_id TEXT,
+      deposit_release_walrus_blob_id TEXT,
       cancelled_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
@@ -111,6 +116,36 @@ export async function initDB() {
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
+
+    -- Auth sessions (was previously assumed to exist; now created explicitly).
+    CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY,
+      data JSONB NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL
+    );
+
+    -- External calendar feeds per property (ical sync).
+    -- UNIQUE(property_id, platform) is required by the ON CONFLICT upsert.
+    CREATE TABLE IF NOT EXISTS property_ical_feeds (
+      id SERIAL PRIMARY KEY,
+      property_id INTEGER NOT NULL,
+      platform TEXT NOT NULL,
+      ical_url TEXT NOT NULL,
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (property_id, platform)
+    );
+
+    -- Backfill the new receipt column on pre-existing bookings tables.
+    ALTER TABLE bookings ADD COLUMN IF NOT EXISTS deposit_release_walrus_blob_id TEXT;
+
+    -- Indexes for the actual query filters (no-ops if they already exist).
+    CREATE INDEX IF NOT EXISTS idx_bookings_wallet      ON bookings (wallet_address);
+    CREATE INDEX IF NOT EXISTS idx_bookings_property    ON bookings (property_id);
+    CREATE INDEX IF NOT EXISTS idx_bookings_avail       ON bookings (property_id, check_in, check_out);
+    CREATE INDEX IF NOT EXISTS idx_messages_ref         ON messages (booking_ref);
+    CREATE INDEX IF NOT EXISTS idx_reviews_property     ON reviews (property_id);
+    CREATE INDEX IF NOT EXISTS idx_host_profiles_email  ON host_profiles (email);
+    CREATE INDEX IF NOT EXISTS idx_sessions_expires     ON sessions (expires_at);
   `);
   console.log('Database initialized');
 }

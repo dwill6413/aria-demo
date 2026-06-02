@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { generateNonce, generateRandomness, jwtToAddress } from '@mysten/sui/zklogin';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { dotenvConfig } from './config.mjs';
@@ -43,6 +44,56 @@ async function purgeExpiredSessions() {
 
 // Run cleanup every hour
 setInterval(purgeExpiredSessions, 60 * 60 * 1000);
+
+// ─── Google ID-token verification (no external dependency) ────────────────────
+// Verifies the RS256 signature against Google's published JWKS and validates
+// the standard claims. Without this, a forged token could mint any session.
+
+let _jwksCache = { keys: [], fetchedAt: 0 };
+
+async function getGoogleKeys() {
+  const now = Date.now();
+  if (_jwksCache.keys.length && now - _jwksCache.fetchedAt < 60 * 60 * 1000) {
+    return _jwksCache.keys;
+  }
+  const res = await fetch('https://www.googleapis.com/oauth2/v3/certs');
+  const data = await res.json();
+  _jwksCache = { keys: data.keys || [], fetchedAt: now };
+  return _jwksCache.keys;
+}
+
+function b64urlToBuffer(s) {
+  return Buffer.from(s, 'base64url');
+}
+
+async function verifyGoogleIdToken(idToken) {
+  const parts = idToken.split('.');
+  if (parts.length !== 3) throw new Error('Malformed token');
+  const [headerB64, payloadB64, sigB64] = parts;
+
+  const header  = JSON.parse(b64urlToBuffer(headerB64).toString('utf8'));
+  const payload = JSON.parse(b64urlToBuffer(payloadB64).toString('utf8'));
+
+  if (header.alg !== 'RS256') throw new Error('Unexpected token algorithm');
+
+  const keys = await getGoogleKeys();
+  const jwk  = keys.find(k => k.kid === header.kid);
+  if (!jwk) throw new Error('Token signing key not found');
+
+  const publicKey = crypto.createPublicKey({ key: jwk, format: 'jwk' });
+  const signed    = Buffer.from(`${headerB64}.${payloadB64}`);
+  const valid     = crypto.verify('RSA-SHA256', signed, publicKey, b64urlToBuffer(sigB64));
+  if (!valid) throw new Error('Invalid token signature');
+
+  const expectedAud = process.env.GOOGLE_CLIENT_ID;
+  if (expectedAud && payload.aud !== expectedAud) throw new Error('Audience mismatch');
+  if (payload.iss !== 'https://accounts.google.com' && payload.iss !== 'accounts.google.com') {
+    throw new Error('Issuer mismatch');
+  }
+  if (!payload.exp || payload.exp * 1000 < Date.now()) throw new Error('Token expired');
+
+  return payload;
+}
 
 // ─── zkLogin URL ──────────────────────────────────────────────────────────────
 
@@ -101,26 +152,33 @@ export async function handleZkLoginCallback(request, reply) {
   }
 
   try {
-    const [, payloadB64] = id_token.split('.');
-    const payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString());
+    // Verify signature + claims against Google BEFORE trusting anything.
+    const payload = await verifyGoogleIdToken(id_token);
 
+    // Bind the token to this login attempt — the nonce must match the one we
+    // generated and sent to Google in getZkLoginUrl.
+    if (!pending.nonce || String(payload.nonce) !== String(pending.nonce)) {
+      throw new Error('Nonce mismatch');
+    }
+
+    // NOTE: salt is kept at '0' to preserve existing derived addresses.
+    // Rotating to a per-user secret salt is a separate, data-migrating change.
     const salt = '0';
     const suiAddress = jwtToAddress(id_token, salt, true);
 
-    const sessionId = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+    // Cryptographically strong, opaque session id (was Math.random()).
+    const sessionId = crypto.randomBytes(32).toString('base64url');
+
+    // Store only what the app actually reads. The ephemeral private key and
+    // raw id_token are NOT persisted (nothing else consumes them).
     const sessionData = {
       suiAddress,
       email: payload.email,
       name: payload.name,
       picture: payload.picture,
-      ephemeralKeypair: { privateKey: pending.privateKey },
-      maxEpoch: pending.maxEpoch,
-      randomness: pending.randomness,
-      idToken: id_token,
       createdAt: Date.now()
     };
 
-    // Save to Postgres — survives Railway redeploys
     await saveSession(sessionId, sessionData);
 
     reply.setCookie('aria_session', sessionId, {
@@ -131,12 +189,13 @@ export async function handleZkLoginCallback(request, reply) {
       path: '/'
     });
 
-    // Pass sid in URL so cross-domain frontends can store it in localStorage
+    // Cross-domain frontends read this and store it for the x-session-id header.
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
     return reply.redirect(`${frontendUrl}?auth=success&sid=${sessionId}`);
 
   } catch (err) {
-    console.error('zkLogin callback error:', err);
-    return reply.code(500).send({ error: 'Authentication failed', details: err.message });
+    console.error('zkLogin callback error:', err.message);
+    // Generic message to the client — no internal details leaked.
+    return reply.code(401).send({ error: 'Authentication failed' });
   }
 }

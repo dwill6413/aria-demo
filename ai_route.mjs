@@ -6,24 +6,34 @@
 //
 // Accepts: { messages, mode } from the frontend
 //   messages = full conversation history [{ role, content }]
-//   mode     = "guest" or "host"
+//   mode     = UI hint only — the actual host/guest role is decided SERVER-SIDE
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { calculateHostPayout } from './deepbook.mjs';
 import { pool } from './db.mjs';
+import { getSession } from './auth.mjs';
+import { PROPERTIES, JURISDICTION_TAX_RATES } from './catalog.mjs';
 
 const GROK_MODEL   = 'grok-3-latest';
 const XAI_BASE_URL = 'https://api.x.ai/v1/chat/completions';
 
-// ─── Jurisdiction Tax Rates ───────────────────────────────────────────────────
-const JURISDICTION_TAX_RATES = {
-  1: { rate: 0.13,   name: 'Miami-Dade County, FL',  breakdown: '6% FL sales tax + 7% Miami-Dade tourist tax' },
-  2: { rate: 0.17,   name: 'City of Austin, TX',      breakdown: '6% TX state HOT + 11% City of Austin HOT' },
-  3: { rate: 0.13,   name: 'Buncombe County, NC',     breakdown: '6.75% NC sales tax + 6% Buncombe County occupancy tax' },
-  4: { rate: 0.0805, name: 'City of Scottsdale, AZ',  breakdown: 'AZ state + city Transaction Privilege Tax combined' },
-  5: { rate: 0.10,   name: 'Placer County, CA',       breakdown: '10% Transient Occupancy Tax (Tahoe area)' },
-  6: { rate: 0.1475, name: 'New York City, NY',        breakdown: '4% NY state + 4.5% local sales tax + 5.875% NYC hotel occupancy tax' },
-};
+const HOST_ADDRESSES = (process.env.HOST_ADDRESSES || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+
+// Tools that may only ever be executed by a verified host.
+const HOST_ONLY_TOOLS = new Set(['get_all_bookings', 'get_revenue_summary', 'get_all_messages', 'release_deposit', 'get_reviews']);
+
+// Resolve host status from the session itself — NEVER from the client `mode`.
+async function resolveIsHost(session) {
+  if (!session?.email) return false;
+  if (HOST_ADDRESSES.includes(session.email.toLowerCase())) return true;
+  try {
+    const r = await pool.query(
+      `SELECT id FROM host_profiles WHERE email = $1 AND status = 'approved'`,
+      [session.email.toLowerCase()]
+    );
+    return r.rows.length > 0;
+  } catch { return false; }
+}
 
 // ─── Tool definitions ─────────────────────────────────────────────────────────
 
@@ -323,9 +333,15 @@ async function pushToWalrus(data) {
 }
 
 // ─── Tool executor ────────────────────────────────────────────────────────────
+// `isHost` is resolved server-side by the route handler and passed in. Every
+// host-only tool is gated here too, so a forged tool call can't escalate.
 
-async function executeTool(toolName, toolInput, session) {
+async function executeTool(toolName, toolInput, session, isHost) {
   try {
+
+    if (HOST_ONLY_TOOLS.has(toolName) && !isHost) {
+      return JSON.stringify({ error: 'Host access required' });
+    }
 
     // ── Guest: get own bookings from Postgres ─────────────────────────────────
     if (toolName === 'get_bookings') {
@@ -338,7 +354,16 @@ async function executeTool(toolName, toolInput, session) {
 
     // ── Guest: create booking in Postgres ─────────────────────────────────────
     if (toolName === 'create_booking') {
-      const { propertyId, propertyTitle, nights, pricePerNight, checkIn, checkOut } = toolInput;
+      const { propertyId, checkIn, checkOut } = toolInput;
+      const nights = Number(toolInput.nights);
+
+      // Server-authoritative property + price — ignore any client-supplied price.
+      const prop = PROPERTIES[Number(propertyId)];
+      if (!prop) return JSON.stringify({ error: 'Invalid propertyId (must be 1-6)' });
+      if (!nights || nights < 1 || nights > 90) return JSON.stringify({ error: 'nights must be between 1 and 90' });
+
+      const propertyTitle = prop.title;
+      const pricePerNight = prop.price;
 
       // Double-booking guard
       const conflict = await pool.query(
@@ -451,7 +476,8 @@ async function executeTool(toolName, toolInput, session) {
       const result = await pool.query('SELECT * FROM bookings WHERE booking_ref = $1', [toolInput.bookingRef]);
       if (result.rows.length === 0) return JSON.stringify({ error: 'Booking not found' });
       const booking = result.rows[0];
-      if (booking.wallet_address !== session.suiAddress) return JSON.stringify({ error: 'Not your booking' });
+      // A guest may only cancel their own booking; a host may cancel any.
+      if (!isHost && booking.wallet_address !== session.suiAddress) return JSON.stringify({ error: 'Not your booking' });
       if (booking.payment_status === 'cancelled') return JSON.stringify({ error: 'Already cancelled' });
 
       const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -545,8 +571,13 @@ async function executeTool(toolName, toolInput, session) {
       return JSON.stringify({ totalBookings: bookings.length, totalGross, totalFees, totalTaxes, totalNet, totalDepositsHeld: totalDeposits, byProperty });
     }
 
-    // ── Get messages for a booking from Postgres ──────────────────────────────
+    // ── Get messages for a booking (guest must own it; host may read any) ──────
     if (toolName === 'get_messages') {
+      if (!isHost) {
+        const bk = await pool.query('SELECT wallet_address FROM bookings WHERE booking_ref = $1', [toolInput.bookingRef]);
+        if (bk.rows.length === 0) return JSON.stringify({ error: 'Booking not found' });
+        if (bk.rows[0].wallet_address !== session.suiAddress) return JSON.stringify({ error: 'Not your booking' });
+      }
       const result = await pool.query(
         'SELECT * FROM messages WHERE booking_ref = $1 ORDER BY created_at ASC',
         [toolInput.bookingRef]
@@ -554,29 +585,39 @@ async function executeTool(toolName, toolInput, session) {
       return JSON.stringify(result.rows);
     }
 
-    // ── Host: scan all message threads from Postgres ──────────────────────────
+    // ── Host: scan all message threads (single query — no N+1) ────────────────
     if (toolName === 'get_all_messages') {
-      const bookings = await pool.query('SELECT booking_ref, property_title, guest_name FROM bookings ORDER BY created_at DESC');
-      const threads  = [];
-      for (const b of bookings.rows) {
-        const msgs = await pool.query(
-          'SELECT * FROM messages WHERE booking_ref = $1 ORDER BY created_at ASC',
-          [b.booking_ref]
-        );
-        if (msgs.rows.length > 0) {
-          threads.push({
-            bookingRef: b.booking_ref, property: b.property_title, guestName: b.guest_name,
-            messageCount: msgs.rows.length,
-            latestMessage: msgs.rows[msgs.rows.length - 1],
-            allMessages: msgs.rows
+      const rows = await pool.query(`
+        SELECT m.*, b.property_title, b.guest_name
+        FROM messages m
+        JOIN bookings b ON b.booking_ref = m.booking_ref
+        ORDER BY b.created_at DESC, m.created_at ASC
+      `);
+      const byRef = new Map();
+      for (const r of rows.rows) {
+        if (!byRef.has(r.booking_ref)) {
+          byRef.set(r.booking_ref, {
+            bookingRef: r.booking_ref, property: r.property_title, guestName: r.guest_name,
+            messageCount: 0, latestMessage: null, allMessages: []
           });
         }
+        const t = byRef.get(r.booking_ref);
+        const msg = { id: r.id, booking_ref: r.booking_ref, from_name: r.from_name, from_email: r.from_email, message: r.message, created_at: r.created_at };
+        t.allMessages.push(msg);
+        t.latestMessage = msg;
+        t.messageCount++;
       }
+      const threads = Array.from(byRef.values());
       return JSON.stringify(threads.length > 0 ? threads : 'No messages found.');
     }
 
-    // ── Send message — write to Postgres ──────────────────────────────────────
+    // ── Send message (guest must own the booking; host may message any) ───────
     if (toolName === 'send_message') {
+      if (!isHost) {
+        const bk = await pool.query('SELECT wallet_address FROM bookings WHERE booking_ref = $1', [toolInput.bookingRef]);
+        if (bk.rows.length === 0) return JSON.stringify({ error: 'Booking not found' });
+        if (bk.rows[0].wallet_address !== session.suiAddress) return JSON.stringify({ error: 'Not your booking' });
+      }
       await pool.query(
         'INSERT INTO messages (booking_ref, from_name, from_email, message) VALUES ($1,$2,$3,$4)',
         [toolInput.bookingRef, session.name, session.email, toolInput.message]
@@ -589,6 +630,13 @@ async function executeTool(toolName, toolInput, session) {
       const result = await pool.query('SELECT * FROM bookings WHERE booking_ref = $1', [toolInput.bookingRef]);
       if (result.rows.length === 0) return JSON.stringify({ error: 'Booking not found' });
       const booking = result.rows[0];
+
+      // Superadmins may release any; a regular approved host only their own property.
+      if (!HOST_ADDRESSES.includes((session.email || '').toLowerCase())) {
+        const owns = await pool.query('SELECT 1 FROM properties WHERE id = $1 AND host_address = $2', [booking.property_id, session.suiAddress]);
+        if (owns.rows.length === 0) return JSON.stringify({ error: 'You do not manage this property' });
+      }
+
       if (booking.deposit_status === 'released') return JSON.stringify({ error: 'Deposit already released' });
       await pool.query(
         `UPDATE bookings SET deposit_status='released' WHERE booking_ref=$1`,
@@ -618,21 +666,19 @@ async function executeTool(toolName, toolInput, session) {
   }
 }
 
-// ─── Register route on Fastify ────────────────────────────────────────────────
-
 export async function registerAIRoute(fastify) {
   fastify.post('/api/ai/chat', async (request, reply) => {
 
     const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
     if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-    const { getSession } = await import('./auth.mjs');
     const session = await getSession(sessionId);
     if (!session) return reply.code(401).send({ error: 'Session expired' });
 
-    const { messages, mode } = request.body;
+    const { messages } = request.body;
     if (!messages || !Array.isArray(messages)) return reply.code(400).send({ error: 'messages array required' });
 
-    const isHost = mode === 'host';
+    // Role is decided here from the verified session — NOT from request.body.mode.
+    const isHost = await resolveIsHost(session);
     const tools  = isHost ? HOST_TOOLS : GUEST_TOOLS;
 
     let guestBookings = [];
@@ -678,7 +724,7 @@ export async function registerAIRoute(fastify) {
       for (const toolCall of toolCalls) {
         const toolName  = toolCall.function.name;
         const toolInput = JSON.parse(toolCall.function.arguments);
-        const result    = await executeTool(toolName, toolInput, session);
+        const result    = await executeTool(toolName, toolInput, session, isHost);
 
         apiMessages.push({
           role: 'tool',
