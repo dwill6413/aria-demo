@@ -3,10 +3,16 @@ import { useRouter } from 'next/router';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
-const fmtDate = (d) => {
-  const m = String(d).match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  const dt = m ? new Date(+m[1], +m[2] - 1, +m[3]) : new Date(d);
-  return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+const fmtDate = (d) => new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
+// Calendar dates (check-in / check-out) are stored without a time. Render them
+// from their Y-M-D parts so they never shift across a timezone boundary —
+// works whether the API sends "2026-06-03" or "2026-06-03T00:00:00.000Z".
+const fmtDay = (d) => {
+  const s = String(d).slice(0, 10);
+  const [y, mo, day] = s.split('-').map(Number);
+  if (!y || !mo || !day) return fmtDate(d);
+  return new Date(y, mo - 1, day).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 };
 
 const getStoredSid = () => { try { return localStorage.getItem('aria_sid') || ''; } catch { return ''; } };
@@ -169,11 +175,11 @@ export default function Bookings() {
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '12px', marginBottom: '16px' }}>
                   <div style={{ background: '#1a1a1a', borderRadius: '8px', padding: '12px' }}>
                     <div style={{ fontSize: '10px', color: '#555', marginBottom: '4px' }}>CHECK-IN</div>
-                    <div style={{ fontSize: '14px', fontWeight: '600' }}>{fmtDate(b.checkIn)}</div>
+                    <div style={{ fontSize: '14px', fontWeight: '600' }}>{fmtDay(b.checkIn)}</div>
                   </div>
                   <div style={{ background: '#1a1a1a', borderRadius: '8px', padding: '12px' }}>
                     <div style={{ fontSize: '10px', color: '#555', marginBottom: '4px' }}>CHECK-OUT</div>
-                    <div style={{ fontSize: '14px', fontWeight: '600' }}>{fmtDate(b.checkOut)}</div>
+                    <div style={{ fontSize: '14px', fontWeight: '600' }}>{fmtDay(b.checkOut)}</div>
                   </div>
                   <div style={{ background: '#1a1a1a', borderRadius: '8px', padding: '12px' }}>
                     <div style={{ fontSize: '10px', color: '#555', marginBottom: '4px' }}>NIGHTS</div>
