@@ -3,7 +3,11 @@ import { useRouter } from 'next/router';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
-const fmtDate = (d) => new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+const fmtDate = (d) => {
+  const m = String(d).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const dt = m ? new Date(+m[1], +m[2] - 1, +m[3]) : new Date(d);
+  return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+};
 const fmtDateTime = (d) => new Date(d).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
 
 const getStoredSid = () => { try { return localStorage.getItem('aria_sid') || ''; } catch { return ''; } };
@@ -157,9 +161,9 @@ export default function Host() {
       ['Booking Ref', 'Property', 'Guest', 'Check-In', 'Check-Out', 'Nights', 'Subtotal', 'Tax (8%)', 'Total', 'Remitted', 'Remitted At', 'Jurisdiction', 'Notes'],
       ...taxData.bookings.map(b => [
         b.bookingRef, b.property, b.guestName,
-        new Date(b.checkIn).toLocaleDateString(), new Date(b.checkOut).toLocaleDateString(),
+        fmtDate(b.checkIn), fmtDate(b.checkOut),
         b.nights, `$${b.subtotal}`, `$${b.taxAmount}`, `$${b.totalAmount}`,
-        b.remitted ? 'Yes' : 'No', b.remittedAt ? new Date(b.remittedAt).toLocaleDateString() : '',
+        b.remitted ? 'Yes' : 'No', b.remittedAt ? fmtDate(b.remittedAt) : '',
         b.jurisdiction || '', b.notes || ''
       ])
     ];
