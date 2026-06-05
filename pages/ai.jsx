@@ -158,12 +158,19 @@ export default function AI() {
 
   return (
     <div style={{ minHeight: '100vh', background: '#0a0a0a', color: '#fff', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ background: '#111', borderBottom: '1px solid #222', padding: '0 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '60px', position: 'sticky', top: 0, zIndex: 10 }}>
+      <style>{`
+        .ai-agent-badge { display: inline-flex; }
+        @media (max-width: 639px) {
+          .ai-agent-badge { display: none !important; }
+          .ai-nav-back span { display: none; }
+        }
+      `}</style>
+      <div style={{ background: '#111', borderBottom: '1px solid #222', padding: '0 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '60px', position: 'sticky', top: 0, zIndex: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <span onClick={() => router.push('/')} style={{ fontSize: '20px', cursor: 'pointer' }}>🏠</span>
           <span style={{ fontWeight: '700', fontSize: '18px', cursor: 'pointer' }} onClick={() => router.push('/')}>ARIA</span>
           <span style={{ background: '#00ff44', color: '#000', fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '10px', marginLeft: '4px' }}>BETA</span>
-          <span style={{ background: isHost ? '#1a0a00' : '#1a0a2e', border: '1px solid #333', color: isHost ? '#ff8800' : '#aa44ff', fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '10px', marginLeft: '4px' }}>
+          <span className="ai-agent-badge" style={{ background: isHost ? '#1a0a00' : '#1a0a2e', border: '1px solid #333', color: isHost ? '#ff8800' : '#aa44ff', fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '10px', marginLeft: '4px' }}>
             {isHost ? '🏡 HOST AGENT' : '🤖 AI AGENT'}
           </span>
         </div>

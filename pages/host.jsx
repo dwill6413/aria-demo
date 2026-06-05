@@ -60,6 +60,7 @@ export default function Host() {
   const [applications, setApplications] = useState([]);
   const [applicationsLoading, setApplicationsLoading] = useState(false);
   const [approvingId, setApprovingId] = useState(null);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     authFetch(`${API}/auth/me`)
@@ -251,16 +252,26 @@ export default function Host() {
 
   return (
     <div style={{ minHeight: '100vh', background: '#0a0a0a', color: '#fff' }}>
+      <style>{`
+        .hs-nav-desktop { display: flex; align-items: center; gap: 12px; }
+        .hs-nav-hamburger { display: none !important; }
+        @media (max-width: 639px) {
+          .hs-nav-desktop { display: none !important; }
+          .hs-nav-hamburger { display: flex !important; align-items: center; gap: 8px; }
+          .hs-stats-grid { grid-template-columns: repeat(2, 1fr) !important; }
+        }
+      `}</style>
 
       {/* Header */}
-      <div style={{ background: '#111', borderBottom: '1px solid #222', padding: '0 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '60px', position: 'sticky', top: 0, zIndex: 10 }}>
+      <div style={{ background: '#111', borderBottom: '1px solid #222', padding: '0 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '60px', position: 'sticky', top: 0, zIndex: 100 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <span onClick={() => router.push('/')} style={{ fontSize: '20px', cursor: 'pointer' }}>🏠</span>
           <span style={{ fontWeight: '700', fontSize: '18px', cursor: 'pointer' }} onClick={() => router.push('/')}>ARIA</span>
           <span style={{ background: '#00ff44', color: '#000', fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '10px', marginLeft: '4px' }}>BETA</span>
           <span style={{ background: '#1a1a2e', border: '1px solid #333', color: '#4a9eff', fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '10px', marginLeft: '4px' }}>HOST VIEW</span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        {/* Desktop */}
+        <div className="hs-nav-desktop">
           <div style={{ textAlign: 'right' }}>
             <div style={{ fontSize: '13px', fontWeight: '500' }}>{user?.name}</div>
             <div style={{ fontSize: '11px', color: '#00ff44', fontFamily: 'monospace' }}>{user?.address?.slice(0, 8)}...{user?.address?.slice(-6)}</div>
@@ -268,7 +279,30 @@ export default function Host() {
           <button onClick={() => router.push('/bookings')} style={{ background: 'transparent', border: '1px solid #333', color: '#888', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>Guest View</button>
           <button onClick={() => router.push('/')} style={{ background: 'transparent', border: '1px solid #333', color: '#888', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>Back to Search</button>
         </div>
+        {/* Mobile */}
+        <div className="hs-nav-hamburger">
+          <div style={{ fontSize: '11px', color: '#00ff44', fontFamily: 'monospace' }}>{user?.address?.slice(0, 6)}...{user?.address?.slice(-4)}</div>
+          <button onClick={() => setMenuOpen(o => !o)} style={{ background: 'transparent', border: '1px solid #333', color: '#fff', borderRadius: '6px', width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', cursor: 'pointer' }}>
+            {menuOpen ? '×' : '☰'}
+          </button>
+        </div>
       </div>
+      {menuOpen && (
+        <div style={{ background: '#111', borderBottom: '1px solid #222', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '8px', position: 'sticky', top: '60px', zIndex: 99 }}>
+          <div style={{ paddingBottom: '8px', borderBottom: '1px solid #1a1a1a' }}>
+            <div style={{ fontSize: '13px', fontWeight: '600', color: '#fff' }}>{user?.name}</div>
+            <div style={{ fontSize: '11px', color: '#4a9eff', marginTop: '2px', fontWeight: '700' }}>Host Dashboard</div>
+          </div>
+          {[
+            { label: '👤 Guest View', path: '/bookings' },
+            { label: '🏠 Back to Search', path: '/' },
+          ].map((item, i) => (
+            <button key={i} onClick={() => { router.push(item.path); setMenuOpen(false); }} style={{ background: '#1a1a1a', border: '1px solid #2a2a2a', color: '#fff', borderRadius: '8px', padding: '12px 16px', fontSize: '14px', textAlign: 'left', cursor: 'pointer' }}>
+              {item.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div style={{ maxWidth: '1100px', margin: '0 auto', padding: '40px 24px' }}>
         <div style={{ marginBottom: '32px' }}>
@@ -277,7 +311,7 @@ export default function Host() {
         </div>
 
         {/* Stats */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '16px', marginBottom: '32px' }}>
+        <div className="hs-stats-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '16px', marginBottom: '32px' }}>
           {[
             { label: 'TOTAL BOOKINGS', value: activeBookings.length, color: '#00ff44', sub: `${cancelledBookings.length} cancelled` },
             { label: 'GROSS REVENUE', value: `$${totalRevenue.toLocaleString()}`, color: '#00ff44', sub: 'SuiUSD' },

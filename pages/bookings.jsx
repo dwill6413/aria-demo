@@ -34,6 +34,7 @@ export default function Bookings() {
   const [reviewText, setReviewText] = useState('');
   const [reviewSubmitting, setReviewSubmitting] = useState(false);
   const [reviewedRefs, setReviewedRefs] = useState([]);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   const handleSubmitReview = async () => {
     if (!reviewText.trim()) return;
@@ -99,15 +100,27 @@ export default function Bookings() {
 
   return (
     <div style={{ minHeight: '100vh', background: '#0a0a0a', color: '#fff' }}>
+      <style>{`
+        .bk-nav-desktop { display: flex; align-items: center; gap: 12px; }
+        .bk-nav-hamburger { display: none !important; }
+        .bk-stat-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 16px; }
+        @media (max-width: 639px) {
+          .bk-nav-desktop { display: none !important; }
+          .bk-nav-hamburger { display: flex !important; align-items: center; gap: 8px; }
+          .bk-breakdown-row { flex-direction: column !important; gap: 2px !important; align-items: flex-start !important; }
+          .bk-breakdown-row span:last-child { text-align: left !important; }
+        }
+      `}</style>
 
       {/* Header */}
-      <div style={{ background: '#111', borderBottom: '1px solid #222', padding: '0 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '60px', position: 'sticky', top: 0, zIndex: 10 }}>
+      <div style={{ background: '#111', borderBottom: '1px solid #222', padding: '0 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '60px', position: 'sticky', top: 0, zIndex: 100 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <span onClick={() => router.push('/')} style={{ fontSize: '20px', cursor: 'pointer' }}>🏠</span>
           <span style={{ fontWeight: '700', fontSize: '18px', cursor: 'pointer' }} onClick={() => router.push('/')}>ARIA</span>
           <span style={{ background: '#00ff44', color: '#000', fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '10px', marginLeft: '4px' }}>BETA</span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        {/* Desktop */}
+        <div className="bk-nav-desktop">
           <div style={{ textAlign: 'right' }}>
             <div style={{ fontSize: '13px', fontWeight: '500' }}>{user?.name}</div>
             <div style={{ fontSize: '11px', color: '#00ff44', fontFamily: 'monospace' }}>{user?.address?.slice(0, 8)}...{user?.address?.slice(-6)}</div>
@@ -116,7 +129,25 @@ export default function Bookings() {
             Back to Search
           </button>
         </div>
+        {/* Mobile */}
+        <div className="bk-nav-hamburger">
+          <div style={{ fontSize: '11px', color: '#00ff44', fontFamily: 'monospace' }}>{user?.address?.slice(0, 6)}...{user?.address?.slice(-4)}</div>
+          <button onClick={() => setMenuOpen(o => !o)} style={{ background: 'transparent', border: '1px solid #333', color: '#fff', borderRadius: '6px', width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', cursor: 'pointer' }}>
+            {menuOpen ? '×' : '☰'}
+          </button>
+        </div>
       </div>
+      {menuOpen && (
+        <div style={{ background: '#111', borderBottom: '1px solid #222', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '8px', position: 'sticky', top: '60px', zIndex: 99 }}>
+          <div style={{ paddingBottom: '8px', borderBottom: '1px solid #1a1a1a' }}>
+            <div style={{ fontSize: '13px', fontWeight: '600', color: '#fff' }}>{user?.name}</div>
+            <div style={{ fontSize: '11px', color: '#00ff44', fontFamily: 'monospace', marginTop: '2px' }}>{user?.address}</div>
+          </div>
+          <button onClick={() => { router.push('/'); setMenuOpen(false); }} style={{ background: '#1a1a1a', border: '1px solid #2a2a2a', color: '#fff', borderRadius: '8px', padding: '12px 16px', fontSize: '14px', textAlign: 'left', cursor: 'pointer' }}>
+            🏠 Back to Search
+          </button>
+        </div>
+      )}
 
       {/* Content */}
       <div style={{ maxWidth: '900px', margin: '0 auto', padding: '40px 24px' }}>
@@ -172,7 +203,7 @@ export default function Bookings() {
                   </div>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '12px', marginBottom: '16px' }}>
+                <div className="bk-stat-grid">
                   <div style={{ background: '#1a1a1a', borderRadius: '8px', padding: '12px' }}>
                     <div style={{ fontSize: '10px', color: '#555', marginBottom: '4px' }}>CHECK-IN</div>
                     <div style={{ fontSize: '14px', fontWeight: '600' }}>{fmtDay(b.checkIn)}</div>
@@ -193,29 +224,29 @@ export default function Bookings() {
 
                 {b.breakdown && (
                   <div style={{ background: '#1a1a1a', borderRadius: '8px', padding: '12px', marginBottom: '16px', fontSize: '13px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                    <div className="bk-breakdown-row" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                       <span style={{ color: '#888' }}>Price per night</span><span>{b.breakdown.pricePerNight}</span>
                     </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                    <div className="bk-breakdown-row" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                       <span style={{ color: '#888' }}>Subtotal</span><span>{b.breakdown.subtotal}</span>
                     </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                    <div className="bk-breakdown-row" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                       <span style={{ color: '#888' }}>ARIA fee (stay only)</span><span style={{ color: '#00ff44' }}>{b.breakdown.ariaFee}</span>
                     </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', paddingBottom: '8px', borderBottom: '1px solid #333' }}>
+                    <div className="bk-breakdown-row" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', paddingBottom: '8px', borderBottom: '1px solid #333' }}>
                       <span style={{ color: '#888' }}>Taxes</span><span>{b.breakdown.taxes}</span>
                     </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px', fontWeight: '600' }}>
+                    <div className="bk-breakdown-row" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px', fontWeight: '600' }}>
                       <span>Stay total</span><span style={{ color: '#00ff44' }}>{b.breakdown.totalPaid}</span>
                     </div>
                     {b.depositAmount && (
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', paddingBottom: '8px', borderBottom: '1px solid #333' }}>
+                      <div className="bk-breakdown-row" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', paddingBottom: '8px', borderBottom: '1px solid #333' }}>
                         <span style={{ color: '#4a9eff' }}>🔒 Refundable deposit (no ARIA fee)</span>
                         <span style={{ color: '#4a9eff' }}>${b.depositAmount}</span>
                       </div>
                     )}
                     {b.chargeAmount && (
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: '700' }}>
+                      <div className="bk-breakdown-row" style={{ display: 'flex', justifyContent: 'space-between', fontWeight: '700' }}>
                         <span>Total charged</span><span style={{ color: '#fff' }}>${b.chargeAmount} SuiUSD</span>
                       </div>
                     )}
