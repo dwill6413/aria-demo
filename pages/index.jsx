@@ -87,6 +87,7 @@ export default function Home() {
   const [liveRatings, setLiveRatings] = useState({});
   const [photoIndex, setPhotoIndex] = useState(0);
   const [termsAccepted, setTermsAccepted] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   const nights = checkIn && checkOut ? Math.round((checkOut - checkIn) / (1000 * 60 * 60 * 24)) : 0;
 
@@ -234,16 +235,27 @@ export default function Home() {
         .gallery-thumb { flex: 1; height: 54px; overflow: hidden; cursor: pointer; border-radius: 4px; transition: opacity 0.15s, border-color 0.15s; }
         .gallery-thumb:hover { opacity: 1 !important; }
         .gallery-dot { border: none; cursor: pointer; padding: 0; border-radius: 4px; transition: all 0.2s ease; }
+        .nav-desktop { display: flex; align-items: center; gap: 12px; }
+        .nav-hamburger { display: none !important; }
+        @media (max-width: 639px) {
+          .nav-desktop { display: none !important; }
+          .nav-hamburger { display: flex !important; align-items: center; gap: 8px; }
+          .hero-search { flex-direction: column !important; }
+          .hero-search > * { width: 100% !important; min-width: unset !important; flex: unset !important; }
+          .hero-search .search-btn { width: 100% !important; }
+        }
       `}</style>
 
       {/* Header */}
-      <div style={{ background: '#111', borderBottom: '1px solid #222', padding: '0 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '60px', position: 'sticky', top: 0, zIndex: 10 }}>
+      <div style={{ background: '#111', borderBottom: '1px solid #222', padding: '0 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '60px', position: 'sticky', top: 0, zIndex: 100 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <span style={{ fontSize: '20px' }}>🏠</span>
           <span style={{ fontWeight: '700', fontSize: '18px' }}>ARIA</span>
           <span style={{ background: '#00ff44', color: '#000', fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '10px', marginLeft: '4px' }}>BETA</span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+
+        {/* Desktop nav — hidden on mobile via CSS */}
+        <div className="nav-desktop">
           <div style={{ textAlign: 'right' }}>
             <div style={{ fontSize: '13px', fontWeight: '500' }}>{user.name}</div>
             <div style={{ fontSize: '11px', color: '#00ff44', fontFamily: 'monospace' }}>{user.address.slice(0, 8)}...{user.address.slice(-6)}</div>
@@ -257,13 +269,48 @@ export default function Home() {
           <button onClick={() => router.push('/ai')} style={{ background: 'transparent', border: '1px solid #2a1a3a', color: '#aa44ff', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', fontWeight: '600' }}>🤖 AI</button>
           <button onClick={handleLogout} style={{ background: 'transparent', border: '1px solid #333', color: '#888', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>Sign out</button>
         </div>
+
+        {/* Mobile nav — address + hamburger, shown on mobile via CSS */}
+        <div className="nav-hamburger">
+          <div style={{ fontSize: '11px', color: '#00ff44', fontFamily: 'monospace' }}>{user.address.slice(0, 6)}...{user.address.slice(-4)}</div>
+          <button onClick={() => setMenuOpen(o => !o)}
+            style={{ background: 'transparent', border: '1px solid #333', color: '#fff', borderRadius: '6px', width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', cursor: 'pointer', lineHeight: 1 }}>
+            {menuOpen ? '×' : '☰'}
+          </button>
+        </div>
       </div>
+
+      {/* Mobile dropdown menu */}
+      {menuOpen && (
+        <div style={{ background: '#111', borderBottom: '1px solid #222', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '8px', position: 'sticky', top: '60px', zIndex: 99 }}>
+          <div style={{ paddingBottom: '8px', borderBottom: '1px solid #1a1a1a', marginBottom: '4px' }}>
+            <div style={{ fontSize: '13px', fontWeight: '600', color: '#fff' }}>{user.name}</div>
+            <div style={{ fontSize: '11px', color: '#00ff44', fontFamily: 'monospace', marginTop: '2px' }}>{user.address.slice(0, 10)}...{user.address.slice(-8)}</div>
+          </div>
+          {[
+            { label: '📋 My Bookings', action: () => { router.push('/bookings'); setMenuOpen(false); } },
+            user.isHost ? { label: '🏡 Host Dashboard', action: () => { router.push('/host'); setMenuOpen(false); } } : null,
+            (!user.isHost && user.hostStatus !== 'pending') ? { label: '🏡 Become a Host', action: () => { router.push('/become-host'); setMenuOpen(false); } } : null,
+            { label: '🤖 AI Assistant', action: () => { router.push('/ai'); setMenuOpen(false); } },
+          ].filter(Boolean).map((item, i) => (
+            <button key={i} onClick={item.action}
+              style={{ background: '#1a1a1a', border: '1px solid #2a2a2a', color: '#fff', borderRadius: '8px', padding: '12px 16px', fontSize: '14px', textAlign: 'left', cursor: 'pointer', width: '100%' }}>
+              {item.label}
+            </button>
+          ))}
+          {user.hostStatus === 'pending' && <div style={{ color: '#ffaa00', fontSize: '13px', padding: '4px 0' }}>⏳ Host Application Pending</div>}
+          <button onClick={() => { handleLogout(); setMenuOpen(false); }}
+            style={{ background: 'transparent', border: '1px solid #333', color: '#888', borderRadius: '8px', padding: '12px 16px', fontSize: '14px', textAlign: 'left', cursor: 'pointer', width: '100%', marginTop: '4px' }}>
+            Sign out
+          </button>
+        </div>
+      )}
 
       {/* Hero / Search */}
       <div style={{ background: 'linear-gradient(180deg,#111 0%,#0a0a0a 100%)', padding: '40px 24px', textAlign: 'center' }}>
         <h2 style={{ fontSize: '28px', fontWeight: '700', margin: '0 0 8px' }}>Find your perfect stay</h2>
         <p style={{ color: '#666', fontSize: '14px', margin: '0 0 24px' }}>Book instantly. Pay with SuiUSD. You stay in control — always.</p>
-        <div style={{ display: 'flex', gap: '8px', maxWidth: '700px', margin: '0 auto', flexWrap: 'wrap' }}>
+        <div className="hero-search" style={{ display: 'flex', gap: '8px', maxWidth: '700px', margin: '0 auto', flexWrap: 'wrap' }}>
           <select value={searchLocation} onChange={e => setSearchLocation(e.target.value)}
             style={{ flex: 2, minWidth: '180px', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '12px 16px', color: '#fff', fontSize: '14px', outline: 'none', cursor: 'pointer' }}>
             <option value="All Locations">📍 Where are you going?</option>
@@ -280,7 +327,7 @@ export default function Home() {
           <div style={{ flex: 1, minWidth: '130px' }}>
             <DatePicker selected={searchCheckOut} onChange={date => setSearchCheckOut(date)} minDate={searchCheckIn ? new Date(searchCheckIn.getTime() + 86400000) : new Date()} placeholderText="📅 Check-out" dateFormat="MMM d" className="date-input" />
           </div>
-          <button onClick={handleSearch} style={{ background: '#00ff44', color: '#000', border: 'none', borderRadius: '8px', padding: '12px 24px', fontWeight: '700', fontSize: '14px', cursor: 'pointer' }}>Search</button>
+          <button className="search-btn" onClick={handleSearch} style={{ background: '#00ff44', color: '#000', border: 'none', borderRadius: '8px', padding: '12px 24px', fontWeight: '700', fontSize: '14px', cursor: 'pointer' }}>Search</button>
         </div>
         {searched && (
           <div style={{ marginTop: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px' }}>
