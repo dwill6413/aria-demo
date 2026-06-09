@@ -329,17 +329,20 @@ fastify.post('/booking/create', {
   } catch (err) { fastify.log.warn({ err }, 'Walrus storage failed'); }
 
   // ── On-chain escrow creation (non-blocking) ──────────────────────────────
-  // Uses the first HOST_ADDRESS as host for testnet.
-  // Production: look up from host_profiles based on property_id.
+  // Testnet: deployer acts as host since HOST_ADDRESSES contains emails not Sui addresses.
+  // Production: look up from host_profiles.sui_address based on property_id.
   try {
-    const hostAddr = HOST_ADDRESSES[0];
-    if (hostAddr && hostAddr.startsWith('0x')) {
+    const hostAddr = deployerKeypair ? deployerKeypair.toSuiAddress() : null;
+    fastify.log.info({ bookingRef, guestAddr: session.suiAddress, hostAddr }, 'Attempting escrow creation');
+    if (hostAddr) {
       const escrowObjectId = await createEscrowOnChain(
         bookingRef, session.suiAddress, hostAddr, depositAmount, checkOutStr
       );
       if (escrowObjectId) {
         await pool.query('UPDATE bookings SET escrow_object_id=$1 WHERE booking_ref=$2', [escrowObjectId, bookingRef]);
         fastify.log.info({ bookingRef, escrowObjectId }, 'Escrow created on-chain');
+      } else {
+        fastify.log.warn({ bookingRef }, 'createEscrowOnChain returned null');
       }
     }
   } catch (err) { fastify.log.warn({ err }, 'On-chain escrow creation failed (non-blocking)'); }
