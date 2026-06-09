@@ -75,6 +75,14 @@ async function createEscrowOnChain(bookingRef, guestAddr, hostAddr, depositAmoun
       options: { showObjectChanges: true, showEffects: true },
     });
 
+    // Log result shape for debugging
+    fastify.log.info({
+      digest: result?.digest,
+      status: result?.effects?.status,
+      objectChangesCount: result?.objectChanges?.length,
+      objectChangeTypes: result?.objectChanges?.map(c => `${c.type}:${String(c.objectType).slice(0, 60)}`),
+    }, 'escrow tx result');
+
     if (result.effects?.status?.status === 'failure') {
       console.warn('Escrow tx failed on-chain:', result.effects.status.error);
       return null;
