@@ -3,7 +3,7 @@ import cors from '@fastify/cors';
 import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
 import Stripe from 'stripe';
-import { SuiClient, getFullnodeUrl } from '@mysten/sui/client';
+import { SuiJsonRpcClient, getJsonRpcFullnodeUrl } from '@mysten/sui/jsonRpc';
 import { Transaction } from '@mysten/sui/transactions';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
@@ -18,7 +18,7 @@ import { initDB, pool } from './db.mjs';
 dotenvConfig();
 
 // ─── Sui Escrow Client ────────────────────────────────────────────────────────
-const suiClient = new SuiClient({ url: getFullnodeUrl('testnet') });
+const suiClient = new SuiJsonRpcClient({ url: getJsonRpcFullnodeUrl('testnet') });
 let deployerKeypair = null;
 try {
   if (process.env.ARIA_DEPLOYER_KEY) {
