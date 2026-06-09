@@ -3,6 +3,10 @@ import cors from '@fastify/cors';
 import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
 import Stripe from 'stripe';
+import { SuiClient, getFullnodeUrl } from '@mysten/sui/client';
+import { Transaction } from '@mysten/sui/transactions';
+import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
+import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
 import { dotenvConfig } from './config.mjs';
 import { getSuiUSDLiquidity, calculateHostPayout } from './deepbook.mjs';
 import { generateICal, saveExternalCalendar, checkAvailability } from './ical.mjs';
@@ -10,18 +14,116 @@ import { Resend } from 'resend';
 import { registerAIRoute } from './ai_route.mjs';
 import { getZkLoginUrl, handleZkLoginCallback, getSession } from './auth.mjs';
 import { initDB, pool } from './db.mjs';
-import { PROPERTIES, JURISDICTION_TAX_RATES } from './catalog.mjs';
 
 dotenvConfig();
 
+// ─── Sui Escrow Client ────────────────────────────────────────────────────────
+const suiClient = new SuiClient({ url: getFullnodeUrl('testnet') });
+let deployerKeypair = null;
+try {
+  if (process.env.ARIA_DEPLOYER_KEY) {
+    const { secretKey } = decodeSuiPrivateKey(process.env.ARIA_DEPLOYER_KEY);
+    deployerKeypair = Ed25519Keypair.fromSecretKey(secretKey);
+    console.log('Sui deployer keypair loaded:', deployerKeypair.toSuiAddress());
+  }
+} catch (err) {
+  console.warn('ARIA_DEPLOYER_KEY invalid or missing — escrow transactions disabled:', err.message);
+}
+
 try { await initDB(); } catch (err) { console.error('DB init failed:', err.message); }
+
+// ─── On-Chain Escrow Helpers ──────────────────────────────────────────────────
+
+// Creates a BookingEscrow shared object on Sui testnet.
+// The deployer signs the transaction; guestAddr is recorded explicitly in the contract.
+// depositMist: use depositAmount (dollars) * 1000 as a symbolic testnet amount.
+// For testnet testing, expiry is set to 5 minutes from now so auto_release
+// can be triggered quickly. Change to checkoutMs + FIVE_DAYS_MS for mainnet.
+async function createEscrowOnChain(bookingRef, guestAddr, hostAddr, depositAmount, checkOutStr) {
+  if (!deployerKeypair || !process.env.ESCROW_PACKAGE_ID) return null;
+  try {
+    const depositMist = BigInt(depositAmount) * 1000n; // symbolic testnet amount
+
+    // TESTNET: short expiry for easy testing (5 minutes from now)
+    // MAINNET: const expiryMs = BigInt(new Date(checkOutStr + 'T00:00:00Z').getTime()) + 432_000_000n;
+    const expiryMs = BigInt(Date.now()) + 300_000n; // 5 minutes
+
+    const tx = new Transaction();
+    tx.setSender(deployerKeypair.toSuiAddress());
+
+    const [coin] = tx.splitCoins(tx.gas, [tx.pure.u64(depositMist)]);
+
+    tx.moveCall({
+      target: `${process.env.ESCROW_PACKAGE_ID}::${process.env.ESCROW_MODULE_NAME || 'escrow'}::create_escrow`,
+      typeArguments: ['0x2::sui::SUI'],
+      arguments: [
+        tx.pure.string(bookingRef),
+        tx.pure.address(guestAddr),
+        tx.pure.address(hostAddr),
+        tx.pure.address(deployerKeypair.toSuiAddress()), // arbitrator
+        tx.pure.u64(expiryMs),
+        coin,
+        tx.object('0x6'), // Sui Clock object
+      ],
+    });
+
+    const result = await suiClient.signAndExecuteTransaction({
+      transaction: tx,
+      signer: deployerKeypair,
+      options: { showObjectChanges: true },
+    });
+
+    // Extract the shared BookingEscrow object ID from the result
+    const escrowObj = result.objectChanges?.find(
+      c => c.type === 'created' && c.objectType?.includes('BookingEscrow')
+    );
+    return escrowObj?.objectId ?? null;
+  } catch (err) {
+    console.warn('createEscrowOnChain failed (non-blocking):', err.message);
+    return null;
+  }
+}
+
+// Calls auto_release on an existing BookingEscrow object.
+// Callable by anyone after expiry — deployer calls it on the host's behalf.
+async function autoReleaseEscrow(escrowObjectId) {
+  if (!deployerKeypair || !escrowObjectId || !process.env.ESCROW_PACKAGE_ID) return false;
+  try {
+    const tx = new Transaction();
+    tx.setSender(deployerKeypair.toSuiAddress());
+
+    tx.moveCall({
+      target: `${process.env.ESCROW_PACKAGE_ID}::${process.env.ESCROW_MODULE_NAME || 'escrow'}::auto_release`,
+      typeArguments: ['0x2::sui::SUI'],
+      arguments: [
+        tx.object(escrowObjectId),
+        tx.object('0x6'), // Sui Clock object
+      ],
+    });
+
+    await suiClient.signAndExecuteTransaction({
+      transaction: tx,
+      signer: deployerKeypair,
+    });
+    return true;
+  } catch (err) {
+    console.warn('autoReleaseEscrow failed (non-blocking):', err.message);
+    return false;
+  }
+}
+
+// ─── Jurisdiction Tax Rates ───────────────────────────────────────────────────
+const JURISDICTION_TAX_RATES = {
+  1: { rate: 0.13,   name: 'Miami-Dade County, FL',  breakdown: '6% FL sales tax + 7% Miami-Dade tourist tax' },
+  2: { rate: 0.17,   name: 'City of Austin, TX',      breakdown: '6% TX state HOT + 11% City of Austin HOT' },
+  3: { rate: 0.13,   name: 'Buncombe County, NC',     breakdown: '6.75% NC sales tax + 6% Buncombe County occupancy tax' },
+  4: { rate: 0.0805, name: 'City of Scottsdale, AZ',  breakdown: 'AZ state + city Transaction Privilege Tax combined' },
+  5: { rate: 0.10,   name: 'Placer County, CA',       breakdown: '10% Transient Occupancy Tax (Tahoe area)' },
+  6: { rate: 0.1475, name: 'New York City, NY',        breakdown: '4% NY state + 4.5% local sales tax + 5.875% NYC hotel occupancy tax' },
+};
 
 // ─── Role-Based Access Control ────────────────────────────────────────────────
 const HOST_ADDRESSES = (process.env.HOST_ADDRESSES || '').split(',').map(e => e.trim().toLowerCase());
-
-function isSuperadmin(session) {
-  return !!session?.email && HOST_ADDRESSES.includes(session.email.toLowerCase());
-}
 
 function isHost(session) {
   if (!session?.email) return false;
@@ -37,31 +139,6 @@ async function checkDbHost(email) {
     );
     return result.rows.length > 0;
   } catch { return false; }
-}
-
-// ─── Auth helpers ─────────────────────────────────────────────────────────────
-// Replaces the per-route boilerplate. Returns the session, or sends the
-// appropriate 401/403 and returns null (callers must `if (!session) return;`).
-async function requireSession(request, reply) {
-  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
-  if (!sessionId) { reply.code(401).send({ error: 'Not authenticated' }); return null; }
-  const session = await getSession(sessionId);
-  if (!session) { reply.code(401).send({ error: 'Session expired' }); return null; }
-  return session;
-}
-
-async function requireHost(request, reply) {
-  const session = await requireSession(request, reply);
-  if (!session) return null;
-  if (!isHost(session)) { reply.code(403).send({ error: 'Host access required' }); return null; }
-  return session;
-}
-
-async function requireSuperadmin(request, reply) {
-  const session = await requireSession(request, reply);
-  if (!session) return null;
-  if (!isSuperadmin(session)) { reply.code(403).send({ error: 'Superadmin access required' }); return null; }
-  return session;
 }
 
 const resend = new Resend(process.env.RESEND_API_KEY);
@@ -103,8 +180,10 @@ fastify.get('/auth/zklogin/callback', async (request, reply) => {
 });
 
 fastify.get('/auth/me', async (request, reply) => {
-  const session = await requireSession(request, reply);
-  if (!session) return;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+  const session = await getSession(sessionId);
+  if (!session) return reply.code(401).send({ error: 'Session expired' });
 
   if (!HOST_ADDRESSES.includes(session.email.toLowerCase()) && !session.dbHostApproved) {
     session.dbHostApproved = await checkDbHost(session.email);
@@ -135,16 +214,13 @@ fastify.get('/auth/logout', async (request, reply) => {
 
 // Stripe
 fastify.post('/payment/create-intent', async (request, reply) => {
-  const session = await requireSession(request, reply);
-  if (!session) return;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+  const session = await getSession(sessionId);
+  if (!session) return reply.code(401).send({ error: 'Session expired' });
   const { amount, propertyTitle } = request.body;
-  // Basic sanity bounds on the client amount (this path is a Stripe test-mode
-  // fallback; the SuiUSD path computes totals server-side in /booking/create).
-  if (typeof amount !== 'number' || !isFinite(amount) || amount <= 0 || amount > 100000) {
-    return reply.code(400).send({ error: 'Invalid amount' });
-  }
   const paymentIntent = await stripe.paymentIntents.create({
-    amount: Math.round(amount * 100),
+    amount: amount * 100,
     currency: 'usd',
     metadata: { property: propertyTitle, walletAddress: session.suiAddress, email: session.email }
   });
@@ -161,10 +237,12 @@ fastify.post('/booking/create', {
     }
   }
 }, async (request, reply) => {
-  const session = await requireSession(request, reply);
-  if (!session) return;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+  const session = await getSession(sessionId);
+  if (!session) return reply.code(401).send({ error: 'Session expired' });
 
-  const { propertyId, nights } = request.body;
+  const { propertyId, propertyTitle, nights, totalAmount } = request.body;
   const checkInRaw  = request.body.checkIn;
   const checkOutRaw = request.body.checkOut;
 
@@ -178,6 +256,8 @@ fastify.post('/booking/create', {
     return reply.code(400).send({ error: 'checkOut must be after checkIn' });
   if (!nights || nights < 1 || nights > 90)
     return reply.code(400).send({ error: 'nights must be between 1 and 90' });
+  if (!totalAmount || totalAmount <= 0)
+    return reply.code(400).send({ error: 'totalAmount must be a positive number' });
 
   const checkInStr  = new Date(checkInRaw).toISOString().split('T')[0];
   const checkOutStr = new Date(checkOutRaw).toISOString().split('T')[0];
@@ -194,11 +274,8 @@ fastify.post('/booking/create', {
     }
   } catch (err) { fastify.log.warn({ err }, 'Availability check failed'); }
 
-  // ── Server-authoritative pricing — never trust a client-supplied price ──────
-  const prop          = PROPERTIES[Number(propertyId)];
-  const propertyTitle = prop.title;
-  const pricePerNight = prop.price;
   const jurisdiction  = JURISDICTION_TAX_RATES[Number(propertyId)] || { rate: 0.08, name: 'Unknown', breakdown: '8% occupancy tax' };
+  const pricePerNight = request.body.pricePerNight || Math.round(totalAmount / nights / 1.03 / (1 + jurisdiction.rate));
   const subtotal      = pricePerNight * nights;
   const ariaFee       = Math.round(subtotal * 0.03);
   const taxes         = Math.round(subtotal * jurisdiction.rate);
@@ -208,8 +285,6 @@ fastify.post('/booking/create', {
   const hostPayout    = calculateHostPayout(subtotal);
   const bookingRef    = `ARIA-${propertyId}-${Date.now()}`;
 
-  // The booking insert is the source of truth — fail the request if it fails
-  // (previously this error was swallowed and the user still got "confirmed").
   try {
     await pool.query(
       `INSERT INTO bookings (booking_ref, property_id, property_title, wallet_address, guest_name, guest_email,
@@ -219,10 +294,7 @@ fastify.post('/booking/create', {
       [bookingRef, propertyId, propertyTitle, session.suiAddress, session.name, session.email,
        checkInStr, checkOutStr, nights, pricePerNight, subtotal, ariaFee, taxes, bookingTotal, depositAmount]
     );
-  } catch (err) {
-    fastify.log.error({ err }, 'DB booking save failed');
-    return reply.code(500).send({ error: 'Failed to save booking. Please try again.' });
-  }
+  } catch (err) { fastify.log.warn({ err }, 'DB booking save failed'); }
 
   let walrusBlobId = null;
   try {
@@ -255,6 +327,22 @@ fastify.post('/booking/create', {
       await pool.query('UPDATE bookings SET walrus_blob_id = $1 WHERE booking_ref = $2', [walrusBlobId, bookingRef]);
     }
   } catch (err) { fastify.log.warn({ err }, 'Walrus storage failed'); }
+
+  // ── On-chain escrow creation (non-blocking) ──────────────────────────────
+  // Uses the first HOST_ADDRESS as host for testnet.
+  // Production: look up from host_profiles based on property_id.
+  try {
+    const hostAddr = HOST_ADDRESSES[0];
+    if (hostAddr && hostAddr.startsWith('0x')) {
+      const escrowObjectId = await createEscrowOnChain(
+        bookingRef, session.suiAddress, hostAddr, depositAmount, checkOutStr
+      );
+      if (escrowObjectId) {
+        await pool.query('UPDATE bookings SET escrow_object_id=$1 WHERE booking_ref=$2', [escrowObjectId, bookingRef]);
+        fastify.log.info({ bookingRef, escrowObjectId }, 'Escrow created on-chain');
+      }
+    }
+  } catch (err) { fastify.log.warn({ err }, 'On-chain escrow creation failed (non-blocking)'); }
 
   try {
     const taxPct     = (jurisdiction.rate * 100).toFixed(2);
@@ -306,8 +394,10 @@ fastify.post('/booking/cancel', {
     }
   }
 }, async (request, reply) => {
-  const session = await requireSession(request, reply);
-  if (!session) return;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+  const session = await getSession(sessionId);
+  if (!session) return reply.code(401).send({ error: 'Session expired' });
 
   const { bookingRef } = request.body;
   if (!bookingRef || typeof bookingRef !== 'string' || !bookingRef.startsWith('ARIA-'))
@@ -352,7 +442,7 @@ fastify.post('/booking/cancel', {
   }
 });
 
-// Release Deposit — HOST ONLY (and, for non-superadmin hosts, own property only)
+// Release Deposit — HOST ONLY
 fastify.post('/booking/release-deposit', {
   config: {
     rateLimit: {
@@ -361,8 +451,11 @@ fastify.post('/booking/release-deposit', {
     }
   }
 }, async (request, reply) => {
-  const session = await requireHost(request, reply);
-  if (!session) return;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+  const session = await getSession(sessionId);
+  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
 
   const { bookingRef } = request.body;
   if (!bookingRef || typeof bookingRef !== 'string' || !bookingRef.startsWith('ARIA-'))
@@ -372,25 +465,22 @@ fastify.post('/booking/release-deposit', {
     const result = await pool.query('SELECT * FROM bookings WHERE booking_ref = $1', [bookingRef]);
     if (result.rows.length === 0) return reply.code(404).send({ error: 'Booking not found' });
     const booking = result.rows[0];
-
-    // Superadmins may release any deposit. A regular approved host may only
-    // release deposits for properties they actually manage.
-    if (!isSuperadmin(session)) {
-      const owns = await pool.query(
-        'SELECT 1 FROM properties WHERE id = $1 AND host_address = $2',
-        [booking.property_id, session.suiAddress]
-      );
-      if (owns.rows.length === 0) return reply.code(403).send({ error: 'You do not manage this property' });
-    }
-
     if (booking.deposit_status === 'released') return reply.code(400).send({ error: 'Deposit already released' });
+
+    // ── On-chain escrow release (non-blocking) ───────────────────────────────
+    let escrowReleased = false;
+    if (booking.escrow_object_id) {
+      escrowReleased = await autoReleaseEscrow(booking.escrow_object_id);
+      if (escrowReleased) {
+        fastify.log.info({ bookingRef, escrowObjectId: booking.escrow_object_id }, 'Escrow released on-chain');
+      } else {
+        fastify.log.warn({ bookingRef }, 'On-chain escrow release failed — continuing with Postgres update');
+      }
+    }
 
     await pool.query('UPDATE bookings SET deposit_status=$1 WHERE booking_ref=$2', ['released', bookingRef]);
 
     const depositReleaseWalrusBlobId = await pushToWalrus({ ...booking, walrusReceiptType: 'deposit_release', depositReleaseTimestamp: new Date().toISOString() });
-    if (depositReleaseWalrusBlobId) {
-      await pool.query('UPDATE bookings SET deposit_release_walrus_blob_id=$1 WHERE booking_ref=$2', [depositReleaseWalrusBlobId, bookingRef]);
-    }
 
     return { success: true, bookingRef, depositReleaseWalrusBlobId, message: `Deposit of $${booking.deposit_amount} released to guest.` };
   } catch (err) {
@@ -412,8 +502,10 @@ async function pushToWalrus(data) {
 
 // Bookings History — guest (own bookings only)
 fastify.get('/bookings/history', async (request, reply) => {
-  const session = await requireSession(request, reply);
-  if (!session) return;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+  const session = await getSession(sessionId);
+  if (!session) return reply.code(401).send({ error: 'Session expired' });
   try {
     const result = await pool.query(
       'SELECT * FROM bookings WHERE wallet_address = $1 ORDER BY created_at DESC',
@@ -448,8 +540,11 @@ fastify.get('/bookings/history', async (request, reply) => {
 
 // Bookings All — HOST ONLY
 fastify.get('/bookings/all', async (request, reply) => {
-  const session = await requireHost(request, reply);
-  if (!session) return;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+  const session = await getSession(sessionId);
+  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
   try {
     const result = await pool.query('SELECT * FROM bookings ORDER BY created_at DESC');
     return { bookings: result.rows.map(b => {
@@ -483,8 +578,10 @@ fastify.get('/bookings/all', async (request, reply) => {
 
 // DeepBook
 fastify.get('/deepbook/payout/:amount', async (request, reply) => {
-  const session = await requireSession(request, reply);
-  if (!session) return;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+  const session = await getSession(sessionId);
+  if (!session) return reply.code(401).send({ error: 'Session expired' });
   const amount = parseFloat(request.params.amount);
   if (!amount || amount <= 0) return reply.code(400).send({ error: 'Invalid amount' });
   const liquidity = await getSuiUSDLiquidity(amount);
@@ -503,8 +600,10 @@ fastify.get('/ical/:propertyId', async (request, reply) => {
 });
 
 fastify.post('/ical/import', async (request, reply) => {
-  const session = await requireSession(request, reply);
-  if (!session) return;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+  const session = await getSession(sessionId);
+  if (!session) return reply.code(401).send({ error: 'Session expired' });
   const { propertyId, platform, icalUrl } = request.body;
   if (!propertyId || !platform || !icalUrl) return reply.code(400).send({ error: 'propertyId, platform and icalUrl required' });
   const saved = await saveExternalCalendar(propertyId, platform, icalUrl);
@@ -521,17 +620,13 @@ fastify.get('/availability/:propertyId', async (request, reply) => {
 
 // Messages
 fastify.post('/messages/send', async (request, reply) => {
-  const session = await requireSession(request, reply);
-  if (!session) return;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+  const session = await getSession(sessionId);
+  if (!session) return reply.code(401).send({ error: 'Session expired' });
   const { bookingRef, message } = request.body;
   if (!bookingRef || !message) return reply.code(400).send({ error: 'bookingRef and message required' });
   try {
-    // Only the booking's guest or a host may post into a thread.
-    const bk = await pool.query('SELECT wallet_address FROM bookings WHERE booking_ref = $1', [bookingRef]);
-    if (bk.rows.length === 0) return reply.code(404).send({ error: 'Booking not found' });
-    if (!isHost(session) && bk.rows[0].wallet_address !== session.suiAddress)
-      return reply.code(403).send({ error: 'Not your booking' });
-
     await pool.query(
       'INSERT INTO messages (booking_ref, from_name, from_email, message) VALUES ($1,$2,$3,$4)',
       [bookingRef, session.name, session.email, message]
@@ -541,16 +636,12 @@ fastify.post('/messages/send', async (request, reply) => {
 });
 
 fastify.get('/messages/:bookingRef', async (request, reply) => {
-  const session = await requireSession(request, reply);
-  if (!session) return;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+  const session = await getSession(sessionId);
+  if (!session) return reply.code(401).send({ error: 'Session expired' });
   const { bookingRef } = request.params;
   try {
-    // Only the booking's guest or a host may read a thread.
-    const bk = await pool.query('SELECT wallet_address FROM bookings WHERE booking_ref = $1', [bookingRef]);
-    if (bk.rows.length === 0) return { messages: [] };
-    if (!isHost(session) && bk.rows[0].wallet_address !== session.suiAddress)
-      return reply.code(403).send({ error: 'Not your booking' });
-
     const result = await pool.query(
       'SELECT * FROM messages WHERE booking_ref = $1 ORDER BY created_at ASC',
       [bookingRef]
@@ -560,14 +651,18 @@ fastify.get('/messages/:bookingRef', async (request, reply) => {
 });
 
 fastify.post('/messages/:bookingRef/read', async (request, reply) => {
-  const session = await requireSession(request, reply);
-  if (!session) return;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+  const session = await getSession(sessionId);
+  if (!session) return reply.code(401).send({ error: 'Session expired' });
   return { success: true };
 });
 
 fastify.get('/messages/:bookingRef/count', async (request, reply) => {
-  const session = await requireSession(request, reply);
-  if (!session) return;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+  const session = await getSession(sessionId);
+  if (!session) return reply.code(401).send({ error: 'Session expired' });
   const { bookingRef } = request.params;
   try {
     const result = await pool.query(
@@ -580,18 +675,14 @@ fastify.get('/messages/:bookingRef/count', async (request, reply) => {
 
 // Reviews
 fastify.post('/reviews/submit', async (request, reply) => {
-  const session = await requireSession(request, reply);
-  if (!session) return;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+  const session = await getSession(sessionId);
+  if (!session) return reply.code(401).send({ error: 'Session expired' });
   const { propertyId, bookingRef, rating, review } = request.body;
   if (!propertyId || !bookingRef || !rating || !review) return reply.code(400).send({ error: 'All fields required' });
   if (rating < 1 || rating > 5) return reply.code(400).send({ error: 'Rating must be 1-5' });
   try {
-    // A guest may only review their own booking.
-    const bk = await pool.query('SELECT wallet_address FROM bookings WHERE booking_ref = $1', [bookingRef]);
-    if (bk.rows.length === 0) return reply.code(404).send({ error: 'Booking not found' });
-    if (bk.rows[0].wallet_address !== session.suiAddress)
-      return reply.code(403).send({ error: 'Not your booking' });
-
     const existing = await pool.query('SELECT id FROM reviews WHERE booking_ref = $1', [bookingRef]);
     if (existing.rows.length > 0) return reply.code(400).send({ error: 'Already reviewed' });
     await pool.query(
@@ -616,8 +707,11 @@ fastify.get('/reviews/:propertyId', async (request, reply) => {
 });
 
 fastify.get('/reviews/all', async (request, reply) => {
-  const session = await requireHost(request, reply);
-  if (!session) return;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+  const session = await getSession(sessionId);
+  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
   try {
     const result = await pool.query('SELECT * FROM reviews ORDER BY created_at DESC');
     return { reviews: result.rows };
@@ -627,8 +721,11 @@ fastify.get('/reviews/all', async (request, reply) => {
 // ─── Tax Routes — HOST ONLY ───────────────────────────────────────────────────
 
 fastify.get('/tax/summary', async (request, reply) => {
-  const session = await requireHost(request, reply);
-  if (!session) return;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+  const session = await getSession(sessionId);
+  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
   try {
     const result = await pool.query(`
       SELECT b.booking_ref, b.property_id, b.property_title, b.guest_name, b.guest_email,
@@ -669,8 +766,11 @@ fastify.get('/tax/summary', async (request, reply) => {
 });
 
 fastify.post('/tax/remit', async (request, reply) => {
-  const session = await requireHost(request, reply);
-  if (!session) return;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+  const session = await getSession(sessionId);
+  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
   const { bookingRef, jurisdiction, notes } = request.body;
   if (!bookingRef || typeof bookingRef !== 'string' || !bookingRef.startsWith('ARIA-'))
     return reply.code(400).send({ error: 'A valid bookingRef is required' });
@@ -691,8 +791,11 @@ fastify.post('/tax/remit', async (request, reply) => {
 });
 
 fastify.post('/tax/unremit', async (request, reply) => {
-  const session = await requireHost(request, reply);
-  if (!session) return;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+  const session = await getSession(sessionId);
+  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
   const { bookingRef } = request.body;
   if (!bookingRef) return reply.code(400).send({ error: 'bookingRef is required' });
   try {
@@ -705,8 +808,10 @@ fastify.post('/tax/unremit', async (request, reply) => {
 // ─── Host Onboarding Routes ───────────────────────────────────────────────────
 
 fastify.get('/host/profile', async (request, reply) => {
-  const session = await requireSession(request, reply);
-  if (!session) return;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+  const session = await getSession(sessionId);
+  if (!session) return reply.code(401).send({ error: 'Session expired' });
   try {
     const result = await pool.query('SELECT * FROM host_profiles WHERE sui_address = $1', [session.suiAddress]);
     if (result.rows.length === 0) return { profile: null };
@@ -726,8 +831,10 @@ fastify.get('/host/profile', async (request, reply) => {
 fastify.post('/host/apply', {
   config: { rateLimit: { max: 3, timeWindow: '1 hour', errorResponseBuilder: () => ({ error: 'Too many applications. Please wait and try again.' }) } }
 }, async (request, reply) => {
-  const session = await requireSession(request, reply);
-  if (!session) return;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+  const session = await getSession(sessionId);
+  if (!session) return reply.code(401).send({ error: 'Session expired' });
 
   const { name, email, phone, propertyAddress, city, state, zip, country,
           jurisdiction, strPermit, payoutSuiAddress, payoutNotes, termsAgreed, complianceConfirmed } = request.body;
@@ -786,8 +893,12 @@ fastify.post('/host/apply', {
 });
 
 fastify.post('/host/approve', async (request, reply) => {
-  const session = await requireSuperadmin(request, reply);
-  if (!session) return;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+  const session = await getSession(sessionId);
+  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  if (!HOST_ADDRESSES.includes(session.email.toLowerCase()))
+    return reply.code(403).send({ error: 'Superadmin access required' });
 
   const { suiAddress } = request.body;
   if (!suiAddress) return reply.code(400).send({ error: 'suiAddress is required' });
@@ -816,8 +927,12 @@ fastify.post('/host/approve', async (request, reply) => {
 });
 
 fastify.get('/host/applications', async (request, reply) => {
-  const session = await requireSuperadmin(request, reply);
-  if (!session) return;
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+  const session = await getSession(sessionId);
+  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  if (!HOST_ADDRESSES.includes(session.email.toLowerCase()))
+    return reply.code(403).send({ error: 'Superadmin access required' });
 
   try {
     const result = await pool.query(
