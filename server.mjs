@@ -42,14 +42,14 @@ try { await initDB(); } catch (err) { console.error('DB init failed:', err.messa
 async function createEscrowOnChain(bookingRef, guestAddr, hostAddr, depositAmount, checkOutStr) {
   if (!deployerKeypair || !process.env.ESCROW_PACKAGE_ID) return null;
   try {
-    const depositMist = BigInt(depositAmount) * 1000n; // symbolic testnet amount
-
-    // TESTNET: short expiry for easy testing (5 minutes from now)
+    const depositMist = BigInt(Math.max(1, depositAmount)) * 1000n;
+    // TESTNET: 5-minute expiry for easy testing
     // MAINNET: const expiryMs = BigInt(new Date(checkOutStr + 'T00:00:00Z').getTime()) + 432_000_000n;
-    const expiryMs = BigInt(Date.now()) + 300_000n; // 5 minutes
+    const expiryMs = BigInt(Date.now()) + 300_000n;
 
     const tx = new Transaction();
     tx.setSender(deployerKeypair.toSuiAddress());
+    tx.setGasBudget(50_000_000);
 
     const [coin] = tx.splitCoins(tx.gas, [tx.pure.u64(depositMist)]);
 
@@ -60,20 +60,26 @@ async function createEscrowOnChain(bookingRef, guestAddr, hostAddr, depositAmoun
         tx.pure.string(bookingRef),
         tx.pure.address(guestAddr),
         tx.pure.address(hostAddr),
-        tx.pure.address(deployerKeypair.toSuiAddress()), // arbitrator
+        tx.pure.address(deployerKeypair.toSuiAddress()),
         tx.pure.u64(expiryMs),
         coin,
-        tx.object('0x6'), // Sui Clock object
+        tx.object('0x6'), // Clock
       ],
     });
 
-    const result = await suiClient.signAndExecuteTransaction({
-      transaction: tx,
-      signer: deployerKeypair,
-      options: { showObjectChanges: true },
+    // v2.x pattern: sign first, then executeTransactionBlock
+    const { bytes, signature } = await tx.sign({ client: suiClient, signer: deployerKeypair });
+    const result = await suiClient.executeTransactionBlock({
+      transactionBlock: bytes,
+      signature,
+      options: { showObjectChanges: true, showEffects: true },
     });
 
-    // Extract the shared BookingEscrow object ID from the result
+    if (result.effects?.status?.status === 'failure') {
+      console.warn('Escrow tx failed on-chain:', result.effects.status.error);
+      return null;
+    }
+
     const escrowObj = result.objectChanges?.find(
       c => c.type === 'created' && c.objectType?.includes('BookingEscrow')
     );
@@ -84,27 +90,33 @@ async function createEscrowOnChain(bookingRef, guestAddr, hostAddr, depositAmoun
   }
 }
 
-// Calls auto_release on an existing BookingEscrow object.
-// Callable by anyone after expiry — deployer calls it on the host's behalf.
 async function autoReleaseEscrow(escrowObjectId) {
   if (!deployerKeypair || !escrowObjectId || !process.env.ESCROW_PACKAGE_ID) return false;
   try {
     const tx = new Transaction();
     tx.setSender(deployerKeypair.toSuiAddress());
+    tx.setGasBudget(20_000_000);
 
     tx.moveCall({
       target: `${process.env.ESCROW_PACKAGE_ID}::${process.env.ESCROW_MODULE_NAME || 'escrow'}::auto_release`,
       typeArguments: ['0x2::sui::SUI'],
       arguments: [
         tx.object(escrowObjectId),
-        tx.object('0x6'), // Sui Clock object
+        tx.object('0x6'), // Clock
       ],
     });
 
-    await suiClient.signAndExecuteTransaction({
-      transaction: tx,
-      signer: deployerKeypair,
+    const { bytes, signature } = await tx.sign({ client: suiClient, signer: deployerKeypair });
+    const result = await suiClient.executeTransactionBlock({
+      transactionBlock: bytes,
+      signature,
+      options: { showEffects: true },
     });
+
+    if (result.effects?.status?.status === 'failure') {
+      console.warn('autoRelease tx failed on-chain:', result.effects.status.error);
+      return false;
+    }
     return true;
   } catch (err) {
     console.warn('autoReleaseEscrow failed (non-blocking):', err.message);
