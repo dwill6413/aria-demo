@@ -120,4 +120,4 @@ export async function initDB() {
   console.log('Database initialized');
 }
 
-export { pool, initDB };
+export { pool };
