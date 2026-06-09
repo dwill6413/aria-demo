@@ -93,10 +93,13 @@ module aria_escrow::escrow {
 
     /// Create a new escrow and share it on-chain.
     /// Called at booking confirmation. Guest locks funds into the escrow.
+    /// guest_addr is passed explicitly so the ARIA backend (deployer) can sign
+    /// the transaction while correctly recording the guest's Sui address.
     /// expiry_ms = checkout_unix_ms + FIVE_DAYS_MS (computed by ARIA backend).
     /// On testnet use a short window (e.g. now + 60_000) to test without waiting.
     public fun create_escrow<T>(
         booking_ref: String,
+        guest_addr:  address,
         host:        address,
         arbitrator:  address,
         expiry_ms:   u64,
@@ -111,7 +114,7 @@ module aria_escrow::escrow {
         let escrow = BookingEscrow<T> {
             id:           object::new(ctx),
             booking_ref,
-            guest:        tx_context::sender(ctx),
+            guest:        guest_addr,
             host,
             arbitrator,
             amount,

@@ -45,7 +45,7 @@ module aria_escrow::escrow_tests {
             clock::set_for_testing(&mut clock, T_BEFORE);
             let coin = coin::mint_for_testing<SUI>(DEPOSIT, ts::ctx(scenario));
             escrow::create_escrow<SUI>(
-                ref_str(), HOST, ARBITRATOR, T_EXPIRY,
+                ref_str(), GUEST, HOST, ARBITRATOR, T_EXPIRY,
                 coin, &clock, ts::ctx(scenario)
             );
             clock::destroy_for_testing(clock);
@@ -383,7 +383,7 @@ module aria_escrow::escrow_tests {
             clock::set_for_testing(&mut clock, T_BEFORE);
             let coin = coin::mint_for_testing<SUI>(0, ts::ctx(&mut s));
             escrow::create_escrow<SUI>(
-                ref_str(), HOST, ARBITRATOR, T_EXPIRY,
+                ref_str(), GUEST, HOST, ARBITRATOR, T_EXPIRY,
                 coin, &clock, ts::ctx(&mut s)
             );
             clock::destroy_for_testing(clock);
@@ -472,7 +472,7 @@ module aria_escrow::escrow_tests {
             let coin = coin::mint_for_testing<SUI>(DEPOSIT, ts::ctx(&mut s));
             // expiry = T_BEFORE < T_AFTER — already in the past
             escrow::create_escrow<SUI>(
-                ref_str(), HOST, ARBITRATOR, T_BEFORE,
+                ref_str(), GUEST, HOST, ARBITRATOR, T_BEFORE,
                 coin, &clock, ts::ctx(&mut s)
             );
             clock::destroy_for_testing(clock);
