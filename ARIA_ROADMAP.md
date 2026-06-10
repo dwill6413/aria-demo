@@ -1,5 +1,5 @@
 # ARIA — Product Roadmap & AI Handoff Document
-**Version:** 1.0 | **Created:** June 02, 2026
+**Version:** 2.0 | **Updated:** June 10, 2026
 **Purpose:** Complete handoff for an AI assistant continuing ARIA development.
 Read this entire document before writing any code.
 
@@ -15,12 +15,11 @@ on-chain primitives.
 
 The stablecoin thesis is the north star: ARIA uses SuiUSD as its primary payment
 rail. On-chain escrow, instant settlement, and non-custodial architecture are the
-real differentiators — not just marketing. The roadmap below makes those claims true.
+real differentiators — not just marketing.
 
 **Existing documentation (read these first):**
 - `ARIA_HANDOFF.md` v3.0 — accurate technical state of deployed code
 - `ARIA_REMEDIATION.md` — full security change log with rationale
-- `ARIA_CODE_REVIEW.md` — original findings report
 
 **Live deployments:**
 - Frontend: `https://aria-demo-psi.vercel.app` (Vercel, Next.js)
@@ -39,269 +38,93 @@ Everything below is live in production on testnet. Do not rebuild it.
 - Server-side pricing from `catalog.mjs` (tamper-proof)
 - AI agent (Grok) with server-derived role, per-tool authorization
 - Booking CRUD (create, cancel, history) — REST + AI paths
-- Security deposit tracked in Postgres (`deposit_status`: held/released)
+- **On-chain escrow** — `BookingEscrow` shared object created at booking confirmation
 - Walrus immutable receipts (booking + cancellation + deposit release)
 - Resend email confirmations
 - Stripe fallback payment intent
 - iCal export/import + availability checking
 - Host dashboard (bookings, revenue, tax, applications, reviews)
 - Guest bookings page with correct timezone-safe date display
-- 9-table Postgres schema with indexes (see `db.mjs`)
+- 10-table Postgres schema with indexes including `escrow_object_id` column
 - RBAC: `requireSession`, `requireHost`, `requireSuperadmin` helpers
 - IDOR protections on messages, reviews, deposit release
 - XSS protection on AI chat output
-
-**What the deposit is NOT yet:** The deposit is currently a Postgres flag, not a real
-on-chain escrow. The UI says "held in Sui escrow" — that becomes true in Phase 1.
+- Mobile-responsive nav with hamburger menu (all 4 pages)
 
 ---
 
 ## 3. Roadmap
 
-### PHASE 1 — Security Deposit Smart Contract (BUILD FIRST)
-**Priority: Highest. Everything else depends on this.**
+### ✅ PHASE 1 — Security Deposit Smart Contract
+**Status: COMPLETE — deployed and verified end-to-end on June 10, 2026**
 
-#### Why this first
-The guest PII access lifecycle (Phase 2) is tied to the deposit lifecycle:
-deposit released → PII access revoked. Build the deposit contract first so Phase 2
-is designed correctly from the start rather than retrofitted. Additionally, the
-deposit contract is what makes ARIA's core claim real — on-chain escrow, not a
-database flag.
+#### What was built
+- Move smart contract (`contracts/aria_escrow/sources/escrow.move`)
+- 23/23 unit tests passing (`contracts/aria_escrow/tests/escrow_tests.move`)
+- Deployed to Sui testnet — **Package ID:**
+  `0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe`
+- `escrow_object_id` column added to `bookings` table in `db.mjs`
+- `/booking/create` calls `create_escrow` on-chain; stores returned object ID
+- `/booking/release-deposit` calls `auto_release` on-chain
+- Node.js upgraded to 22 in `nixpacks.toml` (required by `@mysten/sui@2.16.3`)
+- Transaction signing uses raw JSON-RPC fetch (bypasses SDK client incompatibilities)
 
-#### Architecture Decision (already made, do not re-debate)
-- **One global package** deployed once to Sui testnet
-- **One `BookingEscrow` shared object per booking** created by the package
-- No global balance — each booking's funds are isolated in their own object
-- ARIA never holds funds — the smart contract does
-- No admin drain path, no pause function, no upgrade authority on mainnet
+#### Deployed contract details
+| Item | Value |
+|---|---|
+| Package ID | `0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe` |
+| Module | `escrow` |
+| Network | Sui testnet |
+| UpgradeCap | `0x41f043cf28d0bb77ef6031c5208b611bdd673992afa9e27763b41033e4a327eb` |
+| Deployer | `0x24bd37a7d13a78de81bd5345899da8b7a4d41ebf26fc1af6f934f9841c7d97f3` |
+| Coin type | `0x2::sui::SUI` (testnet) → SuiUSD on mainnet (generic `Coin<T>`, no code change) |
 
-#### The Contract Spec
+#### Contract functions (all implemented and tested)
+- `create_escrow<T>` — called at booking; guest addr passed explicitly; shared object created
+- `auto_release<T>` — called by anyone after expiry; full deposit returned to guest
+- `claim_damage<T>` — host files claim before expiry; moves to STATUS_CLAIMED
+- `accept_claim<T>` — guest accepts; funds split
+- `dispute_claim<T>` — guest disputes; moves to STATUS_DISPUTED
+- `resolve_dispute<T>` — arbitrator splits (guest + host must == amount)
 
-**File structure:**
-```
-contracts/aria_escrow/
-  Move.toml
-  sources/
-    escrow.move
-  tests/
-    escrow_tests.move
-```
-
-**`Move.toml`:**
-```toml
-[package]
-name = "aria_escrow"
-version = "0.0.1"
-edition = "2024.beta"
-
-[dependencies]
-Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "testnet" }
-
-[addresses]
-aria_escrow = "0x0"
-```
-
-**Core struct:**
-```move
-public struct BookingEscrow<phantom T> has key {
-    id: UID,
-    booking_ref: String,          // e.g. "ARIA-1-1234567890"
-    guest: address,               // suiAddress from session
-    host: address,                // host's suiAddress
-    arbitrator: address,          // ARIA deployer multisig — can only split to guest/host
-    amount: u64,                  // total deposited (in MIST or token base units)
-    coin: Coin<T>,                // the actual locked funds
-    expiry_ms: u64,               // checkout timestamp + 5 days in milliseconds
-    status: u8,                   // 0=active 1=released 2=claimed 3=disputed 4=resolved
-    claim_amount: u64,            // set by host during claim_damage, 0 otherwise
-}
-```
-
-**Error codes:**
-```move
-const ENotGuest: u64 = 0;
-const ENotHost: u64 = 1;
-const ENotArbitrator: u64 = 2;
-const ENotExpired: u64 = 3;
-const EAlreadyExpired: u64 = 4;
-const EClaimExceedsDeposit: u64 = 5;
-const EWrongStatus: u64 = 6;
-const EZeroAmount: u64 = 7;
-```
-
-**Functions:**
-
-```move
-// Called at booking confirmation. Guest locks funds.
-// Signed by: guest (client-side zkLogin transaction)
-public fun create_escrow<T>(
-    booking_ref: String,
-    host: address,
-    arbitrator: address,
-    expiry_ms: u64,
-    coin: Coin<T>,
-    clock: &Clock,
-    ctx: &mut TxContext
-): BookingEscrow<T>
-
-// Called after expiry with no active claim. Returns full deposit to guest.
-// Callable by: anyone (ARIA backend calls this automatically after 5 days)
-public fun auto_release<T>(
-    escrow: BookingEscrow<T>,
-    clock: &Clock,
-    ctx: &mut TxContext
-)
-
-// Called by host during inspection window (before expiry).
-// claim_amount goes to host, remainder back to guest.
-// Signed by: host (client-side zkLogin transaction)
-public fun claim_damage<T>(
-    escrow: BookingEscrow<T>,
-    claim_amount: u64,
-    clock: &Clock,
-    ctx: &mut TxContext
-)
-
-// Called by guest to accept a damage claim without dispute.
-// Signed by: guest
-public fun accept_claim<T>(
-    escrow: BookingEscrow<T>,
-    ctx: &mut TxContext
-)
-
-// Called by ARIA arbitrator when guest disputes a damage claim.
-// guest_amount + host_amount must == escrow.amount exactly (enforced by Move).
-// Signed by: arbitrator address
-public fun resolve_dispute<T>(
-    escrow: BookingEscrow<T>,
-    guest_amount: u64,
-    host_amount: u64,
-    ctx: &mut TxContext
-)
-```
-
-**Core security invariants (compiler-enforced by Move's linear types):**
-
-1. `coin` in `BookingEscrow` is a linear type — it cannot be copied or dropped,
-   only transferred. Every function that touches it must consume it and produce
-   outputs summing to the exact same value. If outputs don't sum to input, the
-   contract does not compile.
-
-2. `create_escrow` asserts `coin.value > 0` (no zero-value escrows).
-
-3. `claim_damage` asserts `claim_amount <= escrow.amount` before splitting.
-   belt-and-suspenders — `coin::split` would abort anyway, but explicit assertion
-   produces a readable error code.
-
-4. `resolve_dispute` asserts `guest_amount + host_amount == escrow.amount` before
-   any fund movement.
-
-5. `arbitrator` can only ever split funds between `guest` and `host`. The
-   arbitrator address is NOT stored globally — it's per-escrow, set at creation.
-   If the ARIA arbitrator key is compromised, it can only affect escrows where
-   `dispute` has been called. It cannot drain inactive escrows.
-
-6. No arithmetic can overflow — Move `u64` arithmetic aborts on overflow.
-
-7. No reentrancy — Move's object model makes this impossible by design.
-
-**Unit tests to write in `escrow_tests.move`:**
-- Happy path: create → auto_release after expiry → guest receives full amount
-- Damage claim: create → claim_damage → host receives claim, guest receives remainder
-- Claim cap: attempt to claim more than deposit → aborts with EClaimExceedsDeposit
-- Pre-expiry auto_release: attempt auto_release before expiry → aborts with ENotExpired
-- Dispute: create → claim_damage → resolve_dispute → both parties receive correct splits
-- Zero deposit: attempt create_escrow with 0 coin → aborts with EZeroAmount
-- Wrong status: attempt to call release on already-released escrow → aborts with EWrongStatus
-
-#### ARIA Backend Changes
-
-**`db.mjs`:** Add column to bookings table:
-```sql
-ALTER TABLE bookings ADD COLUMN IF NOT EXISTS escrow_object_id TEXT;
-```
-
-**`server.mjs` changes:**
-- `/booking/create`: after saving the booking to Postgres, construct and submit a
-  Sui PTB (Programmable Transaction Block) calling `create_escrow`. Store the
-  returned object ID in `bookings.escrow_object_id`.
-- `/booking/release-deposit`: after updating Postgres status, submit a Sui PTB
-  calling `auto_release` (if within normal release) or `resolve_dispute` (if
-  arbitrating). This ALSO triggers Seal PII revocation (Phase 2).
-- New cron/job: every hour, query bookings where `checkout_date + 5 days < NOW()`
-  and `deposit_status = 'held'` and `escrow_object_id IS NOT NULL`. Call
-  `auto_release` on each. Update Postgres to `released`.
-
-**New env vars needed:**
-```
-ESCROW_PACKAGE_ID=0x<deployed package id>
-ESCROW_MODULE_NAME=escrow
-ARIA_DEPLOYER_KEY=<base64 or hex private key for backend signing>
-```
-
-`ARIA_DEPLOYER_KEY` is used for auto_release (permissionless but backend triggers
-it) and dispute resolution. Store in Railway environment variables, never commit.
-
-**Sui SDK usage (already in dependencies `@mysten/sui`):**
+#### How transaction signing works (important for future AI assistants)
+`@mysten/sui@2.16.3` SDK client methods (`signAndExecuteTransaction`,
+`SuiJsonRpcClient`, `SuiGrpcClient`) are incompatible with the deployed Node/SDK
+combination. The working pattern is:
 ```javascript
-import { SuiClient, getFullnodeUrl } from '@mysten/sui/client';
-import { TransactionBlock } from '@mysten/sui/transactions';
-import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
+// 1. Fetch gas price + coin via raw RPC
+const gasPrice = BigInt(await suiRpc('suix_getReferenceGasPrice', []));
+const coins = await suiRpc('suix_getCoins', [sender, '0x2::sui::SUI', null, 1]);
 
-const client = new SuiClient({ url: getFullnodeUrl('testnet') });
-const keypair = Ed25519Keypair.fromSecretKey(process.env.ARIA_DEPLOYER_KEY);
+// 2. Build with explicit params, no client
+tx.setGasPrice(gasPrice);
+tx.setGasBudget(50_000_000n);
+tx.setGasPayment([{ objectId, version, digest }]);
+tx.sharedObjectRef({ objectId: '0x6', initialSharedVersion: 1, mutable: false }); // Clock
+const txBytes = await tx.build(); // no client arg
 
-// Example: call auto_release
-const tx = new TransactionBlock();
-tx.moveCall({
-  target: `${process.env.ESCROW_PACKAGE_ID}::escrow::auto_release`,
-  typeArguments: ['0x2::sui::SUI'], // use actual SuiUSD type on mainnet
-  arguments: [tx.object(escrowObjectId), tx.object('0x6')], // 0x6 = Clock
-});
-const result = await client.signAndExecuteTransactionBlock({
-  transactionBlock: tx,
-  signer: keypair,
-});
+// 3. Sign + submit via raw fetch
+const signed = await deployerKeypair.signTransaction(txBytes);
+await suiRpc('sui_executeTransactionBlock', [base64bytes, [sig], options, 'WaitForLocalExecution']);
 ```
+Do not attempt to use `SuiJsonRpcClient.signAndExecuteTransaction` or
+`SuiGrpcClient` — both fail in the current environment. See `server.mjs`
+`createEscrowOnChain` and `autoReleaseEscrow` functions for the working pattern.
 
-**Note on coin type:** During testnet development, use `0x2::sui::SUI` (testnet SUI
-from faucet) as the escrowed coin. When moving to mainnet, parameterize with the
-actual SuiUSD coin type. The contract is generic `Coin<T>` — no code change needed.
+#### Testnet vs mainnet differences (one line each)
+- **Coin type:** `'0x2::sui::SUI'` → actual SuiUSD coin type address
+- **Expiry:** `Date.now() + 300_000n` (5 min) → `checkoutMs + 432_000_000n` (5 days)
+- **UpgradeCap:** keep for testnet → burn after audit for mainnet
+- **Move.toml:** `rev = "framework/testnet"` → `rev = "framework/mainnet"`
 
-#### Deployment Steps (run once)
-
-```powershell
-# 1. Install Sui CLI (Windows)
-choco install sui
-# OR download binary from github.com/MystenLabs/sui/releases
-
-# 2. Configure testnet
-sui client                              # first-time setup
-sui client switch --env testnet
-
-# 3. Create deployer wallet
-sui client new-address ed25519
-sui client active-address               # copy this address
-
-# 4. Fund with testnet SUI
-# Visit faucet.sui.io, paste deployer address, request tokens
-
-# 5. Build and test
-cd contracts/aria_escrow
-sui move build
-sui move test
-
-# 6. Deploy
-sui client publish --gas-budget 100000000
-
-# 7. Copy Package ID from output → add to Railway env vars as ESCROW_PACKAGE_ID
-# 8. Copy deployer private key → add to Railway env vars as ARIA_DEPLOYER_KEY
-```
-
-**UpgradeCap decision:**
-- Testnet: keep UpgradeCap (you will need to fix things during development)
-- Mainnet: burn UpgradeCap after independent Move audit. Immutable contract = maximum
-  user trust guarantee. Schedule audit before mainnet.
+#### Still pending from Phase 1
+- **Auto-release scheduled job:** cron that queries bookings where
+  `checkout + 5 days < NOW()` and `deposit_status = 'held'` and
+  `escrow_object_id IS NOT NULL`, then calls `auto_release`. Not yet built.
+- **Claim/dispute flows (Phase 3):** `claim_damage`, `dispute_claim`,
+  `resolve_dispute` contract functions exist but backend routes not yet wired.
+- **Production host address lookup:** currently uses deployer address as host.
+  Production should look up `host_profiles.sui_address` by property_id.
 
 ---
 
@@ -315,9 +138,9 @@ who is renting their property. Walrus + Seal resolves both: guest PII is encrypt
 client-side, stored on Walrus, and only the guest and the confirmed host can decrypt
 it. ARIA stores nothing but a pointer (Walrus blob ID). ARIA is a pipe, not a bucket.
 
-Stripe Identity / Persona (third-party KYC) was explicitly considered and rejected
-in favor of Walrus + Seal because the latter is non-custodial end-to-end and
-architecturally aligned with the rest of the stack.
+Stripe Identity / Persona was explicitly considered and rejected in favor of
+Walrus + Seal because the latter is non-custodial end-to-end and architecturally
+aligned with the rest of the stack.
 
 #### Seal overview
 - Seal is live on mainnet (launched September 2025)
@@ -334,324 +157,197 @@ Booking confirmed
     → host's suiAddress added to guest's Seal allowlist
     → host can decrypt guest PII (for check-in logistics, local registration)
 
-During stay
-    → host access active
-
-Checkout + 5-day inspection window
+During stay + 5-day inspection window
     → host access active (needs identity for damage claims)
 
-Deposit released (auto at day 5 OR host releases early)
-    → deposit release triggers BOTH:
-         (a) Postgres deposit_status = 'released'
-         (b) Sui transaction removing host from Seal allowlist
+Deposit released
+    → SAME Sui transaction calls BOTH:
+         (a) escrow::auto_release  (or resolve_dispute)
+         (b) pii_access::revoke_access
     → host access permanently revoked
     → guest's PII is theirs alone again
 
-Dispute (deposit not released within 5 days)
-    → host retains access while dispute is live
-    → access revoked when dispute resolves (deposit_status changes from 'held')
+Dispute active
+    → host retains access while deposit_status = 'held'
 ```
 
-**Access start: booking confirmation** (not check-in date — hosts need to know
-who's coming before they arrive, for check-in logistics and local STR regulations).
+**Access start: booking confirmation** (hosts need identity before guest arrives).
 
-#### The Seal Allowlist Contract
+#### The Seal Allowlist Move Contract
 
-A simple Move module, separate from the escrow contract. Mysten provides allowlist
-examples in the Seal repository — adapt rather than write from scratch.
+A simple Move module, separate from the escrow contract. Adapt from Mysten's
+allowlist examples in the Seal GitHub repo.
 
 ```move
-// One GuestPIIAccess object per guest, owned by the guest
 public struct GuestPIIAccess has key {
     id: UID,
-    guest: address,                    // the guest — always has access
-    allowed_hosts: vector<address>,    // hosts with active bookings
+    guest: address,
+    allowed_hosts: vector<address>,
 }
 
-// Called once by guest when setting up their profile
-public entry fun create_access(ctx: &mut TxContext): GuestPIIAccess
-
-// Called at booking confirmation — adds host to allowlist
-// Can be called by guest or by ARIA backend on guest's behalf
-public entry fun grant_access(
-    access: &mut GuestPIIAccess,
-    host: address,
-    ctx: &mut TxContext
-)
-
-// Called at deposit release — removes host from allowlist
-// Triggered by the same transaction that releases the deposit
-public entry fun revoke_access(
-    access: &mut GuestPIIAccess,
-    host: address,
-    ctx: &mut TxContext
-)
+public entry fun create_access(ctx: &mut TxContext)
+public entry fun grant_access(access: &mut GuestPIIAccess, host: address, ctx: &mut TxContext)
+public entry fun revoke_access(access: &mut GuestPIIAccess, host: address, ctx: &mut TxContext)
 ```
 
-**Important:** `revoke_access` must be called in the SAME Sui transaction as the
-deposit release. This makes revocation atomic with fund release — they cannot be
-decoupled. If the deposit release succeeds, the PII revocation succeeds. If either
-fails, both revert.
-
-#### Database Change
+#### Database change
 
 ```sql
--- Add to guest_verifications table in db.mjs initDB()
 CREATE TABLE IF NOT EXISTS guest_verifications (
-    sui_address       TEXT PRIMARY KEY,
-    walrus_blob_id    TEXT NOT NULL,        -- encrypted PII blob
-    pii_object_id     TEXT NOT NULL,        -- the on-chain GuestPIIAccess object ID
-    phone_verified    BOOLEAN DEFAULT false,
-    created_at        TIMESTAMPTZ DEFAULT NOW()
+    sui_address    TEXT PRIMARY KEY,
+    walrus_blob_id TEXT NOT NULL,   -- encrypted PII blob
+    pii_object_id  TEXT NOT NULL,   -- on-chain GuestPIIAccess object ID
+    phone_verified BOOLEAN DEFAULT false,
+    created_at     TIMESTAMPTZ DEFAULT NOW()
 );
 ```
 
-**That is the ONLY table for this feature. No PII columns. No name. No address.
-No phone number. Just pointers.**
+No PII columns. Just pointers.
 
-#### New Backend Routes (`server.mjs`)
-
+#### New backend routes
 ```
-POST /guest/profile
-  Body: { walrus_blob_id, pii_object_id }
-  Auth: requireSession
-  Action: upsert into guest_verifications
-  Returns: { success: true }
-
-GET /guest/profile
-  Auth: requireSession
-  Returns: { verified: boolean, walrus_blob_id (if exists) }
-
-GET /host/guest-identity/:bookingRef
-  Auth: requireHost
-  Action: verify host owns a confirmed booking with this bookingRef.
-          Return the guest's walrus_blob_id for that booking's guest.
-          Host decrypts client-side — server never sees plaintext.
-  Returns: { walrus_blob_id, pii_object_id }
+POST /guest/profile      — store { walrus_blob_id, pii_object_id }
+GET  /guest/profile      — return { verified, walrus_blob_id }
+GET  /host/guest-identity/:bookingRef — return blob_id for host to decrypt client-side
 ```
 
-#### Booking Gate
-
-In `/booking/create` (server.mjs) and `create_booking` tool (ai_route.mjs), add
-before ANY other logic:
-
+#### Booking gate
+Add to `/booking/create` and AI `create_booking` before any logic:
 ```javascript
-const verification = await pool.query(
-  'SELECT walrus_blob_id FROM guest_verifications WHERE sui_address = $1',
-  [session.suiAddress]
-);
-if (verification.rows.length === 0) {
-  return reply.code(400).send({
-    error: 'Please complete your identity verification before booking.',
-    redirect: '/profile'
-  });
-}
+const v = await pool.query('SELECT 1 FROM guest_verifications WHERE sui_address=$1', [session.suiAddress]);
+if (!v.rows.length) return reply.code(400).send({ error: 'Complete identity verification first', redirect: '/profile' });
 ```
 
-#### `/auth/me` Update
+#### New frontend pages
+- `pages/profile.jsx` — collects legal name, phone, address; encrypts with Seal;
+  stores blob on Walrus; sends only blob ID to backend
+- `pages/host.jsx` — "View Guest Identity" button; fetches blob from Walrus;
+  proves host identity to Seal; decrypts in browser; nothing written to server
 
-Add to the response:
-```javascript
-hasGuestProfile: !!(await pool.query(
-  'SELECT 1 FROM guest_verifications WHERE sui_address = $1',
-  [session.suiAddress]
-)).rows.length
-```
-
-Frontend uses this to show "Complete your profile" prompt.
-
-#### New Frontend Pages
-
-**`pages/profile.jsx` — Guest PII form:**
-1. Form fields: legal name (not Google display name — full name as on government ID),
-   phone number, street address, city, state, ZIP, country
-2. On submit:
-   a. Import Seal SDK: `import { SealClient } from '@mysten/seal'`
-   b. Encrypt form data client-side with Seal using guest's suiAddress as policy
-   c. PUT encrypted blob to Walrus (use existing Walrus publisher endpoint)
-   d. Call `create_access` on the Seal allowlist contract (zkLogin transaction)
-   e. POST `{ walrus_blob_id, pii_object_id }` to `/guest/profile`
-   f. Redirect to booking
-3. Show after: "Your identity is protected. Only your confirmed hosts can access it,
-   and only during your stay + deposit window."
-
-**`pages/bookings.jsx` — no change needed for guests.**
-
-**`pages/host.jsx` — "View Guest Identity" button:**
-- Add to each confirmed booking card
-- On click: call `GET /host/guest-identity/:bookingRef`
-- Fetch encrypted blob from Walrus using returned `walrus_blob_id`
-- Prove host identity to Seal key servers (sign with zkLogin wallet)
-- Seal returns key shares if host is in allowlist
-- Decrypt and display in modal: name, phone, address
-- Nothing written to server — display only, in browser memory
-
-#### New Env Vars Needed
-```
-SEAL_PACKAGE_ID=0x<seal allowlist package id>   # from deployment
-```
-
-#### Integration Point with Phase 1
-In `server.mjs` `/booking/release-deposit`, after updating Postgres, the Sui
-transaction must call BOTH:
-1. `escrow::auto_release` OR `escrow::resolve_dispute`
+#### Integration with Phase 1 (critical)
+`/booking/release-deposit` must call BOTH in the SAME PTB:
+1. `escrow::auto_release`
 2. `pii_access::revoke_access`
 
-These should be in the SAME Programmable Transaction Block (PTB) so they're atomic.
+Use the raw RPC pattern from Phase 1 — build both calls into one transaction.
+
+#### New env var
+```
+SEAL_PACKAGE_ID=0x<from deployment>
+```
 
 ---
 
 ### PHASE 3 — 5-Day Inspection Window Business Logic
-**Priority: Medium. Required for Phase 1 contract to be meaningful.**
-
-This is new business logic that doesn't exist in ARIA yet.
+**Priority: Medium. Extends Phase 1 with real-world timing and claim flows.**
 
 #### What to build
 
-1. **Post-checkout inspection window:** after a booking's `check_out` date passes,
-   the deposit enters a 5-day inspection window. The host can file a damage claim
-   during this window. After 5 days with no claim, the deposit auto-releases.
+1. **Timing gate on `/booking/release-deposit`:** only callable after `check_out`
+   date. Currently hosts can release at any time.
 
-2. **`/booking/release-deposit` rate limiting / timing gate:** currently hosts
-   can release at any time. Gate it: only callable after `check_out` date. Claims
-   (`claim_damage`) only callable during the 5-day window.
+2. **Auto-release scheduled job:** query bookings where `checkout + 5 days < NOW()`
+   and `deposit_status = 'held'` and `escrow_object_id IS NOT NULL`. Call
+   `auto_release` on each. Update Postgres.
 
-3. **Auto-release job:** a scheduled job (or triggered on booking queries) that
-   identifies bookings where:
-   - `payment_status = 'confirmed'`
-   - `deposit_status = 'held'`
-   - `check_out + 5 days < NOW()`
-   - `escrow_object_id IS NOT NULL`
-   Then calls `auto_release` on the contract and updates Postgres.
-
-4. **Claim flow (new):**
-   - Host calls `/booking/claim-damage` with `{ bookingRef, claimAmount, reason }`
-   - Server validates: host owns property, booking is checked out, within 5-day window
-   - Calls `claim_damage` on the escrow contract
-   - Updates `deposit_status = 'claimed'` in Postgres
+3. **Claim flow — new route `/booking/claim-damage`:**
+   - Host calls with `{ bookingRef, claimAmount, reason }`
+   - Validates: host owns property, booking checked out, within 5-day window
+   - Calls `claim_damage` on escrow contract
+   - Updates `deposit_status = 'claimed'`
    - Emails guest with claim details and dispute option
 
-5. **Dispute flow (new):**
-   - Guest calls `/booking/dispute-claim` with `{ bookingRef, reason }`
-   - Updates `deposit_status = 'disputed'` in Postgres
-   - Notifies ARIA (email to admin)
-   - ARIA reviews and calls `resolve_dispute` on contract with final split
+4. **Dispute flow — new route `/booking/dispute-claim`:**
+   - Guest calls with `{ bookingRef, reason }`
+   - Updates `deposit_status = 'disputed'`
+   - Notifies ARIA admin
+   - ARIA calls `resolve_dispute` on contract with final split
 
-#### Booking statuses to add
-`deposit_status` in Postgres currently: `held` | `released`
-Extend to: `held` | `claimed` | `disputed` | `released` | `forfeited`
+5. **Extend `deposit_status`:**
+   Currently: `held` | `released`
+   Add: `claimed` | `disputed` | `forfeited`
 
 ---
 
-## 4. Tech Debt Backlog (from ARIA_HANDOFF.md v3.0)
+## 4. Build Order Summary
 
-These are known issues. Address after Phases 1-3 unless one is blocking.
+```
+✅ Phase 1a: escrow.move + tests
+✅ Phase 1b: Deploy to testnet (Package ID above)
+✅ Phase 1c: escrow_object_id column in db.mjs
+✅ Phase 1d: /booking/create → create_escrow on-chain
+✅ Phase 1e: /booking/release-deposit → auto_release on-chain
+⬜ Phase 1f: Auto-release scheduled job
+⬜ Phase 1g: claim_damage + dispute routes (Phase 3)
+
+⬜ Phase 2a: pii_access.move (Seal allowlist)
+⬜ Phase 2b: Deploy allowlist contract, get SEAL_PACKAGE_ID
+⬜ Phase 2c: guest_verifications table in db.mjs
+⬜ Phase 2d: /guest/profile + /host/guest-identity routes
+⬜ Phase 2e: Booking gate in /booking/create and AI create_booking
+⬜ Phase 2f: hasGuestProfile in /auth/me
+⬜ Phase 2g: pages/profile.jsx (Seal encrypt + Walrus store)
+⬜ Phase 2h: Host "View Guest Identity" modal in pages/host.jsx
+⬜ Phase 2i: Wire deposit release to call revoke_access in same PTB
+
+⬜ Phase 3: 5-day window timing gate + auto-release job + claim/dispute flows
+```
+
+---
+
+## 5. Tech Debt Backlog
 
 | Item | Priority | Notes |
 |---|---|---|
-| Properties table empty / frontend hardcoded | Medium | `catalog.mjs` handles backend; frontend still has its own copy. Ideal: DB-driven listings |
-| Frontend tax/price duplication | Low | Backend centralized in `catalog.mjs`; frontend copy still exists |
-| Stripe webhooks missing | Medium | `/payment/create-intent` exists; no webhook to confirm payment |
-| No automated tests | Medium | No test suite exists; security-critical code has no coverage |
-| `zod` unused | Low | Already a dependency; add request body validation |
-| Legacy `hosts` table unused | Low | Can be dropped in a migration |
-| `@anthropic-ai/sdk` unused dependency | Low | Remove |
+| Production host address lookup | High | Currently uses deployer address; should query `host_profiles.sui_address` by property_id |
+| Auto-release job | High | Phase 1f — not yet built |
+| Properties table empty / frontend hardcoded | Medium | `catalog.mjs` handles backend pricing; listings not DB-driven |
+| Frontend tax/price duplication | Low | Backend centralized; frontend still has own copy |
+| Stripe webhooks missing | Medium | `/payment/create-intent` exists; no webhook |
+| No automated tests | Medium | No test suite for backend/frontend |
+| `zod` unused | Low | Already a dependency; use for request body validation |
+| Legacy `hosts` table unused | Low | Can be dropped |
+| `@anthropic-ai/sdk` unused | Low | Remove |
 | Error handling inconsistent | Low | Some routes still have raw `err.message` |
 
 ---
 
-## 5. Deliberately Deferred Items
-
-These were consciously left unchanged to avoid breaking working behavior.
-Do not "fix" them without understanding the migration required.
+## 6. Deliberately Deferred Items
 
 ### zkLogin salt = `'0'`
-**Risk if changed:** changing the salt re-derives every user's Sui address,
-orphaning all existing bookings, host profiles, and sessions.
-**Follow-up:** migrate to per-user secret salt. Store salt keyed by Google `sub`.
-Derive new addresses. Migrate existing records. This is a significant data migration.
+Changing re-derives every user's Sui address, orphaning existing data.
+Follow-up: per-user secret salt with data migration.
 
 ### DB TLS (`ssl: { rejectUnauthorized: false }`)
-**Risk if changed:** Railway's managed Postgres cert won't validate against default
-CA bundle, breaking the DB connection.
-**Follow-up:** obtain Railway's CA certificate. Set `ssl: { ca: caCert, rejectUnauthorized: true }`.
+Railway cert doesn't validate against default CA.
+Follow-up: supply Railway's CA cert, set `rejectUnauthorized: true`.
 
-### Session token in URL (`?sid=`) + localStorage
-**Risk if changed:** cross-domain login (Vercel ↔ Railway) depends on this because
-third-party cookies are blocked.
-**Follow-up:** implement one-time authorization code exchange. Backend redirects with
-a short-lived single-use `code`. Frontend POSTs the code to exchange for a session.
-Token never appears in the URL or browser history.
+### Session token in URL (`?sid=`)
+Cross-domain login (Vercel ↔ Railway) depends on it.
+Follow-up: one-time authorization code exchange.
 
 ---
 
-## 6. Key Architectural Decisions (Do Not Re-Debate)
-
-These decisions were made with full context. Record them here to prevent an AI
-assistant from relitigating them.
+## 7. Key Architectural Decisions (Do Not Re-Debate)
 
 | Decision | What was decided | Why |
 |---|---|---|
-| Pivot away from vacation rental | **Rejected** — staying with vacation rental | Strategic alternatives (Helm/boats, freelance escrow, contractor payments) evaluated and declined |
-| PII storage | Walrus + Seal, zero raw PII on ARIA | Regulatory: avoid CCPA/GDPR custodianship hooks |
-| PII KYC provider (Stripe Identity) | **Rejected** | Walrus + Seal is non-custodial, architecturally aligned, and now mainnet-ready |
-| Smart contract: one contract per booking vs one global | One global package, per-booking objects | Sui's object model — no global balance to drain |
-| Smart contract upgrade authority | Keep on testnet, burn before mainnet | Immutable contract = maximum user trust |
-| PII access start point | Booking confirmation (not check-in) | Hosts need identity for logistics before arrival |
-| Deposit lifecycle as PII access trigger | Yes — deposit released = PII access revoked | Natural business boundary; atomic revocation |
-| Coin type for escrow | Generic `Coin<T>` | Works with testnet SUI now, SuiUSD on mainnet, no code change |
-| Arbitrator role | ARIA deployer wallet, can only split to guest/host | Limits damage if compromised; no drain path |
+| Pivot away from vacation rental | **Rejected** | Helm/boats, freelance escrow, contractor payments all evaluated and declined |
+| PII storage | Walrus + Seal, zero raw PII on ARIA | Regulatory: avoid CCPA/GDPR custodianship |
+| Stripe Identity for KYC | **Rejected** | Walrus + Seal is non-custodial and architecturally aligned |
+| Smart contract: global vs per-booking | One global package, per-booking shared objects | No global balance to drain |
+| UpgradeCap | Keep testnet, burn before mainnet | Immutable = maximum user trust |
+| PII access start | Booking confirmation | Hosts need identity before guest arrives |
+| Deposit lifecycle as PII trigger | Yes — released = access revoked | Natural boundary; atomic revocation |
+| Coin type | Generic `Coin<T>` | Testnet SUI now; SuiUSD mainnet; no code change |
+| Arbitrator | ARIA deployer, splits only to guest/host | Limits blast radius if compromised |
+| SDK client for tx submission | Raw JSON-RPC fetch (bypass SDK) | SDK client methods incompatible with current env |
 
 ---
 
-## 7. Build Order Summary
+## 8. Environment Variables (Current State)
 
-```
-Phase 1a: Write escrow.move + escrow_tests.move
-Phase 1b: Deploy to testnet, get ESCROW_PACKAGE_ID
-Phase 1c: Update db.mjs (escrow_object_id column)
-Phase 1d: Wire /booking/create → create_escrow Sui PTB
-Phase 1e: Wire /booking/release-deposit → auto_release Sui PTB
-Phase 1f: Build auto-release scheduled job
-Phase 1g: Build claim_damage + dispute flows (Phase 3)
-
-Phase 2a: Write pii_access.move (Seal allowlist contract)
-Phase 2b: Deploy allowlist contract, get SEAL_PACKAGE_ID
-Phase 2c: Add guest_verifications table to db.mjs
-Phase 2d: Add /guest/profile and /host/guest-identity/:bookingRef routes
-Phase 2e: Add booking gate to /booking/create and AI create_booking
-Phase 2f: Add hasGuestProfile to /auth/me
-Phase 2g: Build pages/profile.jsx (Seal encrypt + Walrus store)
-Phase 2h: Build host "View Guest Identity" modal in pages/host.jsx
-Phase 2i: Wire deposit release to call revoke_access in same PTB as auto_release
-
-Phase 3: 5-day window logic (booking gate on claim timing, auto-release job)
-```
-
-Phases 1 and 2 are interdependent at the deposit-release step (Phase 2i).
-Complete Phases 1a–1f before starting Phase 2a.
-
----
-
-## 8. Resources
-
-| Resource | URL |
-|---|---|
-| Sui documentation | `https://docs.sui.io` |
-| Move book | `https://move-book.com` |
-| Sui Move intro course | `https://intro.sui-book.com` |
-| Seal documentation | `https://seal-docs.wal.app` |
-| Seal GitHub (examples) | `https://github.com/MystenLabs/seal` |
-| Walrus documentation | `https://docs.walrus.site` |
-| Sui testnet explorer | `https://suiexplorer.com/?network=testnet` |
-| Sui testnet faucet | `https://faucet.sui.io` |
-| `@mysten/sui` SDK | Already in `package.json` |
-
----
-
-## 9. Environment Variables (Complete List)
-
-**Currently in Railway (backend):**
+**In Railway (backend):**
 ```
 DATABASE_URL
 GOOGLE_CLIENT_ID
@@ -662,26 +358,37 @@ SESSION_SECRET
 XAI_API_KEY
 RESEND_API_KEY
 STRIPE_SECRET_KEY
-```
-
-**To add for Phase 1:**
-```
-ESCROW_PACKAGE_ID        # from sui client publish output
-ESCROW_MODULE_NAME       # "escrow"
-ARIA_DEPLOYER_KEY        # private key of deployer wallet (base64)
+ESCROW_PACKAGE_ID    = 0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe
+ESCROW_MODULE_NAME   = escrow
+ARIA_DEPLOYER_KEY    = <suiprivkey1... bech32 format>
 ```
 
 **To add for Phase 2:**
 ```
-SEAL_PACKAGE_ID          # from allowlist contract deployment
+SEAL_PACKAGE_ID      = 0x<from pii_access.move deployment>
 ```
 
-**Currently in Vercel (frontend):**
+**In Vercel (frontend):**
 ```
-NEXT_PUBLIC_API_URL      # points to Railway backend
+NEXT_PUBLIC_API_URL  = https://aria-demo-production-e590.up.railway.app
 ```
 
 ---
 
-*ARIA Roadmap v1.0 — June 02, 2026*
-*This document should be updated as phases complete.*
+## 9. Resources
+
+| Resource | URL |
+|---|---|
+| Sui documentation | `https://docs.sui.io` |
+| Move book | `https://move-book.com` |
+| Seal documentation | `https://seal-docs.wal.app` |
+| Seal GitHub (examples) | `https://github.com/MystenLabs/seal` |
+| Walrus documentation | `https://docs.walrus.site` |
+| Sui testnet explorer | `https://suiexplorer.com/?network=testnet` |
+| Sui testnet faucet | `https://faucet.sui.io` |
+| Deployed escrow on explorer | `https://suiexplorer.com/object/0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe?network=testnet` |
+
+---
+
+*ARIA Roadmap v2.0 — June 10, 2026*
+*Phase 1 complete. Phase 2 (Walrus + Seal PII) is next.*
