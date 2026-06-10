@@ -67,32 +67,60 @@ async function createEscrowOnChain(bookingRef, guestAddr, hostAddr, depositAmoun
       ],
     });
 
-    // SuiJsonRpcClient on Node 22 — handles build + sign + submit internally
-    const result = await suiClient.signAndExecuteTransaction({
-      transaction: tx,
-      signer: deployerKeypair,
-      options: { showObjectChanges: true, showEffects: true },
+    // Step 1: Build — SDK fetches gas price + reference from network
+    const txBytes = await tx.build({ client: suiClient });
+    fastify.log.info({ step: 'built', type: typeof txBytes }, 'escrow build ok');
+
+    // Step 2: Sign directly via keypair
+    const signed = await deployerKeypair.signTransaction(txBytes);
+    fastify.log.info({ step: 'signed', bytesType: typeof signed.bytes, sigType: typeof signed.signature }, 'escrow sign ok');
+
+    // Step 3: Submit via raw JSON-RPC — no SDK client for submission
+    const txBase64 = typeof signed.bytes === 'string'
+      ? signed.bytes
+      : Buffer.from(signed.bytes).toString('base64');
+    const sig = typeof signed.signature === 'string'
+      ? signed.signature
+      : Buffer.from(signed.signature).toString('base64');
+
+    const rpcRes = await fetch('https://fullnode.testnet.sui.io:443', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 1,
+        method: 'sui_executeTransactionBlock',
+        params: [txBase64, [sig], { showObjectChanges: true, showEffects: true }, 'WaitForLocalExecution'],
+      }),
     });
+    const rpcData = await rpcRes.json();
 
-    // Log result shape for debugging
     fastify.log.info({
-      digest: result?.digest,
-      status: result?.effects?.status,
-      objectChangesCount: result?.objectChanges?.length,
-      objectChangeTypes: result?.objectChanges?.map(c => `${c.type}:${String(c.objectType).slice(0, 60)}`),
-    }, 'escrow tx result');
+      digest:             rpcData?.result?.digest,
+      status:             rpcData?.result?.effects?.status,
+      rpcError:           rpcData?.error,
+      objectChangesCount: rpcData?.result?.objectChanges?.length,
+      objectChangeTypes:  rpcData?.result?.objectChanges?.map(c => `${c.type}:${String(c.objectType).slice(0, 60)}`),
+    }, 'escrow rpc result');
 
-    if (result?.effects?.status?.status === 'failure') {
-      console.warn('Escrow tx failed on-chain:', result.effects.status.error);
+    if (rpcData?.error) {
+      console.warn('Escrow RPC error:', JSON.stringify(rpcData.error));
+      return null;
+    }
+    if (rpcData?.result?.effects?.status?.status === 'failure') {
+      console.warn('Escrow tx failed on-chain:', rpcData.result.effects.status.error);
       return null;
     }
 
-    const escrowObj = result?.objectChanges?.find(
+    const escrowObj = rpcData?.result?.objectChanges?.find(
       c => c.type === 'created' && c.objectType?.includes('BookingEscrow')
     );
     return escrowObj?.objectId ?? null;
   } catch (err) {
-    console.warn('createEscrowOnChain failed (non-blocking):', err.message);
+    fastify.log.error({
+      message: err.message,
+      name:    err.name,
+      stack:   err.stack?.split('\n').slice(0, 4).join(' | '),
+    }, 'createEscrowOnChain error');
     return null;
   }
 }
@@ -113,15 +141,24 @@ async function autoReleaseEscrow(escrowObjectId) {
       ],
     });
 
-    // SuiJsonRpcClient on Node 22
-    const result = await suiClient.signAndExecuteTransaction({
-      transaction: tx,
-      signer: deployerKeypair,
-      options: { showEffects: true },
-    });
+    // Build, sign, submit via raw JSON-RPC
+    const txBytes = await tx.build({ client: suiClient });
+    const signed = await deployerKeypair.signTransaction(txBytes);
+    const txBase64 = typeof signed.bytes === 'string' ? signed.bytes : Buffer.from(signed.bytes).toString('base64');
+    const sig = typeof signed.signature === 'string' ? signed.signature : Buffer.from(signed.signature).toString('base64');
 
-    if (result?.effects?.status?.status === 'failure') {
-      console.warn('autoRelease tx failed on-chain:', result.effects.status.error);
+    const rpcRes = await fetch('https://fullnode.testnet.sui.io:443', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 1,
+        method: 'sui_executeTransactionBlock',
+        params: [txBase64, [sig], { showEffects: true }, 'WaitForLocalExecution'],
+      }),
+    });
+    const rpcData = await rpcRes.json();
+    if (rpcData?.error || rpcData?.result?.effects?.status?.status === 'failure') {
+      console.warn('autoRelease failed:', JSON.stringify(rpcData?.error || rpcData?.result?.effects?.status));
       return false;
     }
     return true;
