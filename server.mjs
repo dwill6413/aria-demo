@@ -3,7 +3,7 @@ import cors from '@fastify/cors';
 import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
 import Stripe from 'stripe';
-import { SuiGrpcClient } from '@mysten/sui/grpc';
+import { SuiJsonRpcClient, getJsonRpcFullnodeUrl } from '@mysten/sui/jsonRpc';
 import { Transaction } from '@mysten/sui/transactions';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
@@ -18,10 +18,7 @@ import { initDB, pool } from './db.mjs';
 dotenvConfig();
 
 // ─── Sui Escrow Client ────────────────────────────────────────────────────────
-const suiClient = new SuiGrpcClient({
-  network: 'testnet',
-  baseUrl: 'https://fullnode.testnet.sui.io:443',
-});
+const suiClient = new SuiJsonRpcClient({ url: getJsonRpcFullnodeUrl('testnet') });
 let deployerKeypair = null;
 try {
   if (process.env.ARIA_DEPLOYER_KEY) {
@@ -70,10 +67,11 @@ async function createEscrowOnChain(bookingRef, guestAddr, hostAddr, depositAmoun
       ],
     });
 
-    // SuiGrpcClient pattern: { signer, transaction }
+    // SuiJsonRpcClient on Node 22 — handles build + sign + submit internally
     const result = await suiClient.signAndExecuteTransaction({
-      signer: deployerKeypair,
       transaction: tx,
+      signer: deployerKeypair,
+      options: { showObjectChanges: true, showEffects: true },
     });
 
     // Log result shape for debugging
@@ -82,7 +80,6 @@ async function createEscrowOnChain(bookingRef, guestAddr, hostAddr, depositAmoun
       status: result?.effects?.status,
       objectChangesCount: result?.objectChanges?.length,
       objectChangeTypes: result?.objectChanges?.map(c => `${c.type}:${String(c.objectType).slice(0, 60)}`),
-      rawKeys: result ? Object.keys(result) : [],
     }, 'escrow tx result');
 
     if (result?.effects?.status?.status === 'failure') {
@@ -116,10 +113,11 @@ async function autoReleaseEscrow(escrowObjectId) {
       ],
     });
 
-    // SuiGrpcClient pattern: { signer, transaction }
+    // SuiJsonRpcClient on Node 22
     const result = await suiClient.signAndExecuteTransaction({
-      signer: deployerKeypair,
       transaction: tx,
+      signer: deployerKeypair,
+      options: { showEffects: true },
     });
 
     if (result?.effects?.status?.status === 'failure') {
