@@ -1,5 +1,5 @@
 # ARIA — Technical Handoff Document
-**Version:** 4.2 | **Updated:** June 10, 2026
+**Version:** 4.3 | **Updated:** June 10, 2026
 
 Deeper technical details for developers or AI assistants continuing work on ARIA.
 Reconciled against the code actually deployed to production as of June 10, 2026.
@@ -148,15 +148,25 @@ single key compromise enables an attacker to: forge `create_escrow` calls with
 arbitrary parameters; and call `resolve_dispute` on any disputed escrow to
 redirect the split.
 
-Fix: separate into three distinct keys before mainnet:
+Fix: separate into three distinct keys, assigned by blast radius (this is
+operational, not a contract change — `arbitrator` is already a per-escrow field,
+no redeployment needed):
 
-1. **Deployer key** — used once to publish the package, then retired or kept cold.
-2. **Backend signer** — Railway env var for `auto_release` and permissionless ops only.
-3. **Arbitrator key** — cold wallet or 2-of-3 multisig. Set per-escrow at booking
-   time. Never exposed to the backend process.
+1. **Deployer / UpgradeCap key** — broadest blast radius (controls contract code
+   pre-burn). Stays cold in KeePass permanently, regardless of scale — contract
+   upgrades are rare, deliberate events.
+2. **Backend signer** (`ARIA_DEPLOYER_KEY`) — Railway env var, scoped to
+   permissionless ops only (`auto_release`). Bounded impact even if compromised.
+3. **Arbitrator key** (`ARIA_ARBITRATOR_ADDRESS`) — generate a dedicated keypair
+   (`sui keytool generate ed25519`), private key/mnemonic in KeePass only, never
+   in env vars or committed files. `resolve_dispute`'s impact is contractually
+   bounded to one disputed escrow's guest/host split (`guest_amount + host_amount
+   == escrow.amount` enforced on-chain) — this bound is what makes it safe to
+   later scale this key from manual cold signing to a scoped service key without
+   any contract change. See `ARIA_ROADMAP.md` P1 for the full scaling path.
 
-The contract already stores `arbitrator` per-escrow; this fix is operational, not
-a contract change. The contract does not need to be redeployed.
+**Repo hygiene**: private keys and mnemonics never appear in any committed file
+— only public addresses, which are not secrets.
 
 #### P2 — Fix before launch with real users
 
@@ -308,9 +318,10 @@ Railway runs **Node 22** (`nixpacks.toml`: `nodejs_22`). Required by
 ```
 DATABASE_URL, GOOGLE_CLIENT_ID, GOOGLE_CALLBACK_URL, FRONTEND_URL
 HOST_ADDRESSES, SESSION_SECRET, XAI_API_KEY, RESEND_API_KEY, STRIPE_SECRET_KEY
-ESCROW_PACKAGE_ID   = 0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe
-ESCROW_MODULE_NAME  = escrow
-ARIA_DEPLOYER_KEY   = <suiprivkey1... bech32 format — in Railway, never commit>
+ESCROW_PACKAGE_ID    = 0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe
+ESCROW_MODULE_NAME   = escrow
+ARIA_DEPLOYER_KEY    = <suiprivkey1... bech32 format — in Railway, never commit>
+ARIA_ARBITRATOR_ADDRESS = 0x<public address only — see P1; private key in KeePass>
 ```
 
 **Vercel:**
@@ -333,7 +344,8 @@ NEXT_PUBLIC_API_URL = https://aria-demo-production-e590.up.railway.app
 
 ---
 
-*Technical Handoff v4.2 — June 10, 2026*
-*Changes from v4.1: Full security audit with corrected priorities. P0 (guest-funded
-escrow) and P1 (key separation) added as top production blockers. Emergency
-withdraw/pause recommendation explicitly rejected with rationale.*
+*Technical Handoff v4.3 — June 10, 2026*
+*Changes from v4.2: P1 key separation expanded with concrete generation steps,
+custody-by-blast-radius model, and arbitrator scaling path. Repo hygiene rule
+added — private keys/mnemonics never in committed files. See ARIA_ROADMAP.md P1
+for full detail.*
