@@ -1,5 +1,5 @@
 # ARIA — Technical Handoff Document
-**Version:** 4.4 | **Updated:** June 10, 2026
+**Version:** 4.5 | **Updated:** June 10, 2026
 
 Deeper technical details for developers or AI assistants continuing work on ARIA.
 Reconciled against the code actually deployed to production as of June 10, 2026.
@@ -88,13 +88,21 @@ extend or build new features on top of `suiRpc()` — instead, prioritize P0a.
   pattern. We tried this during Phase 1 on `@mysten/sui@2.16.3` and got
   `Invalid type: Expected Object but received Object` — a local validation
   error. Mysten's docs note a newer SDK release with improved gRPC/GraphQL
-  support is coming; **check for and try the latest `@mysten/sui` version
-  first**, with a minimal test transaction, before rewriting `server.mjs`.
+  support is coming.
 - If gRPC still fails on the latest SDK, GraphQL RPC is the documented fallback
   for both reads and transaction submission.
 - `transaction.serialize()` is deprecated in favor of `transaction.toJSON()` as
   part of the same SDK generation — relevant when passing transaction bytes to
   the frontend for guest-side zkLogin signing (P0b).
+
+**Sandbox first — do not repeat Phase 1's debug loop:** Phase 1's SDK issues
+took ~8-10 edit-push-redeploy-check-Railway-logs cycles to resolve. For P0a,
+write a standalone local script (`test-grpc.mjs`, not committed to
+`server.mjs`) that upgrades to the latest `@mysten/sui` and tries a minimal
+read + test transaction via `SuiGrpcClient`. Iterate locally — fast, full
+stack traces, zero risk to the live site. Only migrate `createEscrowOnChain`
+and `autoReleaseEscrow` once that script works cleanly. See `ARIA_ROADMAP.md`
+P0a for the full step-by-step.
 
 See `createEscrowOnChain` and `autoReleaseEscrow` in `server.mjs` for the
 current (temporary) working implementation.
@@ -379,9 +387,7 @@ NEXT_PUBLIC_API_URL = https://aria-demo-production-e590.up.railway.app
 
 ---
 
-*Technical Handoff v4.4 — June 10, 2026*
-*Changes from v4.3: Flagged that the Phase 1 raw JSON-RPC transaction pattern is
-temporary — Sui deactivates JSON-RPC network-wide on July 31, 2026 (before
-October launch). Added migration notes (gRPC/GraphQL, SDK version check,
-toJSON()) as Phase 1 item P0a in ARIA_ROADMAP.md, bundled with guest-funded
-escrow (P0b).*
+*Technical Handoff v4.5 — June 10, 2026*
+*Changes from v4.4: Added sandbox-first execution note for P0a — test against
+latest @mysten/sui in a standalone local script before touching server.mjs,
+to avoid repeating Phase 1's slow Railway debug loop. See ARIA_ROADMAP.md v2.4.*
