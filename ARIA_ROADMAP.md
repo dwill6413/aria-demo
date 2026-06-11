@@ -1,5 +1,5 @@
 # ARIA — Product Roadmap & AI Handoff Document
-**Version:** 2.1 | **Updated:** June 10, 2026
+**Version:** 2.2 | **Updated:** June 10, 2026
 **Purpose:** Complete handoff for an AI assistant continuing ARIA development.
 Read this entire document before writing any code.
 
@@ -65,10 +65,56 @@ the guest's zkLogin wallet to sign `create_escrow` and provide the coin.
 
 **P1 — Key separation (before mainnet)**
 Deployer, backend signer, and arbitrator are currently the same hot key.
-- **Deployer key**: retire after publishing; keep cold
-- **Backend signer** (`ARIA_DEPLOYER_KEY`): Railway env var; only permissionless ops
-- **Arbitrator**: separate cold key or 2-of-3 multisig; set per-escrow at booking time
-- No contract change needed — arbitrator address is already per-escrow in the struct
+No contract change needed — `arbitrator` is already a per-escrow field set at
+`create_escrow` time, never changeable afterward.
+
+*Immediate step (low effort):*
+- Generate one dedicated arbitrator keypair, separate from the deployer and
+  backend signer. Run locally: `sui keytool generate ed25519`
+- Store the resulting mnemonic/private key in KeePass only — never in env vars,
+  code, commits, or any markdown file. Only the **public address** (not the
+  private key) is referenced anywhere, including in env vars and docs, since
+  addresses are not secrets.
+- Add the address as `ARIA_ARBITRATOR_ADDRESS` in Railway env vars.
+- Update `createEscrowOnChain` to pass `process.env.ARIA_ARBITRATOR_ADDRESS` as
+  the `arbitrator` parameter instead of the deployer address.
+- Disputes are resolved by manually signing `resolve_dispute` from this key,
+  held in KeePass, on an as-needed basis.
+
+*Custody model — assign by blast radius, not uniformly:*
+- **Deployer / UpgradeCap key**: broadest blast radius (controls contract code
+  pre-burn). Stays cold in KeePass *regardless of scale* — contract upgrades are
+  rare, deliberate events that don't scale with booking volume.
+- **Backend signer** (`ARIA_DEPLOYER_KEY`): Railway env var, scoped to
+  permissionless operations only (`auto_release`). Bounded impact even if
+  compromised — `auto_release` can only refund the guest after expiry.
+- **Arbitrator key**: bounded blast radius by contract design — `resolve_dispute`
+  can only redistribute *one disputed escrow's* funds between *that escrow's*
+  recorded guest and host, with `guest_amount + host_amount == escrow.amount`
+  enforced on-chain. Cannot touch other escrows, cannot send funds elsewhere.
+  Starts cold (KeePass, manual signing); see scaling path below.
+
+*Arbitration scaling path (designed now, built when volume justifies it):*
+Because `resolve_dispute`'s impact is contractually bounded per-escrow, the
+arbitrator key is safe to scale from "cold key, manual signing" to "scoped hot
+key in a dispute-resolution service" without any contract changes or migration:
+1. **Now**: single arbitrator keypair, KeePass-held, manual signing.
+2. **At scale**: stand up an internal dispute-review tool (queue + evidence +
+   approval). A separate scoped service key — held only by that service, never
+   by the main backend — executes approved resolutions by calling
+   `resolve_dispute`. Even full compromise of this key has bounded, per-escrow,
+   guest-or-host-only impact.
+3. **Cohort/regional arbitrators**: since `arbitrator` is per-escrow, different
+   cohorts (regions, booking value tiers) can use different arbitrator
+   addresses going forward with zero migration of existing escrows.
+4. Old escrows always keep the arbitrator address they were created with —
+   rotating `ARIA_ARBITRATOR_ADDRESS` only affects new bookings.
+
+**Repo hygiene — applies to every key in this section:**
+Private keys and mnemonics must NEVER appear in `ARIA_ROADMAP.md`,
+`ARIA_HANDOFF.md`, code comments, or any committed file. Only public addresses
+(which are not secrets) may appear in documentation. Private keys live in
+KeePass and/or Railway env vars only.
 
 **P2 — Auto-release cron job**
 No scheduled job triggers `auto_release` after expiry. Build a job that queries
@@ -279,6 +325,8 @@ Follow-up: one-time authorization code exchange.
 | Arbitrator scope | Can only split between guest and host | Limits blast radius if compromised |
 | SDK client for tx submission | Raw JSON-RPC fetch | SDK client methods incompatible in current env |
 | Emergency withdraw / pause | **Rejected** | Admin drain path; undermines non-custodial claim |
+| Arbitrator key custody | Cold (KeePass), separate from deployer & backend signer | Bounded blast radius (resolve_dispute is per-escrow, guest/host only) enables safe future scaling to a scoped service key |
+| Private keys in documentation | **Never** — public addresses only | Roadmap/handoff docs are pushed to public GitHub |
 
 ---
 
@@ -288,10 +336,18 @@ Follow-up: one-time authorization code exchange.
 ```
 DATABASE_URL, GOOGLE_CLIENT_ID, GOOGLE_CALLBACK_URL, FRONTEND_URL
 HOST_ADDRESSES, SESSION_SECRET, XAI_API_KEY, RESEND_API_KEY, STRIPE_SECRET_KEY
-ESCROW_PACKAGE_ID    = 0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe
-ESCROW_MODULE_NAME   = escrow
-ARIA_DEPLOYER_KEY    = <suiprivkey1... bech32 format>
+ESCROW_PACKAGE_ID      = 0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe
+ESCROW_MODULE_NAME     = escrow
+ARIA_DEPLOYER_KEY      = <suiprivkey1... bech32 format — KeePass + Railway only, never committed>
 ```
+
+**To add for P1 (arbitrator key separation):**
+```
+ARIA_ARBITRATOR_ADDRESS = 0x<public address only — generate via `sui keytool generate ed25519`>
+```
+The corresponding private key/mnemonic goes in KeePass only. Never in Railway,
+never in any committed file. Only this public address is referenced in env vars
+and code.
 
 **To add for Phase 2:**
 ```
@@ -320,7 +376,8 @@ NEXT_PUBLIC_API_URL  = https://aria-demo-production-e590.up.railway.app
 
 ---
 
-*ARIA Roadmap v2.1 — June 10, 2026*
-*Changes from v2.0: Security audit findings incorporated. P0 (guest-funded escrow)
-and P1 (key separation) added to Phase 1 pending items. Emergency withdraw/pause
-added to "Do Not Re-Debate" table as rejected. Build order updated.*
+*ARIA Roadmap v2.2 — June 10, 2026*
+*Changes from v2.1: P1 expanded with concrete arbitrator key generation steps,
+custody model by blast radius, and a documented arbitration scaling path. Repo
+hygiene rule added — private keys/mnemonics never appear in any committed file,
+only public addresses.*
