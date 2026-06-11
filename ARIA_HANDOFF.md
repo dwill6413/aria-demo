@@ -1,5 +1,5 @@
 # ARIA — Technical Handoff Document
-**Version:** 4.3 | **Updated:** June 10, 2026
+**Version:** 4.4 | **Updated:** June 10, 2026
 
 Deeper technical details for developers or AI assistants continuing work on ARIA.
 Reconciled against the code actually deployed to production as of June 10, 2026.
@@ -51,9 +51,16 @@ Contract functions: `create_escrow`, `auto_release`, `claim_damage`,
 
 ### How transactions are signed and submitted
 
+> ⚠️ **TEMPORARY — HARD DEADLINE JULY 31, 2026.** The pattern below uses Sui's
+> JSON-RPC interface, which Sui is deactivating network-wide on July 31, 2026.
+> This is a bridge, not a long-term solution. Before October 2026 launch, this
+> entire pattern must migrate to gRPC or GraphQL. See `ARIA_ROADMAP.md` Phase 1
+> item **P0a** — this is bundled with guest-funded escrow (P0b) because both
+> require rebuilding this same layer.
+
 `@mysten/sui@2.16.3` SDK client methods (`SuiJsonRpcClient`, `SuiGrpcClient`,
-`signAndExecuteTransaction`) are incompatible with the deployed Node 22 environment.
-The working pattern in `server.mjs` is raw JSON-RPC:
+`signAndExecuteTransaction`) failed during Phase 1 development on this Node 22
+environment. The working pattern in `server.mjs` is raw JSON-RPC:
 
 ```javascript
 // 1. Fetch gas price + deployer coin via raw RPC helper
@@ -72,9 +79,25 @@ const signed = await deployerKeypair.signTransaction(txBytes);
 await suiRpc('sui_executeTransactionBlock', [base64bytes, [sig], options]);
 ```
 
-Do NOT use `SuiJsonRpcClient.signAndExecuteTransaction` or `SuiGrpcClient` —
-both fail in the current environment. See `createEscrowOnChain` and
-`autoReleaseEscrow` in `server.mjs` for the full working implementation.
+This pattern works today but is built on the deprecated interface. Do NOT
+extend or build new features on top of `suiRpc()` — instead, prioritize P0a.
+
+**Migration notes for P0a:**
+- Official Mysten guidance: `SuiGrpcClient` with
+  `client.signAndExecuteTransaction({ signer, transaction })` is the recommended
+  pattern. We tried this during Phase 1 on `@mysten/sui@2.16.3` and got
+  `Invalid type: Expected Object but received Object` — a local validation
+  error. Mysten's docs note a newer SDK release with improved gRPC/GraphQL
+  support is coming; **check for and try the latest `@mysten/sui` version
+  first**, with a minimal test transaction, before rewriting `server.mjs`.
+- If gRPC still fails on the latest SDK, GraphQL RPC is the documented fallback
+  for both reads and transaction submission.
+- `transaction.serialize()` is deprecated in favor of `transaction.toJSON()` as
+  part of the same SDK generation — relevant when passing transaction bytes to
+  the frontend for guest-side zkLogin signing (P0b).
+
+See `createEscrowOnChain` and `autoReleaseEscrow` in `server.mjs` for the
+current (temporary) working implementation.
 
 ### Testnet → mainnet changes (one line each)
 
@@ -121,22 +144,33 @@ The contract is suitable for demo and Sui Overflow.
 
 ### Issues — prioritized
 
-#### P0 — Must fix before mainnet with real funds
+#### P0a — Migrate off JSON-RPC (HARD DEADLINE: July 31, 2026)
 
-**Deployer-funded escrow**
+Sui is deactivating JSON-RPC network-wide on July 31, 2026 — before our October
+launch. The entire `suiRpc()` raw-fetch pattern in `server.mjs` (used by
+`createEscrowOnChain` and `autoReleaseEscrow`) is built on this interface.
+
+Fix: migrate to `SuiGrpcClient` (Mysten's recommended pattern,
+`signAndExecuteTransaction({ signer, transaction })`) or GraphQL RPC. Our
+Phase 1 attempt at `SuiGrpcClient` on `@mysten/sui@2.16.3` failed with
+`Invalid type: Expected Object but received Object` — check for a newer SDK
+version and retry with a minimal test transaction first. See "How transactions
+are signed and submitted" above for full migration notes.
+
+Bundled with P0b below — both require rebuilding the same transaction layer.
+
+#### P0b — Deployer-funded escrow (most important non-custodial gap)
 
 On testnet, ARIA's deployer wallet signs `create_escrow` and provides the deposit
 coin from its own SUI balance. This means the deployer — not the guest — holds
 the escrowed funds. The non-custodial claim only becomes true when the guest's
 zkLogin wallet signs the transaction and provides the coin from their own balance.
 
-This is the most important production gap in the entire system. Everything else
-is secondary to it.
-
 Fix: implement client-side PTB signing using the guest's zkLogin wallet for
-`create_escrow`. The guest approves the transaction from their browser; the
-booking confirmation flow shows the expiry timestamp so it is transparent before
-they sign. ARIA's backend orchestrates but does not provide the coin.
+`create_escrow`, built on whichever client P0a establishes. The guest approves
+the transaction from their browser; the booking confirmation flow shows the
+expiry timestamp so it is transparent before they sign. ARIA's backend
+orchestrates but does not provide the coin.
 
 #### P1 — Fix before mainnet
 
@@ -220,7 +254,8 @@ assert!(expiry_ms <= clock::timestamp_ms(clock) + MAX_EXPIRY_MS, EExpiryTooFar);
 
 ### Pre-mainnet checklist
 
-- [ ] **P0**: Guest wallet signs and funds `create_escrow` (client-side PTB)
+- [ ] **P0a**: Migrate `suiRpc()` off JSON-RPC to gRPC/GraphQL (deadline: Jul 31, 2026)
+- [ ] **P0b**: Guest wallet signs and funds `create_escrow` (client-side PTB, on P0a's client)
 - [ ] **P1**: Separate deployer / backend-signer / arbitrator keys
 - [ ] **P2**: Auto-release cron job built and running
 - [ ] **P2**: Production host address lookup from `host_profiles`
@@ -344,8 +379,9 @@ NEXT_PUBLIC_API_URL = https://aria-demo-production-e590.up.railway.app
 
 ---
 
-*Technical Handoff v4.3 — June 10, 2026*
-*Changes from v4.2: P1 key separation expanded with concrete generation steps,
-custody-by-blast-radius model, and arbitrator scaling path. Repo hygiene rule
-added — private keys/mnemonics never in committed files. See ARIA_ROADMAP.md P1
-for full detail.*
+*Technical Handoff v4.4 — June 10, 2026*
+*Changes from v4.3: Flagged that the Phase 1 raw JSON-RPC transaction pattern is
+temporary — Sui deactivates JSON-RPC network-wide on July 31, 2026 (before
+October launch). Added migration notes (gRPC/GraphQL, SDK version check,
+toJSON()) as Phase 1 item P0a in ARIA_ROADMAP.md, bundled with guest-funded
+escrow (P0b).*

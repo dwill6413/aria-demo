@@ -1,5 +1,5 @@
 # ARIA — Product Roadmap & AI Handoff Document
-**Version:** 2.2 | **Updated:** June 10, 2026
+**Version:** 2.3 | **Updated:** June 10, 2026
 **Purpose:** Complete handoff for an AI assistant continuing ARIA development.
 Read this entire document before writing any code.
 
@@ -55,10 +55,45 @@ See `createEscrowOnChain` in `server.mjs` for the full implementation.
 
 #### Phase 1 pending items (from security audit)
 
-**P0 — Guest-funded escrow (most important production gap)**
+**P0a — Migrate off JSON-RPC before building guest-side signing (HARD DEADLINE)**
+
+Verified June 10, 2026: Sui's JSON-RPC interface — which our entire `suiRpc()`
+helper in `server.mjs` is built on (`suix_getCoins`, `sui_executeTransactionBlock`,
+`suix_getReferenceGasPrice`, etc.) — is being **fully deactivated July 31, 2026**.
+This is a hard network-wide deadline, before our October launch target. The
+current Phase 1 transaction pattern (raw JSON-RPC fetch) is a working bridge,
+not a long-term solution.
+
+Why this is bundled with P0: both require rebuilding the transaction
+construction/signing/submission layer. Doing them separately means rewriting
+that layer twice. Doing them together means building the guest-side zkLogin
+signing flow on the foundation we'll actually ship with.
+
+**The path forward:**
+- Official Mysten guidance: migrate to `SuiGrpcClient` (recommended) or
+  GraphQL RPC. The documented pattern is
+  `client.signAndExecuteTransaction({ signer, transaction })`.
+- We tried `SuiGrpcClient` during Phase 1 and got
+  `Invalid type: Expected Object but received Object` — a local validation
+  error, not a network error. This may be specific to `@mysten/sui@2.16.3`;
+  Mysten's own docs note a newer SDK release with better gRPC/GraphQL support
+  is coming. **First step: check for and upgrade to the latest `@mysten/sui`,
+  retry the `SuiGrpcClient` pattern with a minimal test transaction before
+  touching `server.mjs`.**
+- If gRPC still fails on the latest SDK, GraphQL RPC is the documented
+  fallback for transaction submission and reads.
+- `transaction.serialize()` is also deprecated in favor of `transaction.toJSON()`
+  as part of this same SDK generation — relevant once we pass transaction bytes
+  to the frontend for guest signing.
+- Once a working client pattern is confirmed, rewrite `createEscrowOnChain` and
+  `autoReleaseEscrow` on it, THEN build guest-side signing (P0b) on the same
+  pattern.
+
+**P0b — Guest-funded escrow (most important non-custodial gap)**
 On testnet the deployer funds the escrow from its own wallet. Production requires
 the guest's zkLogin wallet to sign `create_escrow` and provide the coin.
-- Implement client-side PTB signing in `index.jsx` booking flow
+- Implement client-side PTB signing in `index.jsx` booking flow, using whatever
+  client (gRPC/GraphQL) P0a establishes
 - Guest approves transaction in browser; expiry shown before signing
 - ARIA backend orchestrates but does not provide the coin
 - This makes the non-custodial claim actually true on-chain
@@ -253,7 +288,8 @@ SEAL_PACKAGE_ID = 0x<from deployment>
 ✅ Phase 1c: escrow_object_id column in db.mjs
 ✅ Phase 1d: /booking/create → create_escrow on-chain
 ✅ Phase 1e: /booking/release-deposit → auto_release on-chain
-⬜ Phase 1f: P0 — Guest wallet funds escrow (client-side PTB)
+⬜ Phase 1f1: P0a — Migrate suiRpc() off JSON-RPC to gRPC/GraphQL (deadline: Jul 31, 2026)
+⬜ Phase 1f2: P0b — Guest wallet funds escrow (client-side PTB, built on P0a's client)
 ⬜ Phase 1g: P1 — Key separation (deployer / signer / arbitrator)
 ⬜ Phase 1h: P2 — Auto-release cron job
 ⬜ Phase 1i: P2 — Production host address lookup
@@ -323,7 +359,7 @@ Follow-up: one-time authorization code exchange.
 | Deposit lifecycle drives PII access | Yes — released = access revoked atomically | Natural boundary |
 | Coin type | Generic `Coin<T>` | Testnet SUI now; SuiUSD mainnet; no code change |
 | Arbitrator scope | Can only split between guest and host | Limits blast radius if compromised |
-| SDK client for tx submission | Raw JSON-RPC fetch | SDK client methods incompatible in current env |
+| SDK client for tx submission | Raw JSON-RPC fetch (Phase 1, **temporary**) | SDK client methods incompatible with `@mysten/sui@2.16.3`; must migrate to gRPC/GraphQL before Jul 31, 2026 (P0a) |
 | Emergency withdraw / pause | **Rejected** | Admin drain path; undermines non-custodial claim |
 | Arbitrator key custody | Cold (KeePass), separate from deployer & backend signer | Bounded blast radius (resolve_dispute is per-escrow, guest/host only) enables safe future scaling to a scoped service key |
 | Private keys in documentation | **Never** — public addresses only | Roadmap/handoff docs are pushed to public GitHub |
@@ -372,6 +408,8 @@ NEXT_PUBLIC_API_URL  = https://aria-demo-production-e590.up.railway.app
 | Walrus documentation | `https://docs.walrus.site` |
 | Sui testnet explorer | `https://suiexplorer.com/?network=testnet` |
 | Sui testnet faucet | `https://faucet.sui.io` |
+| JSON-RPC migration guide | `https://docs.sui.io` → "JSON-RPC Migration Guide" (search docs site) |
+| Sui data stack overview (gRPC/GraphQL) | `https://blog.sui.io/graphql-archival-store-sui-data-stack/` |
 | Deployed escrow | `https://suiexplorer.com/object/0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe?network=testnet` |
 
 ---
