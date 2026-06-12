@@ -74,17 +74,17 @@ async function createEscrowOnChain(bookingRef, guestAddr, hostAddr, depositAmoun
     const result = await deployerKeypair.signAndExecuteTransaction({
       transaction: tx,
       client: suiClient,
-      include: { effects: true, objectTypes: true },
+      include: { effects: true },
     });
 
     const txResult = result?.Transaction;
+    const changedObjects = txResult?.effects?.changedObjects;
 
     fastify.log.info({
       kind:    result?.$kind,
       digest:  txResult?.digest,
       status:  txResult?.effects?.status,
-      objectTypes: txResult?.objectTypes ? JSON.stringify(txResult.objectTypes).slice(0, 1500) : 'absent',
-      effectsKeys: txResult?.effects ? Object.keys(txResult.effects) : [],
+      changedObjects: changedObjects ? JSON.stringify(changedObjects).slice(0, 2000) : 'absent',
     }, 'escrow create result');
 
     if (result?.$kind === 'FailedTransaction') {
@@ -92,30 +92,22 @@ async function createEscrowOnChain(bookingRef, guestAddr, hostAddr, depositAmoun
       return null;
     }
 
-    // objectTypes maps object IDs to their Move types for everything touched
-    // in the tx. Find the one whose type is our BookingEscrow. Handle a few
-    // possible shapes: array of [id, type] pairs, array of {objectId, objectType}
-    // objects, or a plain { [id]: type } dict.
+    // In this transaction, the ONLY created object is the BookingEscrow
+    // (the deposit coin is mutated, not created) — so find the entry whose
+    // idOperation indicates "Created" and use its objectId. Handle a few
+    // possible field-naming/shape variants.
     let escrowId = null;
-    const ot = txResult?.objectTypes;
-    if (Array.isArray(ot)) {
-      for (const entry of ot) {
-        if (Array.isArray(entry)) {
-          const [id, type] = entry;
-          if (typeof type === 'string' && type.includes('BookingEscrow')) { escrowId = id; break; }
-        } else if (entry && typeof entry === 'object') {
-          const id   = entry.objectId ?? entry.id;
-          const type = entry.objectType ?? entry.type;
-          if (typeof type === 'string' && type.includes('BookingEscrow')) { escrowId = id; break; }
-        }
-      }
-    } else if (ot && typeof ot === 'object') {
-      for (const [id, type] of Object.entries(ot)) {
-        if (typeof type === 'string' && type.includes('BookingEscrow')) { escrowId = id; break; }
+    for (const c of (changedObjects || [])) {
+      let op = c.idOperation ?? c.operation ?? c.id_operation ?? c.$kind;
+      if (op && typeof op === 'object') op = op.$kind;
+      const id = c.objectId ?? c.id ?? c.object_id;
+      if (typeof op === 'string' && /created/i.test(op)) {
+        escrowId = id;
+        break;
       }
     }
 
-    if (escrowId) fastify.log.info({ escrowId }, 'escrow id found via objectTypes');
+    if (escrowId) fastify.log.info({ escrowId }, 'escrow id found via changedObjects (Created)');
     return escrowId;
   } catch (err) {
     fastify.log.error({ message: err.message, name: err.name, stack: err.stack?.split('\n').slice(0, 4).join(' | ') }, 'createEscrowOnChain error');
