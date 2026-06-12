@@ -24,6 +24,7 @@
                          "@mysten/sui":  "latest",
                          "@mysten/walrus":  "^1.1.7",
                          "@stripe/stripe-js":  "^9.5.0",
+                         "@vercel/analytics":  "^1.4.1",
                          "dotenv":  "^17.4.2",
                          "fastify":  "^5.8.5",
                          "ical-generator":  "^10.2.0",
