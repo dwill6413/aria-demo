@@ -80,32 +80,33 @@ async function createEscrowOnChain(bookingRef, guestAddr, hostAddr, depositAmoun
     const txResult = result?.Transaction;
     const changedObjects = txResult?.effects?.changedObjects;
 
-    fastify.log.info({
-      kind:    result?.$kind,
-      digest:  txResult?.digest,
-      status:  txResult?.effects?.status,
-      changedObjects: changedObjects ? JSON.stringify(changedObjects).slice(0, 2000) : 'absent',
-    }, 'escrow create result');
-
     if (result?.$kind === 'FailedTransaction') {
       console.warn('Escrow tx failed on-chain:', result.FailedTransaction?.status?.error?.message);
       return null;
     }
 
-    // In this transaction, the ONLY created object is the BookingEscrow
-    // (the deposit coin is mutated, not created) — so find the entry whose
-    // idOperation indicates "Created" and use its objectId. Handle a few
-    // possible field-naming/shape variants.
+    // changedObjects includes BOTH the ephemeral split-coin (created then
+    // wrapped/deleted within this tx) AND the real BookingEscrow (created,
+    // shared, persists). Find all "Created" entries, then prefer the one
+    // that is NOT a Coin type.
     let escrowId = null;
-    for (const c of (changedObjects || [])) {
+    const createdEntries = (changedObjects || []).filter(c => {
       let op = c.idOperation ?? c.operation ?? c.id_operation ?? c.$kind;
       if (op && typeof op === 'object') op = op.$kind;
-      const id = c.objectId ?? c.id ?? c.object_id;
-      if (typeof op === 'string' && /created/i.test(op)) {
-        escrowId = id;
-        break;
-      }
-    }
+      return typeof op === 'string' && /created/i.test(op);
+    });
+
+    fastify.log.info({
+      kind:    result?.$kind,
+      digest:  txResult?.digest,
+      status:  txResult?.effects?.status,
+      createdCount:   createdEntries.length,
+      createdEntries: createdEntries.map(c => JSON.stringify(c)),
+    }, 'escrow create result');
+
+    let chosen = createdEntries.find(c => !JSON.stringify(c).includes('::coin::Coin'));
+    if (!chosen) chosen = createdEntries[createdEntries.length - 1];
+    escrowId = chosen?.objectId ?? chosen?.id ?? chosen?.object_id ?? null;
 
     if (escrowId) fastify.log.info({ escrowId }, 'escrow id found via changedObjects (Created)');
     return escrowId;
