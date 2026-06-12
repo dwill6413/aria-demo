@@ -74,7 +74,7 @@ async function createEscrowOnChain(bookingRef, guestAddr, hostAddr, depositAmoun
     const result = await deployerKeypair.signAndExecuteTransaction({
       transaction: tx,
       client: suiClient,
-      include: { effects: true, objectChanges: true, events: true },
+      include: { effects: true, objectTypes: true },
     });
 
     const txResult = result?.Transaction;
@@ -83,9 +83,8 @@ async function createEscrowOnChain(bookingRef, guestAddr, hostAddr, depositAmoun
       kind:    result?.$kind,
       digest:  txResult?.digest,
       status:  txResult?.effects?.status,
-      resultKeys:    txResult ? Object.keys(txResult) : [],
-      objectChanges: txResult?.objectChanges ? JSON.stringify(txResult.objectChanges).slice(0, 1500) : 'absent',
-      events:        txResult?.events ? JSON.stringify(txResult.events).slice(0, 1500) : 'absent',
+      objectTypes: txResult?.objectTypes ? JSON.stringify(txResult.objectTypes).slice(0, 1500) : 'absent',
+      effectsKeys: txResult?.effects ? Object.keys(txResult.effects) : [],
     }, 'escrow create result');
 
     if (result?.$kind === 'FailedTransaction') {
@@ -93,24 +92,30 @@ async function createEscrowOnChain(bookingRef, guestAddr, hostAddr, depositAmoun
       return null;
     }
 
-    // Path 1: object changes (shape may vary by SDK version)
+    // objectTypes maps object IDs to their Move types for everything touched
+    // in the tx. Find the one whose type is our BookingEscrow. Handle a few
+    // possible shapes: array of [id, type] pairs, array of {objectId, objectType}
+    // objects, or a plain { [id]: type } dict.
     let escrowId = null;
-    for (const c of (txResult?.objectChanges || [])) {
-      const objType = c.objectType || c.Created?.objectType;
-      const action   = c.type || c.action || c.$kind;
-      if (objType?.includes('BookingEscrow') && /created/i.test(action || '')) {
-        escrowId = c.objectId || c.Created?.objectId;
-        break;
+    const ot = txResult?.objectTypes;
+    if (Array.isArray(ot)) {
+      for (const entry of ot) {
+        if (Array.isArray(entry)) {
+          const [id, type] = entry;
+          if (typeof type === 'string' && type.includes('BookingEscrow')) { escrowId = id; break; }
+        } else if (entry && typeof entry === 'object') {
+          const id   = entry.objectId ?? entry.id;
+          const type = entry.objectType ?? entry.type;
+          if (typeof type === 'string' && type.includes('BookingEscrow')) { escrowId = id; break; }
+        }
+      }
+    } else if (ot && typeof ot === 'object') {
+      for (const [id, type] of Object.entries(ot)) {
+        if (typeof type === 'string' && type.includes('BookingEscrow')) { escrowId = id; break; }
       }
     }
 
-    // Path 2 (fallback): parse escrow_id from the EscrowCreated event
-    if (!escrowId) {
-      const escrowEvent = (txResult?.events || []).find(e => (e.type || '').includes('EscrowCreated'));
-      escrowId = escrowEvent?.parsedJson?.escrow_id ?? null;
-      if (escrowId) fastify.log.info({ escrowId }, 'escrow id recovered from EscrowCreated event');
-    }
-
+    if (escrowId) fastify.log.info({ escrowId }, 'escrow id found via objectTypes');
     return escrowId;
   } catch (err) {
     fastify.log.error({ message: err.message, name: err.name, stack: err.stack?.split('\n').slice(0, 4).join(' | ') }, 'createEscrowOnChain error');
