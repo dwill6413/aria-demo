@@ -74,14 +74,18 @@ async function createEscrowOnChain(bookingRef, guestAddr, hostAddr, depositAmoun
     const result = await deployerKeypair.signAndExecuteTransaction({
       transaction: tx,
       client: suiClient,
-      include: { effects: true, objectChanges: true },
+      include: { effects: true, objectChanges: true, events: true },
     });
 
+    const txResult = result?.Transaction;
+
     fastify.log.info({
-      kind:               result?.$kind,
-      digest:             result?.Transaction?.digest,
-      status:             result?.Transaction?.effects?.status,
-      objectChangeTypes:  result?.Transaction?.objectChanges?.map(c => `${c.type}:${String(c.objectType).slice(0, 60)}`),
+      kind:    result?.$kind,
+      digest:  txResult?.digest,
+      status:  txResult?.effects?.status,
+      resultKeys:    txResult ? Object.keys(txResult) : [],
+      objectChanges: txResult?.objectChanges ? JSON.stringify(txResult.objectChanges).slice(0, 1500) : 'absent',
+      events:        txResult?.events ? JSON.stringify(txResult.events).slice(0, 1500) : 'absent',
     }, 'escrow create result');
 
     if (result?.$kind === 'FailedTransaction') {
@@ -89,10 +93,25 @@ async function createEscrowOnChain(bookingRef, guestAddr, hostAddr, depositAmoun
       return null;
     }
 
-    const escrowObj = result?.Transaction?.objectChanges?.find(
-      c => c.type === 'created' && c.objectType?.includes('BookingEscrow')
-    );
-    return escrowObj?.objectId ?? null;
+    // Path 1: object changes (shape may vary by SDK version)
+    let escrowId = null;
+    for (const c of (txResult?.objectChanges || [])) {
+      const objType = c.objectType || c.Created?.objectType;
+      const action   = c.type || c.action || c.$kind;
+      if (objType?.includes('BookingEscrow') && /created/i.test(action || '')) {
+        escrowId = c.objectId || c.Created?.objectId;
+        break;
+      }
+    }
+
+    // Path 2 (fallback): parse escrow_id from the EscrowCreated event
+    if (!escrowId) {
+      const escrowEvent = (txResult?.events || []).find(e => (e.type || '').includes('EscrowCreated'));
+      escrowId = escrowEvent?.parsedJson?.escrow_id ?? null;
+      if (escrowId) fastify.log.info({ escrowId }, 'escrow id recovered from EscrowCreated event');
+    }
+
+    return escrowId;
   } catch (err) {
     fastify.log.error({ message: err.message, name: err.name, stack: err.stack?.split('\n').slice(0, 4).join(' | ') }, 'createEscrowOnChain error');
     return null;
