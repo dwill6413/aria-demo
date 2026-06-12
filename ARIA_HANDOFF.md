@@ -1,5 +1,5 @@
 # ARIA — Technical Handoff Document
-**Version:** 4.6 | **Updated:** June 12, 2026
+**Version:** 4.7 | **Updated:** June 12, 2026
 
 Deeper technical details for developers or AI assistants continuing work on ARIA.
 Reconciled against the code actually deployed to production as of June 10, 2026.
@@ -385,6 +385,18 @@ Railway runs **Node 22** (`nixpacks.toml`: `nodejs_22`). Required by
 4. Error handling inconsistent in some routes.
 5. No automated backend/frontend tests.
 6. `hosts` table and `@anthropic-ai/sdk` unused; `zod` not used for validation.
+7. **Wallet address not fully visible/copyable** — displayed truncated (e.g.
+   `0x1de92e...391c8b`) with no copy option. P0b prerequisite (guests/hosts
+   need their full address to fund wallets or receive payouts). Small fix.
+8. **Fee collection/routing mechanism — zero implementation.** ARIA's revenue
+   (booking fee) is entirely separate from the escrow (guest security
+   deposit) — no mechanism exists to collect or route ARIA's cut. Needs
+   design for both Stripe (Connect-style split) and SuiUSD on-chain (PTB
+   split between host and ARIA, similar to `resolve_dispute`'s split logic).
+   See `ARIA_ROADMAP.md` Tech Debt Backlog for detail.
+9. `extractCreatedObjectId` (the P0a "last Created entry" fix) should be
+   extracted into its own function with a unit test — quick win, see
+   `ARIA_ROADMAP.md`.
 
 ---
 
@@ -423,4 +435,9 @@ NEXT_PUBLIC_API_URL = https://aria-demo-production-e590.up.railway.app
 *Technical Handoff v4.5 — June 10, 2026*
 *Changes from v4.4: Added sandbox-first execution note for P0a — test against
 latest @mysten/sui in a standalone local script before touching server.mjs,
-to avoid repeating Phase 1's slow Railway debug loop. See ARIA_ROADMAP.md v2.4.*
+to avoid repeating Phase 1's slow Railway debug loop. See ARIA_ROADMAP.md v2.4.**Technical Handoff v4.7 — June 12, 2026*
+*Changes from v4.6: Added three items to Current Technical Debt — wallet
+address full-visibility/copy fix (small, P0b prerequisite), fee
+collection/routing mechanism (currently zero implementation, needs design),
+and the extractCreatedObjectId unit test (quick win). See ARIA_ROADMAP.md v2.6
+for full detail.*
