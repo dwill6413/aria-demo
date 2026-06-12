@@ -1,5 +1,5 @@
 # ARIA — Technical Handoff Document
-**Version:** 4.5 | **Updated:** June 10, 2026
+**Version:** 4.6 | **Updated:** June 12, 2026
 
 Deeper technical details for developers or AI assistants continuing work on ARIA.
 Reconciled against the code actually deployed to production as of June 10, 2026.
@@ -51,61 +51,99 @@ Contract functions: `create_escrow`, `auto_release`, `claim_damage`,
 
 ### How transactions are signed and submitted
 
-> ⚠️ **TEMPORARY — HARD DEADLINE JULY 31, 2026.** The pattern below uses Sui's
-> JSON-RPC interface, which Sui is deactivating network-wide on July 31, 2026.
-> This is a bridge, not a long-term solution. Before October 2026 launch, this
-> entire pattern must migrate to gRPC or GraphQL. See `ARIA_ROADMAP.md` Phase 1
-> item **P0a** — this is bundled with guest-funded escrow (P0b) because both
-> require rebuilding this same layer.
+**STATUS: P0a COMPLETE (June 12, 2026).** Migrated off Sui's JSON-RPC interface
+(deactivating network-wide July 31, 2026) onto the gRPC client — well ahead of
+the deadline. Verified end-to-end on testnet: `create_escrow` and `auto_release`
+both execute successfully, with the `BookingEscrow` object correctly created,
+ID extracted, stored in Postgres, and later deleted on release.
 
-`@mysten/sui@2.16.3` SDK client methods (`SuiJsonRpcClient`, `SuiGrpcClient`,
-`signAndExecuteTransaction`) failed during Phase 1 development on this Node 22
-environment. The working pattern in `server.mjs` is raw JSON-RPC:
+**The working pattern** (`@mysten/sui: "latest"`, Node 22):
 
 ```javascript
-// 1. Fetch gas price + deployer coin via raw RPC helper
-const gasPrice = BigInt(await suiRpc('suix_getReferenceGasPrice', []));
-const coins    = await suiRpc('suix_getCoins', [sender, '0x2::sui::SUI', null, 1]);
+import { SuiGrpcClient } from '@mysten/sui/grpc';
+import { Transaction, coinWithBalance } from '@mysten/sui/transactions';
 
-// 2. Build PTB with all params explicit — no SDK client needed
-tx.setGasPrice(gasPrice);
-tx.setGasBudget(50_000_000n);
-tx.setGasPayment([{ objectId, version, digest }]);
-tx.sharedObjectRef({ objectId: '0x6', initialSharedVersion: 1, mutable: false }); // Clock
-const txBytes = await tx.build(); // no client argument
+const suiClient = new SuiGrpcClient({
+  network: 'testnet',
+  baseUrl: 'https://fullnode.testnet.sui.io:443',
+});
 
-// 3. Sign + submit via raw fetch
-const signed = await deployerKeypair.signTransaction(txBytes);
-await suiRpc('sui_executeTransactionBlock', [base64bytes, [sig], options]);
+const tx = new Transaction();
+tx.setSender(deployerKeypair.toSuiAddress());
+
+// coinWithBalance resolves a coin of this balance from the signer's holdings
+// automatically — no manual getCoins/splitCoins/gas-payment plumbing needed.
+const coin = coinWithBalance({ balance: depositMist });
+
+tx.moveCall({
+  target: `${PKG}::escrow::create_escrow`,
+  typeArguments: ['0x2::sui::SUI'],
+  arguments: [
+    tx.pure.string(bookingRef),
+    tx.pure.address(guestAddr),
+    tx.pure.address(hostAddr),
+    tx.pure.address(arbitratorAddr),
+    tx.pure.u64(expiryMs),
+    coin,
+    tx.object('0x6'), // Clock — resolved automatically, even for shared objects
+  ],
+});
+
+// Called on the KEYPAIR, not the client — this is the key difference from
+// every pattern that failed during Phase 1.
+const result = await deployerKeypair.signAndExecuteTransaction({
+  transaction: tx,
+  client: suiClient,
+  include: { effects: true },
+});
+
+if (result.$kind === 'FailedTransaction') {
+  // result.FailedTransaction.status.error.message
+} else {
+  // result.Transaction.digest, result.Transaction.effects.status
+}
 ```
 
-This pattern works today but is built on the deprecated interface. Do NOT
-extend or build new features on top of `suiRpc()` — instead, prioritize P0a.
+**Critical gotcha — extracting the created object's ID:**
+`include: { objectChanges: true }` and `include: { objectTypes: true }` are
+both **absent** from the result in this SDK version — do not rely on them. The
+correct field is `result.Transaction.effects.changedObjects`, an array of
+`{ objectId, idOperation, ... }`.
 
-**Migration notes for P0a:**
-- Official Mysten guidance: `SuiGrpcClient` with
-  `client.signAndExecuteTransaction({ signer, transaction })` is the recommended
-  pattern. We tried this during Phase 1 on `@mysten/sui@2.16.3` and got
-  `Invalid type: Expected Object but received Object` — a local validation
-  error. Mysten's docs note a newer SDK release with improved gRPC/GraphQL
-  support is coming.
-- If gRPC still fails on the latest SDK, GraphQL RPC is the documented fallback
-  for both reads and transaction submission.
-- `transaction.serialize()` is deprecated in favor of `transaction.toJSON()` as
-  part of the same SDK generation — relevant when passing transaction bytes to
-  the frontend for guest-side zkLogin signing (P0b).
+This array contains **multiple "Created" entries** when the transaction splits
+a coin: the ephemeral split-coin (created by `splitCoins`, then immediately
+wrapped into the Move object and effectively consumed) AND the real persistent
+object (here, `BookingEscrow`, created via `share_object` inside the Move call).
+**PTB execution order guarantees the split-coin's "Created" entry comes FIRST
+and the target object's comes LAST** — so:
 
-**Sandbox first — do not repeat Phase 1's debug loop:** Phase 1's SDK issues
-took ~8-10 edit-push-redeploy-check-Railway-logs cycles to resolve. For P0a,
-write a standalone local script (`test-grpc.mjs`, not committed to
-`server.mjs`) that upgrades to the latest `@mysten/sui` and tries a minimal
-read + test transaction via `SuiGrpcClient`. Iterate locally — fast, full
-stack traces, zero risk to the live site. Only migrate `createEscrowOnChain`
-and `autoReleaseEscrow` once that script works cleanly. See `ARIA_ROADMAP.md`
-P0a for the full step-by-step.
+```javascript
+const createdEntries = (changedObjects || []).filter(c => {
+  let op = c.idOperation ?? c.operation ?? c.$kind;
+  if (op && typeof op === 'object') op = op.$kind;
+  return typeof op === 'string' && /created/i.test(op);
+});
+const escrowId = createdEntries[createdEntries.length - 1]?.objectId ?? null;
+```
 
-See `createEscrowOnChain` and `autoReleaseEscrow` in `server.mjs` for the
-current (temporary) working implementation.
+Taking `createdEntries[0]` will give you a deleted/ephemeral object ID that
+later fails with `Object ... not found` when referenced. This cost several
+debug iterations — future similar extractions (e.g., Phase 2's `pii_access`
+object, or any other Move call that creates a shared object alongside a coin
+split) should use the **last** "Created" entry, not the first.
+
+**`autoReleaseEscrow`** uses the identical pattern — `tx.object(escrowObjectId)`
+for the (now-existing, non-ephemeral) shared object resolves correctly with no
+special handling needed. The earlier "Object not found" errors were entirely
+due to the wrong ID being passed in (see above), not a gRPC limitation.
+
+See `createEscrowOnChain` and `autoReleaseEscrow` in `server.mjs` for the full
+current implementation.
+
+**Remaining for the July 31 deadline:** `@mysten/deepbook-v3` may also use
+JSON-RPC internally for price/liquidity reads — not yet checked. Lower
+priority since it's read-only and DeepBook itself may migrate independently,
+but worth a check before the deadline.
 
 ### Testnet → mainnet changes (one line each)
 
@@ -152,20 +190,19 @@ The contract is suitable for demo and Sui Overflow.
 
 ### Issues — prioritized
 
-#### P0a — Migrate off JSON-RPC (HARD DEADLINE: July 31, 2026)
+#### P0a — Migrate off JSON-RPC (HARD DEADLINE: July 31, 2026) — ✅ COMPLETE
 
-Sui is deactivating JSON-RPC network-wide on July 31, 2026 — before our October
-launch. The entire `suiRpc()` raw-fetch pattern in `server.mjs` (used by
-`createEscrowOnChain` and `autoReleaseEscrow`) is built on this interface.
+**Done June 12, 2026.** Migrated `createEscrowOnChain` and `autoReleaseEscrow`
+from raw JSON-RPC to `SuiGrpcClient` + `keypair.signAndExecuteTransaction()`,
+upgraded `@mysten/sui` to `latest`. Verified end-to-end on testnet — full
+create→release cycle confirmed working, including the previously-failed
+`SuiGrpcClient` pattern (which now works on the newer SDK version). `suiRpc()`
+and the old raw-fetch helper have been removed entirely. See "How transactions
+are signed and submitted" above for the working pattern and the critical
+`changedObjects` gotcha discovered along the way.
 
-Fix: migrate to `SuiGrpcClient` (Mysten's recommended pattern,
-`signAndExecuteTransaction({ signer, transaction })`) or GraphQL RPC. Our
-Phase 1 attempt at `SuiGrpcClient` on `@mysten/sui@2.16.3` failed with
-`Invalid type: Expected Object but received Object` — check for a newer SDK
-version and retry with a minimal test transaction first. See "How transactions
-are signed and submitted" above for full migration notes.
-
-Bundled with P0b below — both require rebuilding the same transaction layer.
+`@mysten/deepbook-v3` may still use JSON-RPC internally — not yet checked,
+lower priority (read-only).
 
 #### P0b — Deployer-funded escrow (most important non-custodial gap)
 
@@ -180,35 +217,30 @@ the transaction from their browser; the booking confirmation flow shows the
 expiry timestamp so it is transparent before they sign. ARIA's backend
 orchestrates but does not provide the coin.
 
-#### P1 — Fix before mainnet
+#### P1 — Fix before mainnet — ⚠️ PARTIALLY COMPLETE
 
-**Hot key conflation (single point of failure)**
+**Arbitrator separation: ✅ done (June 12, 2026).** A dedicated arbitrator
+keypair was generated, private key/mnemonic in KeePass only, public address
+(`ARIA_ARBITRATOR_ADDRESS`) wired into `createEscrowOnChain` and confirmed
+on-chain — every new `BookingEscrow` now records this separate address as its
+`arbitrator`, not the deployer. `resolve_dispute`'s impact remains contractually
+bounded to one disputed escrow's guest/host split
+(`guest_amount + host_amount == escrow.amount` enforced on-chain), which is
+what makes it safe to later scale this key from manual cold signing to a
+scoped service key — see `ARIA_ROADMAP.md` P1 for the full scaling path.
 
-The backend transaction-signing key (`ARIA_DEPLOYER_KEY` in Railway), the
-contract deployer, and the per-escrow arbitrator are all the same address. A
-single key compromise enables an attacker to: forge `create_escrow` calls with
-arbitrary parameters; and call `resolve_dispute` on any disputed escrow to
-redirect the split.
-
-Fix: separate into three distinct keys, assigned by blast radius (this is
-operational, not a contract change — `arbitrator` is already a per-escrow field,
-no redeployment needed):
-
-1. **Deployer / UpgradeCap key** — broadest blast radius (controls contract code
-   pre-burn). Stays cold in KeePass permanently, regardless of scale — contract
-   upgrades are rare, deliberate events.
-2. **Backend signer** (`ARIA_DEPLOYER_KEY`) — Railway env var, scoped to
-   permissionless ops only (`auto_release`). Bounded impact even if compromised.
-3. **Arbitrator key** (`ARIA_ARBITRATOR_ADDRESS`) — generate a dedicated keypair
-   (`sui keytool generate ed25519`), private key/mnemonic in KeePass only, never
-   in env vars or committed files. `resolve_dispute`'s impact is contractually
-   bounded to one disputed escrow's guest/host split (`guest_amount + host_amount
-   == escrow.amount` enforced on-chain) — this bound is what makes it safe to
-   later scale this key from manual cold signing to a scoped service key without
-   any contract change. See `ARIA_ROADMAP.md` P1 for the full scaling path.
+**Remaining: deployer / backend-signer separation.** `ARIA_DEPLOYER_KEY` is
+still both the contract deployer/UpgradeCap holder AND the backend signer for
+`create_escrow` + `auto_release`. Fix: once P0b lands (guest's wallet funds
+`create_escrow`), the backend signer's role shrinks to just `auto_release`
+(permissionless, bounded impact — can only refund the guest after expiry). At
+that point, retiring the deployer/UpgradeCap key to cold KeePass-only storage
+becomes a clean, low-risk operation. Lower priority than P0b.
 
 **Repo hygiene**: private keys and mnemonics never appear in any committed file
-— only public addresses, which are not secrets.
+— only public addresses, which are not secrets. (One near-miss during this
+session: `sui keytool generate` writes a `.key` file containing the private
+key to the current directory — now in `.gitignore` via `*.key`.)
 
 #### P2 — Fix before launch with real users
 
@@ -262,9 +294,10 @@ assert!(expiry_ms <= clock::timestamp_ms(clock) + MAX_EXPIRY_MS, EExpiryTooFar);
 
 ### Pre-mainnet checklist
 
-- [ ] **P0a**: Migrate `suiRpc()` off JSON-RPC to gRPC/GraphQL (deadline: Jul 31, 2026)
-- [ ] **P0b**: Guest wallet signs and funds `create_escrow` (client-side PTB, on P0a's client)
-- [ ] **P1**: Separate deployer / backend-signer / arbitrator keys
+- [x] **P0a**: Migrate off JSON-RPC to gRPC (done June 12, 2026 — ahead of Jul 31 deadline)
+- [ ] **P0b**: Guest wallet signs and funds `create_escrow` (client-side PTB, on P0a's gRPC client)
+- [x] **P1a**: Arbitrator key separated (done June 12, 2026)
+- [ ] **P1b**: Separate deployer/UpgradeCap from backend signer (after P0b)
 - [ ] **P2**: Auto-release cron job built and running
 - [ ] **P2**: Production host address lookup from `host_profiles`
 - [ ] **P2**: Claim/dispute backend routes wired
