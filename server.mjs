@@ -3,7 +3,8 @@ import cors from '@fastify/cors';
 import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
 import Stripe from 'stripe';
-import { Transaction } from '@mysten/sui/transactions';
+import { SuiGrpcClient } from '@mysten/sui/grpc';
+import { Transaction, coinWithBalance } from '@mysten/sui/transactions';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
 import { dotenvConfig } from './config.mjs';
@@ -17,17 +18,10 @@ import { initDB, pool } from './db.mjs';
 dotenvConfig();
 
 // ─── Sui Escrow Client ────────────────────────────────────────────────────────
-const SUI_RPC = 'https://fullnode.testnet.sui.io:443';
-async function suiRpc(method, params, id = 1) {
-  const res = await fetch(SUI_RPC, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
-  });
-  const data = await res.json();
-  if (data.error) throw new Error(`RPC ${method}: ${JSON.stringify(data.error)}`);
-  return data.result;
-}
+const suiClient = new SuiGrpcClient({
+  network: 'testnet',
+  baseUrl: 'https://fullnode.testnet.sui.io:443',
+});
 let deployerKeypair = null;
 try {
   if (process.env.ARIA_DEPLOYER_KEY) {
@@ -51,25 +45,18 @@ try { await initDB(); } catch (err) { console.error('DB init failed:', err.messa
 async function createEscrowOnChain(bookingRef, guestAddr, hostAddr, depositAmount, checkOutStr) {
   if (!deployerKeypair || !process.env.ESCROW_PACKAGE_ID) return null;
   const sender = deployerKeypair.toSuiAddress();
+  const arbitrator = process.env.ARIA_ARBITRATOR_ADDRESS || sender;
   try {
     const depositMist = BigInt(Math.max(1, depositAmount)) * 1000n;
     const expiryMs    = BigInt(Date.now()) + 300_000n; // 5-min testnet window
 
-    // Fetch gas price + deployer coin via raw RPC (no SDK client needed)
-    const gasPrice = BigInt(await suiRpc('suix_getReferenceGasPrice', []));
-    const coins    = await suiRpc('suix_getCoins', [sender, '0x2::sui::SUI', null, 1]);
-    const gasCoin  = coins?.data?.[0];
-    if (!gasCoin) throw new Error('No SUI coin found for deployer');
-    fastify.log.info({ gasPrice: gasPrice.toString(), coinId: gasCoin.coinObjectId }, 'escrow: gas ready');
-
-    // Build PTB — all params explicit, no network calls inside build()
     const tx = new Transaction();
     tx.setSender(sender);
-    tx.setGasPrice(gasPrice);
-    tx.setGasBudget(50_000_000n);
-    tx.setGasPayment([{ objectId: gasCoin.coinObjectId, version: gasCoin.version, digest: gasCoin.digest }]);
 
-    const [coin] = tx.splitCoins(tx.gas, [tx.pure.u64(depositMist)]);
+    // coinWithBalance resolves a coin of this balance from the signer's
+    // holdings automatically — no manual getCoins/splitCoins needed.
+    const coin = coinWithBalance({ balance: depositMist });
+
     tx.moveCall({
       target: `${process.env.ESCROW_PACKAGE_ID}::${process.env.ESCROW_MODULE_NAME || 'escrow'}::create_escrow`,
       typeArguments: ['0x2::sui::SUI'],
@@ -77,37 +64,32 @@ async function createEscrowOnChain(bookingRef, guestAddr, hostAddr, depositAmoun
         tx.pure.string(bookingRef),
         tx.pure.address(guestAddr),
         tx.pure.address(hostAddr),
-        tx.pure.address(sender),
+        tx.pure.address(arbitrator),
         tx.pure.u64(expiryMs),
         coin,
-        tx.sharedObjectRef({ objectId: '0x6', initialSharedVersion: 1, mutable: false }), // Clock
+        tx.object('0x6'), // Clock — client resolves shared object version
       ],
     });
 
-    const txBytes = await tx.build();
-    fastify.log.info({ len: txBytes.length }, 'escrow: tx built');
-
-    const signed = await deployerKeypair.signTransaction(txBytes);
-    const txBase64 = typeof signed.bytes === 'string' ? signed.bytes : Buffer.from(signed.bytes).toString('base64');
-    const sig      = typeof signed.signature === 'string' ? signed.signature : Buffer.from(signed.signature).toString('base64');
-    fastify.log.info({ step: 'signed' }, 'escrow: tx signed');
-
-    const execResult = await suiRpc('sui_executeTransactionBlock',
-      [txBase64, [sig], { showObjectChanges: true, showEffects: true }, 'WaitForLocalExecution'], 2);
+    const result = await deployerKeypair.signAndExecuteTransaction({
+      transaction: tx,
+      client: suiClient,
+      include: { effects: true, objectChanges: true },
+    });
 
     fastify.log.info({
-      digest:             execResult?.digest,
-      status:             execResult?.effects?.status,
-      objectChangesCount: execResult?.objectChanges?.length,
-      objectChangeTypes:  execResult?.objectChanges?.map(c => `${c.type}:${String(c.objectType).slice(0, 60)}`),
-    }, 'escrow exec result');
+      kind:               result?.$kind,
+      digest:             result?.Transaction?.digest,
+      status:             result?.Transaction?.effects?.status,
+      objectChangeTypes:  result?.Transaction?.objectChanges?.map(c => `${c.type}:${String(c.objectType).slice(0, 60)}`),
+    }, 'escrow create result');
 
-    if (execResult?.effects?.status?.status === 'failure') {
-      console.warn('Escrow tx failed on-chain:', execResult.effects.status.error);
+    if (result?.$kind === 'FailedTransaction') {
+      console.warn('Escrow tx failed on-chain:', result.FailedTransaction?.status?.error?.message);
       return null;
     }
 
-    const escrowObj = execResult?.objectChanges?.find(
+    const escrowObj = result?.Transaction?.objectChanges?.find(
       c => c.type === 'created' && c.objectType?.includes('BookingEscrow')
     );
     return escrowObj?.objectId ?? null;
@@ -121,41 +103,26 @@ async function autoReleaseEscrow(escrowObjectId) {
   if (!deployerKeypair || !escrowObjectId || !process.env.ESCROW_PACKAGE_ID) return false;
   const sender = deployerKeypair.toSuiAddress();
   try {
-    const gasPrice = BigInt(await suiRpc('suix_getReferenceGasPrice', []));
-    const coins    = await suiRpc('suix_getCoins', [sender, '0x2::sui::SUI', null, 1]);
-    const gasCoin  = coins?.data?.[0];
-    if (!gasCoin) throw new Error('No SUI coin for autoRelease');
-
-    // Fetch escrow shared object info
-    const objInfo = await suiRpc('sui_getObject', [escrowObjectId, { showOwner: true }]);
-    const escrowInitialVersion = objInfo?.data?.owner?.Shared?.initial_shared_version;
-    if (!escrowInitialVersion) throw new Error(`Cannot get escrow shared version for ${escrowObjectId}`);
-
     const tx = new Transaction();
     tx.setSender(sender);
-    tx.setGasPrice(gasPrice);
-    tx.setGasBudget(20_000_000n);
-    tx.setGasPayment([{ objectId: gasCoin.coinObjectId, version: gasCoin.version, digest: gasCoin.digest }]);
 
     tx.moveCall({
       target: `${process.env.ESCROW_PACKAGE_ID}::${process.env.ESCROW_MODULE_NAME || 'escrow'}::auto_release`,
       typeArguments: ['0x2::sui::SUI'],
       arguments: [
-        tx.sharedObjectRef({ objectId: escrowObjectId, initialSharedVersion: escrowInitialVersion, mutable: true }),
-        tx.sharedObjectRef({ objectId: '0x6', initialSharedVersion: 1, mutable: false }), // Clock
+        tx.object(escrowObjectId), // shared object — client resolves version
+        tx.object('0x6'),          // Clock — client resolves version
       ],
     });
 
-    const txBytes = await tx.build();
-    const signed  = await deployerKeypair.signTransaction(txBytes);
-    const txBase64 = typeof signed.bytes === 'string' ? signed.bytes : Buffer.from(signed.bytes).toString('base64');
-    const sig      = typeof signed.signature === 'string' ? signed.signature : Buffer.from(signed.signature).toString('base64');
+    const result = await deployerKeypair.signAndExecuteTransaction({
+      transaction: tx,
+      client: suiClient,
+      include: { effects: true },
+    });
 
-    const execResult = await suiRpc('sui_executeTransactionBlock',
-      [txBase64, [sig], { showEffects: true }, 'WaitForLocalExecution'], 2);
-
-    if (execResult?.effects?.status?.status === 'failure') {
-      console.warn('autoRelease failed on-chain:', execResult.effects.status.error);
+    if (result?.$kind === 'FailedTransaction') {
+      console.warn('autoRelease failed on-chain:', result.FailedTransaction?.status?.error?.message);
       return false;
     }
     return true;
