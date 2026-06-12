@@ -104,8 +104,10 @@ async function createEscrowOnChain(bookingRef, guestAddr, hostAddr, depositAmoun
       createdEntries: createdEntries.map(c => JSON.stringify(c)),
     }, 'escrow create result');
 
-    let chosen = createdEntries.find(c => !JSON.stringify(c).includes('::coin::Coin'));
-    if (!chosen) chosen = createdEntries[createdEntries.length - 1];
+    // PTB execution order guarantees this: command 0 (splitCoins) creates the
+    // ephemeral deposit coin FIRST; command 1 (create_escrow) creates+shares
+    // the BookingEscrow SECOND. The last "Created" entry is always the escrow.
+    const chosen = createdEntries[createdEntries.length - 1];
     escrowId = chosen?.objectId ?? chosen?.id ?? chosen?.object_id ?? null;
 
     if (escrowId) fastify.log.info({ escrowId }, 'escrow id found via changedObjects (Created)');
