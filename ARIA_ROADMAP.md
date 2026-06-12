@@ -1,5 +1,5 @@
 # ARIA — Product Roadmap & AI Handoff Document
-**Version:** 2.3 | **Updated:** June 10, 2026
+**Version:** 2.4 | **Updated:** June 10, 2026
 **Purpose:** Complete handoff for an AI assistant continuing ARIA development.
 Read this entire document before writing any code.
 
@@ -77,17 +77,26 @@ signing flow on the foundation we'll actually ship with.
   `Invalid type: Expected Object but received Object` — a local validation
   error, not a network error. This may be specific to `@mysten/sui@2.16.3`;
   Mysten's own docs note a newer SDK release with better gRPC/GraphQL support
-  is coming. **First step: check for and upgrade to the latest `@mysten/sui`,
-  retry the `SuiGrpcClient` pattern with a minimal test transaction before
-  touching `server.mjs`.**
+  is coming.
 - If gRPC still fails on the latest SDK, GraphQL RPC is the documented
   fallback for transaction submission and reads.
 - `transaction.serialize()` is also deprecated in favor of `transaction.toJSON()`
   as part of this same SDK generation — relevant once we pass transaction bytes
   to the frontend for guest signing.
-- Once a working client pattern is confirmed, rewrite `createEscrowOnChain` and
-  `autoReleaseEscrow` on it, THEN build guest-side signing (P0b) on the same
-  pattern.
+
+**Recommended approach — sandbox before touching production:**
+Phase 1's SDK debugging required ~8-10 edit-push-redeploy-check-logs cycles on
+Railway, each costing minutes, to isolate the transaction-signing pattern. Avoid
+repeating that for P0a:
+1. Write a standalone local script (`test-grpc.mjs`, not committed to
+   `server.mjs`) that upgrades to the latest `@mysten/sui` and attempts a
+   minimal permissionless read + a simple test transaction via `SuiGrpcClient`.
+2. Run it locally — fast iteration, full stack traces, zero risk to the live
+   site.
+3. Only once that script succeeds without `Invalid type` or similar errors,
+   migrate `createEscrowOnChain` / `autoReleaseEscrow` in `server.mjs` to the
+   confirmed pattern.
+4. Then build guest-side signing (P0b) on the same confirmed pattern.
 
 **P0b — Guest-funded escrow (most important non-custodial gap)**
 On testnet the deployer funds the escrow from its own wallet. Production requires
