@@ -1,5 +1,5 @@
 # ARIA — Product Roadmap & AI Handoff Document
-**Version:** 2.6 | **Updated:** June 12, 2026
+**Version:** 2.7 | **Updated:** June 15, 2026
 **Purpose:** Complete handoff for an AI assistant continuing ARIA development.
 Read this entire document before writing any code.
 
@@ -29,6 +29,8 @@ direction is confirmed — no pivot. See `ARIA_HANDOFF.md` for full context.
 - Host dashboard (bookings, revenue, tax, applications, reviews)
 - Mobile-responsive nav with hamburger menu (all 4 pages)
 - 10-table Postgres schema with indexes including `escrow_object_id`
+- Full wallet address visible + copy button on all pages (`index.jsx`, `host.jsx`, `bookings.jsx`)
+- `extractCreatedObjectId()` extracted as named function with 15 unit tests (`escrow.test.mjs`)
 
 ---
 
@@ -47,144 +49,67 @@ direction is confirmed — no pivot. See `ARIA_HANDOFF.md` for full context.
 | Deployer | `0x24bd37a7d13a78de81bd5345899da8b7a4d41ebf26fc1af6f934f9841c7d97f3` |
 | Coin type | `0x2::sui::SUI` (testnet) → SuiUSD mainnet (generic `Coin<T>`, no code change) |
 
-#### Transaction signing pattern (important — do not change without testing)
-The `@mysten/sui@2.16.3` SDK client methods fail in the current environment.
-Working pattern: raw `suiRpc()` fetch for gas/coins, `tx.build()` with no client
-arg, `deployerKeypair.signTransaction()`, `suiRpc('sui_executeTransactionBlock')`.
-See `createEscrowOnChain` in `server.mjs` for the full implementation.
+#### Transaction signing pattern (current — P0a complete)
+`SuiGrpcClient` + `keypair.signAndExecuteTransaction()`. `suiRpc()` and all
+raw JSON-RPC fetch helpers have been removed. See `createEscrowOnChain` and
+`autoReleaseEscrow` in `server.mjs` for the full implementation.
 
-#### Phase 1 pending items (from security audit)
+Key detail: use `extractCreatedObjectId(changedObjects)` (defined in `server.mjs`,
+tested in `escrow.test.mjs`) to extract a newly-created shared object's ID from
+any PTB result. Takes the **last** "Created" entry — the split-coin ephemeral
+entry always comes first, the real object always comes last.
+
+#### Phase 1 pending items
 
 **P0a — Migrate off JSON-RPC — ✅ COMPLETE (June 12, 2026)**
 
-Done well ahead of the July 31, 2026 deadline. `createEscrowOnChain` and
-`autoReleaseEscrow` migrated from raw JSON-RPC (`suiRpc()`, now removed
-entirely) to `SuiGrpcClient` + `keypair.signAndExecuteTransaction()`, with
-`@mysten/sui` bumped to `latest`. Skipped the sandbox approach (see note
-below — this is what we'd do differently next time) and iterated directly on
-Railway; took ~6 deploy cycles total, mostly to find the correct field for
-extracting a newly-created object's ID from the transaction result.
-
-**The confirmed working pattern:**
-```javascript
-import { SuiGrpcClient } from '@mysten/sui/grpc';
-import { Transaction, coinWithBalance } from '@mysten/sui/transactions';
-
-const client = new SuiGrpcClient({ network: 'testnet', baseUrl: 'https://fullnode.testnet.sui.io:443' });
-
-const tx = new Transaction();
-tx.setSender(sender);
-const coin = coinWithBalance({ balance: depositMist }); // auto-resolves from signer's coins
-
-tx.moveCall({ target, typeArguments, arguments: [..., coin, tx.object('0x6')] }); // shared objects resolve automatically
-
-// Called on the KEYPAIR, not the client:
-const result = await keypair.signAndExecuteTransaction({ transaction: tx, client, include: { effects: true } });
-// result.$kind === 'Transaction' | 'FailedTransaction'
-// result.Transaction.effects.changedObjects — see gotcha below
-```
-
-**Critical gotcha — extracting a newly-created object's ID:**
-`include: { objectChanges: true }` and `objectTypes: true` are both **absent**
-from the result. Use `result.Transaction.effects.changedObjects` instead — an
-array of `{ objectId, idOperation, ... }`. When a transaction splits a coin
-(via `coinWithBalance`/`splitCoins`) AND creates a shared object (via
-`share_object`), **both appear as "Created" entries** — the ephemeral
-split-coin (consumed/wrapped, doesn't persist) is always first, the real
-object is always last (PTB execution order). Take the **last** "Created"
-entry, not the first:
-```javascript
-const created = changedObjects.filter(c => /created/i.test(c.idOperation ?? c.$kind ?? ''));
-const escrowId = created[created.length - 1]?.objectId ?? null;
-```
-Taking the first entry gives a deleted object ID that fails with
-`Object ... not found` when referenced later. **This same pattern applies to
-Phase 2's `pii_access` allowlist contract** if its creation also splits a coin
-or creates multiple objects in one PTB — apply the same "last Created entry"
-rule there.
-
-**For next time — sandbox approach was skipped:** we went straight to
-Railway iteration (6 cycles) instead of the planned local `test-grpc.mjs`
-sandbox. It worked out fine here since each cycle was fast to diagnose via
-structured logs, but the sandbox approach remains the better default for
-SDK-version-sensitive work — keep it in mind for Phase 2's Seal/Walrus
-integration, which will also involve new SDK surface area.
-
-**Remaining for the Jul 31 deadline:** `@mysten/deepbook-v3` may use JSON-RPC
-internally for price/liquidity reads — not yet checked (read-only, lower
-priority, may migrate independently).
-
 **P0b — Guest-funded escrow (most important non-custodial gap) — NEXT UP**
+
 On testnet the deployer funds the escrow from its own wallet. Production requires
 the guest's zkLogin wallet to sign `create_escrow` and provide the coin.
-- Implement client-side PTB signing in `index.jsx` booking flow, using whatever
-  client (gRPC/GraphQL) P0a establishes
-- Guest approves transaction in browser; expiry shown before signing
-- ARIA backend orchestrates but does not provide the coin
-- This makes the non-custodial claim actually true on-chain
+
+This is a **both-sides change**:
+- **Backend (`server.mjs`)**: `createEscrowOnChain` stops funding the escrow.
+  It builds the unsigned transaction and returns it to the frontend. After P0b,
+  the backend signer's role shrinks to just `auto_release`.
+- **Frontend (`index.jsx`)**: receives the unsigned PTB, presents it to the guest
+  for signing via their zkLogin wallet, submits to Sui, returns the escrow object
+  ID to the backend to store in Postgres.
+
+Scope decisions (locked):
+- SuiUSD only — not multi-coin/USDC. Multi-coin support deferred indefinitely.
+- Guest approves transaction in browser; expiry timestamp shown before signing.
+- ARIA backend orchestrates but does not provide the coin.
 
 **P1 — Key separation (before mainnet) — ARBITRATOR PORTION ✅ DONE (June 12, 2026)**
 
 *Completed:*
-- Generated a dedicated arbitrator keypair via `sui keytool generate ed25519`.
-  (Note: this command writes a `.key` file containing the private key to the
-  current directory — now `.gitignore`'d via `*.key`. A first keypair was
-  burned after its mnemonic was accidentally pasted into chat; the second was
-  kept KeePass-only throughout.)
-- Mnemonic in KeePass only. Public address set as `ARIA_ARBITRATOR_ADDRESS` in
-  Railway: `0x0069868f93f9127b3e8b51bf95bc529925ca382e6305da0bb01f693826b983f8`
-- `createEscrowOnChain` now passes this address as `arbitrator` (falling back
-  to the deployer address only if the env var is unset). **Confirmed on-chain**
-  — verified in the P0a test transaction's arguments.
-- Disputes will be resolved by manually signing `resolve_dispute` from this
-  key, held in KeePass, on an as-needed basis.
+- Dedicated arbitrator keypair generated. Mnemonic in KeePass only.
+- Public address: `0x0069868f93f9127b3e8b51bf95bc529925ca382e6305da0bb01f693826b983f8`
+- Set as `ARIA_ARBITRATOR_ADDRESS` in Railway. Confirmed on-chain.
+- `*.key` files added to `.gitignore`.
 
 *Remaining (lower priority, after P0b):*
-Deployer, backend signer are still the same hot key (`ARIA_DEPLOYER_KEY`). No
-contract change needed for this either — once P0b lands, the backend signer's
-role shrinks to just `auto_release`, making deployer/UpgradeCap separation a
-clean, low-risk operation at that point.
+Deployer and backend signer are still the same hot key (`ARIA_DEPLOYER_KEY`).
+Once P0b lands, the backend signer's role shrinks to just `auto_release`,
+making deployer/UpgradeCap separation a clean, low-risk operation.
 
-*Custody model — assign by blast radius, not uniformly:*
-- **Deployer / UpgradeCap key**: broadest blast radius (controls contract code
-  pre-burn). Stays cold in KeePass *regardless of scale* — contract upgrades are
-  rare, deliberate events that don't scale with booking volume.
-- **Backend signer** (`ARIA_DEPLOYER_KEY`): Railway env var, scoped to
-  permissionless operations only (`auto_release`). Bounded impact even if
-  compromised — `auto_release` can only refund the guest after expiry.
-- **Arbitrator key**: bounded blast radius by contract design — `resolve_dispute`
-  can only redistribute *one disputed escrow's* funds between *that escrow's*
-  recorded guest and host, with `guest_amount + host_amount == escrow.amount`
-  enforced on-chain. Cannot touch other escrows, cannot send funds elsewhere.
-  Starts cold (KeePass, manual signing); see scaling path below.
+*Custody model — assign by blast radius:*
+- **Deployer / UpgradeCap key**: cold KeePass only, regardless of scale.
+- **Backend signer** (`ARIA_DEPLOYER_KEY`): Railway env var, scoped to `auto_release` after P0b.
+- **Arbitrator key**: cold KeePass, manual signing. Bounded blast radius by contract
+  design (`resolve_dispute` can only split one disputed escrow between its guest/host).
 
-*Arbitration scaling path (designed now, built when volume justifies it):*
-Because `resolve_dispute`'s impact is contractually bounded per-escrow, the
-arbitrator key is safe to scale from "cold key, manual signing" to "scoped hot
-key in a dispute-resolution service" without any contract changes or migration:
-1. **Now**: single arbitrator keypair, KeePass-held, manual signing.
-2. **At scale**: stand up an internal dispute-review tool (queue + evidence +
-   approval). A separate scoped service key — held only by that service, never
-   by the main backend — executes approved resolutions by calling
-   `resolve_dispute`. Even full compromise of this key has bounded, per-escrow,
-   guest-or-host-only impact.
-3. **Cohort/regional arbitrators**: since `arbitrator` is per-escrow, different
-   cohorts (regions, booking value tiers) can use different arbitrator
-   addresses going forward with zero migration of existing escrows.
-4. Old escrows always keep the arbitrator address they were created with —
-   rotating `ARIA_ARBITRATOR_ADDRESS` only affects new bookings.
-
-**Repo hygiene — applies to every key in this section:**
-Private keys and mnemonics must NEVER appear in `ARIA_ROADMAP.md`,
-`ARIA_HANDOFF.md`, code comments, or any committed file. Only public addresses
-(which are not secrets) may appear in documentation. Private keys live in
-KeePass and/or Railway env vars only.
+*Arbitration scaling path (designed now, built when volume justifies):*
+1. **Now**: KeePass-held, manual signing.
+2. **At scale**: scoped dispute-resolution service key, only executes approved resolutions.
+3. **Cohort arbitrators**: `arbitrator` is per-escrow, so different cohorts can use
+   different addresses with zero migration of existing escrows.
 
 **P2 — Auto-release cron job**
 No scheduled job triggers `auto_release` after expiry. Build a job that queries
 bookings where `checkout_date + 5 days < NOW()` and `deposit_status = 'held'`
 and `escrow_object_id IS NOT NULL`, then calls `auto_release` on each.
-Use the raw RPC pattern from `server.mjs`.
 
 **P2 — Production host address lookup**
 `createEscrowOnChain` currently passes the deployer address as the host.
@@ -204,7 +129,7 @@ See Phase 3 below.
 
 **Pre-mainnet gate**
 - [x] P0a complete (June 12, 2026 — JSON-RPC migration, ahead of Jul 31 deadline)
-- [ ] P0b complete (guest-funded escrow)
+- [ ] P0b complete (guest-funded escrow) — **NEXT SESSION**
 - [x] P1a complete (arbitrator key separated, wired, on-chain)
 - [ ] P1b complete (deployer/backend-signer separation, after P0b)
 - [ ] P2 complete
@@ -243,6 +168,8 @@ public entry fun grant_access(access: &mut GuestPIIAccess, host: address, ctx: &
 public entry fun revoke_access(access: &mut GuestPIIAccess, host: address, ctx: &mut TxContext)
 ```
 Adapt from Mysten's allowlist examples in the Seal GitHub repo.
+When creating the `pii_access` object on-chain, use `extractCreatedObjectId()`
+to extract its ID — the same PTB pattern applies.
 
 #### Database change
 ```sql
@@ -320,10 +247,9 @@ SEAL_PACKAGE_ID = 0x<from deployment>
 ✅ Phase 1d: /booking/create → create_escrow on-chain
 ✅ Phase 1e: /booking/release-deposit → auto_release on-chain
 ✅ Phase 1f1: P0a — Migrate off JSON-RPC to gRPC (done June 12, 2026)
-⬜ Phase 1f1.5: extractCreatedObjectId unit test (quick win, locks in P0a fix for Phase 2 reuse)
-⬜ Phase 1f1.6: Wallet address full visibility + copy button (small, P0b prerequisite)
-⬜ Phase 1f2: P0b — Guest wallet funds escrow, SuiUSD only (client-side PTB, on P0a's gRPC client) — NEXT UP
-✅ Phase 1g1: P1a — Arbitrator key separated, wired, on-chain (done June 12, 2026)
+✅ Phase 1f1.5: extractCreatedObjectId extracted + 15 unit tests (done June 15, 2026)
+✅ Phase 1f1.6: Wallet address full visibility + copy button (done June 15, 2026)
+⬜ Phase 1f2: P0b — Guest wallet funds escrow, SuiUSD only — NEXT UP
 ⬜ Phase 1g2: P1b — Deployer/backend-signer separation (after P0b)
 ⬜ Phase 1h: P2 — Auto-release cron job
 ⬜ Phase 1h.5: Fee collection/routing mechanism (Stripe + SuiUSD paths — needs design)
@@ -350,18 +276,16 @@ SEAL_PACKAGE_ID = 0x<from deployment>
 
 | Item | Priority | Notes |
 |---|---|---|
-| Guest-funded escrow | **P0** | Testnet gap — deployer funds; must fix for mainnet |
-| Key separation | **P1** | Same hot key for all roles — must fix for mainnet |
-| Wallet address not fully visible/copyable | **High** | P0b prerequisite — guests/hosts can't get their full address to fund wallets or receive payouts. Currently truncated (e.g. `0x1de92e...391c8b`) with no copy option. Small, contained fix. |
+| Guest-funded escrow | **P0** | Testnet gap — deployer funds; must fix for mainnet. Next session. |
+| Key separation | **P1** | Same hot key for all roles — must fix for mainnet. After P0b. |
 | Fee collection/routing mechanism | High | Currently zero implementation. ARIA's revenue (booking fee) is separate from the escrow (guest security deposit) — no mechanism exists to collect or route ARIA's cut. Two paths to design: Stripe Connect-style split (fiat), and a SuiUSD on-chain split (PTB splits rental payment between host and ARIA in one tx, similar to resolve_dispute's split logic). Needs design before/alongside P0b. |
-| `extractCreatedObjectId` unit test | Low (quick win) | Extract the "last Created entry" logic from P0a into its own function with a unit test using mock `changedObjects` data. No network needed. Locks in correct behavior for Phase 2's `pii_access` reuse. |
 | Auto-release job | P2 | Phase 1h |
 | Production host address | P2 | Phase 1i |
 | Claim/dispute routes | P2 | Phase 1j / Phase 3 |
 | Properties frontend-hardcoded | Medium | `properties` table empty |
 | Frontend tax/price duplication | Low | `catalog.mjs` centralizes backend |
 | Stripe webhooks | Medium | Create-intent only |
-| No automated tests | Medium | No backend/frontend test suite |
+| No automated tests | Medium | Backend unit tests started (`escrow.test.mjs`). No frontend tests. |
 | `zod` unused | Low | Already a dep; use for validation |
 | Legacy `hosts` table | Low | Unused; drop it |
 | `@anthropic-ai/sdk` unused | Low | Remove |
@@ -396,12 +320,13 @@ Follow-up: one-time authorization code exchange.
 | PII access start | Booking confirmation (not check-in) | Hosts need identity before guest arrives |
 | Deposit lifecycle drives PII access | Yes — released = access revoked atomically | Natural boundary |
 | Coin type | Generic `Coin<T>` | Testnet SUI now; SuiUSD mainnet; no code change |
-| P0b payment coin scope | SuiUSD only (not multi-coin/USDC) | Discussed June 12, 2026 — keep P0b scope smaller; multi-coin support deferred indefinitely, not currently planned |
+| P0b payment coin scope | SuiUSD only (not multi-coin/USDC) | Keep P0b scope smaller; multi-coin deferred indefinitely |
 | Arbitrator scope | Can only split between guest and host | Limits blast radius if compromised |
-| SDK client for tx submission | Raw JSON-RPC fetch (Phase 1, **temporary**) | SDK client methods incompatible with `@mysten/sui@2.16.3`; must migrate to gRPC/GraphQL before Jul 31, 2026 (P0a) |
+| SDK client for tx submission | `SuiGrpcClient` + `keypair.signAndExecuteTransaction()` | P0a complete; gRPC is the working pattern |
 | Emergency withdraw / pause | **Rejected** | Admin drain path; undermines non-custodial claim |
-| Arbitrator key custody | Cold (KeePass), separate from deployer & backend signer | Bounded blast radius (resolve_dispute is per-escrow, guest/host only) enables safe future scaling to a scoped service key |
+| Arbitrator key custody | Cold (KeePass), separate from deployer & backend signer | Bounded blast radius enables safe future scaling |
 | Private keys in documentation | **Never** — public addresses only | Roadmap/handoff docs are pushed to public GitHub |
+| extractCreatedObjectId | Named function in `server.mjs`, tested in `escrow.test.mjs` | Reuse for Phase 2 pii_access; do not inline |
 
 ---
 
@@ -411,27 +336,20 @@ Follow-up: one-time authorization code exchange.
 ```
 DATABASE_URL, GOOGLE_CLIENT_ID, GOOGLE_CALLBACK_URL, FRONTEND_URL
 HOST_ADDRESSES, SESSION_SECRET, XAI_API_KEY, RESEND_API_KEY, STRIPE_SECRET_KEY
-ESCROW_PACKAGE_ID      = 0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe
-ESCROW_MODULE_NAME     = escrow
-ARIA_DEPLOYER_KEY      = <suiprivkey1... bech32 format — KeePass + Railway only, never committed>
+ESCROW_PACKAGE_ID       = 0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe
+ESCROW_MODULE_NAME      = escrow
+ARIA_DEPLOYER_KEY       = <suiprivkey1... bech32 format — KeePass + Railway only, never committed>
+ARIA_ARBITRATOR_ADDRESS = 0x0069868f93f9127b3e8b51bf95bc529925ca382e6305da0bb01f693826b983f8
 ```
-
-**To add for P1 (arbitrator key separation):**
-```
-ARIA_ARBITRATOR_ADDRESS = 0x<public address only — generate via `sui keytool generate ed25519`>
-```
-The corresponding private key/mnemonic goes in KeePass only. Never in Railway,
-never in any committed file. Only this public address is referenced in env vars
-and code.
 
 **To add for Phase 2:**
 ```
-SEAL_PACKAGE_ID      = 0x<from pii_access.move deployment>
+SEAL_PACKAGE_ID = 0x<from pii_access.move deployment>
 ```
 
 **In Vercel (frontend):**
 ```
-NEXT_PUBLIC_API_URL  = https://aria-demo-production-e590.up.railway.app
+NEXT_PUBLIC_API_URL = https://aria-demo-production-e590.up.railway.app
 ```
 
 ---
@@ -447,15 +365,15 @@ NEXT_PUBLIC_API_URL  = https://aria-demo-production-e590.up.railway.app
 | Walrus documentation | `https://docs.walrus.site` |
 | Sui testnet explorer | `https://suiexplorer.com/?network=testnet` |
 | Sui testnet faucet | `https://faucet.sui.io` |
-| JSON-RPC migration guide | `https://docs.sui.io` → "JSON-RPC Migration Guide" (search docs site) |
 | Sui data stack overview (gRPC/GraphQL) | `https://blog.sui.io/graphql-archival-store-sui-data-stack/` |
 | Deployed escrow | `https://suiexplorer.com/object/0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe?network=testnet` |
 
-*ARIA Roadmap v2.6 — June 12, 2026*
-*Changes from v2.5: Fixed a document duplication bug (entire body had been
-accidentally duplicated during a prior edit; reconstructed to a single clean
-copy). Added three new queued items: wallet address full-visibility/copy fix
-(small, P0b prerequisite), fee collection/routing mechanism (Stripe + SuiUSD
-paths, currently zero implementation, needs design), and the
-extractCreatedObjectId unit test (quick win from P0a). Recorded P0b scope
-decision: SuiUSD only, not multi-coin.*
+---
+
+*ARIA Roadmap v2.7 — June 15, 2026*
+*Changes from v2.6: Marked Phase 1f1.5 (extractCreatedObjectId + 15 unit tests)
+and Phase 1f1.6 (full wallet address visibility + copy button) as complete.
+Removed those items from Tech Debt Backlog. Clarified P0b as a both-sides
+change (frontend + backend). Added extractCreatedObjectId architectural decision.
+Updated SDK client decision to reflect P0a completion. Updated "What Is Already
+Built" section. P0b is the next session's primary task.*

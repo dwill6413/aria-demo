@@ -1,8 +1,8 @@
 # ARIA — Technical Handoff Document
-**Version:** 4.7 | **Updated:** June 12, 2026
+**Version:** 4.8 | **Updated:** June 15, 2026
 
 Deeper technical details for developers or AI assistants continuing work on ARIA.
-Reconciled against the code actually deployed to production as of June 10, 2026.
+Reconciled against the code actually deployed to production as of June 15, 2026.
 For the security change log see `ARIA_REMEDIATION.md`. For the build roadmap see `ARIA_ROADMAP.md`.
 
 ---
@@ -71,8 +71,6 @@ const suiClient = new SuiGrpcClient({
 const tx = new Transaction();
 tx.setSender(deployerKeypair.toSuiAddress());
 
-// coinWithBalance resolves a coin of this balance from the signer's holdings
-// automatically — no manual getCoins/splitCoins/gas-payment plumbing needed.
 const coin = coinWithBalance({ balance: depositMist });
 
 tx.moveCall({
@@ -85,12 +83,10 @@ tx.moveCall({
     tx.pure.address(arbitratorAddr),
     tx.pure.u64(expiryMs),
     coin,
-    tx.object('0x6'), // Clock — resolved automatically, even for shared objects
+    tx.object('0x6'),
   ],
 });
 
-// Called on the KEYPAIR, not the client — this is the key difference from
-// every pattern that failed during Phase 1.
 const result = await deployerKeypair.signAndExecuteTransaction({
   transaction: tx,
   client: suiClient,
@@ -106,39 +102,30 @@ if (result.$kind === 'FailedTransaction') {
 
 **Critical gotcha — extracting the created object's ID:**
 `include: { objectChanges: true }` and `include: { objectTypes: true }` are
-both **absent** from the result in this SDK version — do not rely on them. The
-correct field is `result.Transaction.effects.changedObjects`, an array of
-`{ objectId, idOperation, ... }`.
+both **absent** from the result in this SDK version. Use
+`result.Transaction.effects.changedObjects`. When a transaction splits a coin
+AND creates a shared object, both appear as "Created" entries. PTB execution
+order guarantees the split-coin comes FIRST and the real object comes LAST.
+Always take the **last** "Created" entry.
 
-This array contains **multiple "Created" entries** when the transaction splits
-a coin: the ephemeral split-coin (created by `splitCoins`, then immediately
-wrapped into the Move object and effectively consumed) AND the real persistent
-object (here, `BookingEscrow`, created via `share_object` inside the Move call).
-**PTB execution order guarantees the split-coin's "Created" entry comes FIRST
-and the target object's comes LAST** — so:
+This logic is now extracted into `extractCreatedObjectId(changedObjects)` in
+`server.mjs`, covered by 15 unit tests in `escrow.test.mjs`. Use this function
+for Phase 2's `pii_access` object creation — do not inline the filter logic again.
 
 ```javascript
-const createdEntries = (changedObjects || []).filter(c => {
-  let op = c.idOperation ?? c.operation ?? c.$kind;
-  if (op && typeof op === 'object') op = op.$kind;
-  return typeof op === 'string' && /created/i.test(op);
-});
-const escrowId = createdEntries[createdEntries.length - 1]?.objectId ?? null;
+// server.mjs — extracted helper, tested in escrow.test.mjs
+function extractCreatedObjectId(changedObjects) {
+  const createdEntries = (changedObjects || []).filter(c => {
+    let op = c.idOperation ?? c.operation ?? c.id_operation ?? c.$kind;
+    if (op && typeof op === 'object') op = op.$kind;
+    return typeof op === 'string' && /created/i.test(op);
+  });
+  const chosen = createdEntries[createdEntries.length - 1];
+  return chosen?.objectId ?? chosen?.id ?? chosen?.object_id ?? null;
+}
 ```
 
-Taking `createdEntries[0]` will give you a deleted/ephemeral object ID that
-later fails with `Object ... not found` when referenced. This cost several
-debug iterations — future similar extractions (e.g., Phase 2's `pii_access`
-object, or any other Move call that creates a shared object alongside a coin
-split) should use the **last** "Created" entry, not the first.
-
-**`autoReleaseEscrow`** uses the identical pattern — `tx.object(escrowObjectId)`
-for the (now-existing, non-ephemeral) shared object resolves correctly with no
-special handling needed. The earlier "Object not found" errors were entirely
-due to the wrong ID being passed in (see above), not a gRPC limitation.
-
-See `createEscrowOnChain` and `autoReleaseEscrow` in `server.mjs` for the full
-current implementation.
+**`autoReleaseEscrow`** uses the identical signing pattern. See `server.mjs`.
 
 **Remaining for the July 31 deadline:** `@mysten/deepbook-v3` may also use
 JSON-RPC internally for price/liquidity reads — not yet checked. Lower
@@ -177,125 +164,61 @@ The contract is suitable for demo and Sui Overflow.
   A fully compromised backend cannot move a single token from any active escrow.
 - **Bounded arbitrator blast radius**: the arbitrator can only act on escrows in
   `STATUS_DISPUTED`, and can only split between the recorded `guest` and `host`
-  addresses — never to a third address. Active, claimed, and released escrows
-  are unreachable by the arbitrator key.
+  addresses — never to a third address.
 - **No reentrancy**: Move's object model makes this structurally impossible.
 - **No integer overflow**: Move u64 aborts on overflow; no silent wrapping.
-- **No emergency withdraw / pause**: this is intentional and correct. An
-  emergency withdraw is by definition an admin drain path and would make ARIA's
-  non-custodial claim false at the contract level. A pause function creates a
-  griefing vector (who pauses? can it block a guest's rightful auto-release?).
-  The protection against contract bugs is per-object isolation plus immutability
-  after mainnet audit — not a backdoor. **Do not add either of these.**
+- **No emergency withdraw / pause**: intentional and correct. Do not add either.
 
 ### Issues — prioritized
 
-#### P0a — Migrate off JSON-RPC (HARD DEADLINE: July 31, 2026) — ✅ COMPLETE
+#### P0a — Migrate off JSON-RPC — ✅ COMPLETE (June 12, 2026)
 
-**Done June 12, 2026.** Migrated `createEscrowOnChain` and `autoReleaseEscrow`
-from raw JSON-RPC to `SuiGrpcClient` + `keypair.signAndExecuteTransaction()`,
-upgraded `@mysten/sui` to `latest`. Verified end-to-end on testnet — full
-create→release cycle confirmed working, including the previously-failed
-`SuiGrpcClient` pattern (which now works on the newer SDK version). `suiRpc()`
-and the old raw-fetch helper have been removed entirely. See "How transactions
-are signed and submitted" above for the working pattern and the critical
-`changedObjects` gotcha discovered along the way.
-
-`@mysten/deepbook-v3` may still use JSON-RPC internally — not yet checked,
-lower priority (read-only).
-
-#### P0b — Deployer-funded escrow (most important non-custodial gap)
+#### P0b — Deployer-funded escrow (most important non-custodial gap) — NEXT UP
 
 On testnet, ARIA's deployer wallet signs `create_escrow` and provides the deposit
-coin from its own SUI balance. This means the deployer — not the guest — holds
-the escrowed funds. The non-custodial claim only becomes true when the guest's
-zkLogin wallet signs the transaction and provides the coin from their own balance.
+coin from its own SUI balance. The non-custodial claim only becomes true when the
+guest's zkLogin wallet signs the transaction and provides the coin from their own
+balance.
 
 Fix: implement client-side PTB signing using the guest's zkLogin wallet for
-`create_escrow`, built on whichever client P0a establishes. The guest approves
-the transaction from their browser; the booking confirmation flow shows the
-expiry timestamp so it is transparent before they sign. ARIA's backend
-orchestrates but does not provide the coin.
+`create_escrow`. The guest approves the transaction from their browser; the
+booking confirmation flow shows the expiry timestamp before they sign. ARIA's
+backend orchestrates but does not provide the coin.
+
+This is a both-sides change:
+- **Backend (`server.mjs`)**: `createEscrowOnChain` stops funding the escrow.
+  It builds the unsigned transaction and returns it to the frontend. The backend
+  signer's role shrinks to just `auto_release` after P0b lands.
+- **Frontend (`index.jsx`)**: receives the unsigned PTB, presents it to the guest
+  for signing via their zkLogin wallet, submits to Sui, returns the escrow object
+  ID to the backend to store in Postgres.
 
 #### P1 — Fix before mainnet — ⚠️ PARTIALLY COMPLETE
 
-**Arbitrator separation: ✅ done (June 12, 2026).** A dedicated arbitrator
-keypair was generated, private key/mnemonic in KeePass only, public address
-(`ARIA_ARBITRATOR_ADDRESS`) wired into `createEscrowOnChain` and confirmed
-on-chain — every new `BookingEscrow` now records this separate address as its
-`arbitrator`, not the deployer. `resolve_dispute`'s impact remains contractually
-bounded to one disputed escrow's guest/host split
-(`guest_amount + host_amount == escrow.amount` enforced on-chain), which is
-what makes it safe to later scale this key from manual cold signing to a
-scoped service key — see `ARIA_ROADMAP.md` P1 for the full scaling path.
+**Arbitrator separation: ✅ done (June 12, 2026).** Dedicated arbitrator keypair
+generated, private key/mnemonic in KeePass only, public address
+(`ARIA_ARBITRATOR_ADDRESS`) wired into `createEscrowOnChain` and confirmed on-chain.
 
-**Remaining: deployer / backend-signer separation.** `ARIA_DEPLOYER_KEY` is
-still both the contract deployer/UpgradeCap holder AND the backend signer for
-`create_escrow` + `auto_release`. Fix: once P0b lands (guest's wallet funds
-`create_escrow`), the backend signer's role shrinks to just `auto_release`
-(permissionless, bounded impact — can only refund the guest after expiry). At
-that point, retiring the deployer/UpgradeCap key to cold KeePass-only storage
-becomes a clean, low-risk operation. Lower priority than P0b.
-
-**Repo hygiene**: private keys and mnemonics never appear in any committed file
-— only public addresses, which are not secrets. (One near-miss during this
-session: `sui keytool generate` writes a `.key` file containing the private
-key to the current directory — now in `.gitignore` via `*.key`.)
+**Remaining: deployer / backend-signer separation.** After P0b lands, the backend
+signer's role shrinks to just `auto_release`. At that point, retiring the
+deployer/UpgradeCap key to cold KeePass-only storage becomes a clean, low-risk
+operation.
 
 #### P2 — Fix before launch with real users
 
-**Auto-release cron job missing**
-
-`auto_release` is callable by anyone after `expiry_ms`, but there is no scheduled
-job to trigger it. Guests depend on the host releasing manually or calling
-`auto_release` themselves — which they won't know to do.
-
-Fix: scheduled job queries `bookings` where `checkout_date + 5 days < NOW()`,
-`deposit_status = 'held'`, and `escrow_object_id IS NOT NULL`, then calls
-`auto_release`. See roadmap Phase 1f.
-
-**Production host address lookup**
-
-`create_escrow` currently records the deployer address as the `host` in the
-escrow object. Production must use the actual host's Sui address.
-
-Fix: one DB query in `createEscrowOnChain`:
-```javascript
-SELECT payout_sui_address FROM host_profiles
-WHERE status = 'approved' AND <property ownership condition>
-```
-
-**Claim/dispute backend routes not wired**
-
-`claim_damage`, `dispute_claim`, and `resolve_dispute` exist in the contract and
-are fully tested, but no backend routes call them. The 5-day inspection window
-and dispute flow are non-functional at the application layer.
-
-Fix: Phase 3 routes — `/booking/claim-damage`, `/booking/dispute-claim`, and
-the arbitrator resolution endpoint. See roadmap.
+- Auto-release cron job missing
+- Production host address lookup (`payout_sui_address` from `host_profiles`)
+- Claim/dispute backend routes not wired
 
 #### P3 — Clean up, not blocking
 
-**`STATUS_RESOLVED` is dead code**
-
-The constant `u8 = 4` is defined but `resolve_dispute` consumes and deletes the
-escrow object rather than writing a final status. The constant is never written.
-Delete it, or retain it and set it before deletion for event indexing clarity.
-
-**Expiry has no upper bound**
-
-`expiry_ms` is caller-supplied; the contract only checks it is in the future. A
-misconfigured backend could create a 100-year escrow. Consider adding a sanity
-bound:
-```move
-const MAX_EXPIRY_MS: u64 = 30 * 24 * 60 * 60 * 1000; // 30 days
-assert!(expiry_ms <= clock::timestamp_ms(clock) + MAX_EXPIRY_MS, EExpiryTooFar);
-```
+- `STATUS_RESOLVED` is dead code in the contract
+- Optional: 30-day expiry upper bound in contract
 
 ### Pre-mainnet checklist
 
-- [x] **P0a**: Migrate off JSON-RPC to gRPC (done June 12, 2026 — ahead of Jul 31 deadline)
-- [ ] **P0b**: Guest wallet signs and funds `create_escrow` (client-side PTB, on P0a's gRPC client)
+- [x] **P0a**: Migrate off JSON-RPC to gRPC (done June 12, 2026)
+- [ ] **P0b**: Guest wallet signs and funds `create_escrow` (client-side PTB)
 - [x] **P1a**: Arbitrator key separated (done June 12, 2026)
 - [ ] **P1b**: Separate deployer/UpgradeCap from backend signer (after P0b)
 - [ ] **P2**: Auto-release cron job built and running
@@ -327,7 +250,7 @@ assert!(expiry_ms <= clock::timestamp_ms(clock) + MAX_EXPIRY_MS, EExpiryTooFar);
 
 ### Node Version
 Railway runs **Node 22** (`nixpacks.toml`: `nodejs_22`). Required by
-`@mysten/sui@2.16.3`. Do not downgrade.
+`@mysten/sui@latest`. Do not downgrade.
 
 ---
 
@@ -355,7 +278,8 @@ Railway runs **Node 22** (`nixpacks.toml`: `nodejs_22`). Required by
 
 | File | Purpose | Notes |
 |---|---|---|
-| `server.mjs` | Main Fastify server | Routes, RBAC, escrow helpers, raw RPC pattern |
+| `server.mjs` | Main Fastify server | Routes, RBAC, escrow helpers |
+| `escrow.test.mjs` | Unit tests for `extractCreatedObjectId` | 15 tests, no network needed. Run: `node escrow.test.mjs` |
 | `catalog.mjs` | Prices + tax rates | Single source of truth |
 | `db.mjs` | Pool + `initDB()` | 10 tables, `escrow_object_id` column, idempotent |
 | `auth.mjs` | OAuth + sessions | JWT verification, CSPRNG IDs |
@@ -363,9 +287,9 @@ Railway runs **Node 22** (`nixpacks.toml`: `nodejs_22`). Required by
 | `nixpacks.toml` | Railway build config | Node 22 required |
 | `contracts/aria_escrow/` | Move smart contract | escrow.move + 23 tests |
 | `pages/ai.jsx` | AI chat UI | HTML-escaped output |
-| `pages/bookings.jsx` | Guest dashboard | `fmtDay()`, mobile-responsive nav |
-| `pages/host.jsx` | Host dashboard | Mobile-responsive nav |
-| `pages/index.jsx` | Homepage + booking modal | Mobile-responsive hamburger nav |
+| `pages/bookings.jsx` | Guest dashboard | Full wallet address + copy button |
+| `pages/host.jsx` | Host dashboard | Full wallet address + copy button |
+| `pages/index.jsx` | Homepage + booking modal | Full wallet address + copy button |
 
 ---
 
@@ -383,20 +307,13 @@ Railway runs **Node 22** (`nixpacks.toml`: `nodejs_22`). Required by
 2. Frontend tax/price duplication — `catalog.mjs` centralizes backend; frontend copy remains.
 3. Stripe: create-intent only; webhooks missing.
 4. Error handling inconsistent in some routes.
-5. No automated backend/frontend tests.
+5. No automated backend/frontend tests (backend unit tests started with `escrow.test.mjs`).
 6. `hosts` table and `@anthropic-ai/sdk` unused; `zod` not used for validation.
-7. **Wallet address not fully visible/copyable** — displayed truncated (e.g.
-   `0x1de92e...391c8b`) with no copy option. P0b prerequisite (guests/hosts
-   need their full address to fund wallets or receive payouts). Small fix.
-8. **Fee collection/routing mechanism — zero implementation.** ARIA's revenue
-   (booking fee) is entirely separate from the escrow (guest security
-   deposit) — no mechanism exists to collect or route ARIA's cut. Needs
-   design for both Stripe (Connect-style split) and SuiUSD on-chain (PTB
-   split between host and ARIA, similar to `resolve_dispute`'s split logic).
-   See `ARIA_ROADMAP.md` Tech Debt Backlog for detail.
-9. `extractCreatedObjectId` (the P0a "last Created entry" fix) should be
-   extracted into its own function with a unit test — quick win, see
-   `ARIA_ROADMAP.md`.
+7. **Fee collection/routing mechanism — zero implementation.** ARIA's revenue
+   (booking fee) is entirely separate from the escrow (guest security deposit) —
+   no mechanism exists to collect or route ARIA's cut. Needs design for both
+   Stripe (Connect-style split) and SuiUSD on-chain (PTB split between host and
+   ARIA, similar to `resolve_dispute`'s split logic). Needs design before/alongside P0b.
 
 ---
 
@@ -406,10 +323,10 @@ Railway runs **Node 22** (`nixpacks.toml`: `nodejs_22`). Required by
 ```
 DATABASE_URL, GOOGLE_CLIENT_ID, GOOGLE_CALLBACK_URL, FRONTEND_URL
 HOST_ADDRESSES, SESSION_SECRET, XAI_API_KEY, RESEND_API_KEY, STRIPE_SECRET_KEY
-ESCROW_PACKAGE_ID    = 0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe
-ESCROW_MODULE_NAME   = escrow
-ARIA_DEPLOYER_KEY    = <suiprivkey1... bech32 format — in Railway, never commit>
-ARIA_ARBITRATOR_ADDRESS = 0x<public address only — see P1; private key in KeePass>
+ESCROW_PACKAGE_ID       = 0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe
+ESCROW_MODULE_NAME      = escrow
+ARIA_DEPLOYER_KEY       = <suiprivkey1... bech32 format — in Railway, never commit>
+ARIA_ARBITRATOR_ADDRESS = 0x0069868f93f9127b3e8b51bf95bc529925ca382e6305da0bb01f693826b983f8
 ```
 
 **Vercel:**
@@ -426,18 +343,18 @@ NEXT_PUBLIC_API_URL = https://aria-demo-production-e590.up.railway.app
 - Gate AI agent host tools by server-derived `isHost`, not request body.
 - Compute money and dates server-side; render calendar dates with `fmtDay()`.
 - All `db.mjs` DDL must stay idempotent.
-- For Sui transactions, use the raw RPC pattern — do not use SDK client methods.
+- For Sui transactions, use the gRPC pattern established in P0a — see `server.mjs`.
+- Use `extractCreatedObjectId(changedObjects)` for any PTB that creates a shared
+  object — do not inline the filter logic.
 - Do not add emergency withdraw or pause functions to the contract.
 - Keep this doc, `ARIA_ROADMAP.md`, and `ARIA_REMEDIATION.md` in sync.
 
 ---
 
-*Technical Handoff v4.5 — June 10, 2026*
-*Changes from v4.4: Added sandbox-first execution note for P0a — test against
-latest @mysten/sui in a standalone local script before touching server.mjs,
-to avoid repeating Phase 1's slow Railway debug loop. See ARIA_ROADMAP.md v2.4.**Technical Handoff v4.7 — June 12, 2026*
-*Changes from v4.6: Added three items to Current Technical Debt — wallet
-address full-visibility/copy fix (small, P0b prerequisite), fee
-collection/routing mechanism (currently zero implementation, needs design),
-and the extractCreatedObjectId unit test (quick win). See ARIA_ROADMAP.md v2.6
-for full detail.*
+*Technical Handoff v4.8 — June 15, 2026*
+*Changes from v4.7: Marked Phase 1f1.5 and 1f1.6 complete. Updated Important
+Files table to include `escrow.test.mjs`. Updated `extractCreatedObjectId`
+section to reference the extracted function and test file. Removed wallet
+address tech debt item (fixed). Removed extractCreatedObjectId tech debt item
+(fixed). Updated Best Practices to reference `extractCreatedObjectId`. Clarified
+P0b as a both-sides change (frontend + backend). Updated Node version note.*
