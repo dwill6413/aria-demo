@@ -37,6 +37,22 @@ try { await initDB(); } catch (err) { console.error('DB init failed:', err.messa
 
 // ─── On-Chain Escrow Helpers ──────────────────────────────────────────────────
 
+// Extracts the ID of the last "Created" object from a PTB's changedObjects array.
+// When a transaction splits a coin AND creates a shared object, both appear as
+// "Created" entries. PTB execution order guarantees the ephemeral split-coin
+// comes FIRST and the real persistent object comes LAST — so we always take last.
+// Reused by createEscrowOnChain and Phase 2's pii_access object creation.
+// Covered by 15 unit tests in escrow.test.mjs.
+function extractCreatedObjectId(changedObjects) {
+  const createdEntries = (changedObjects || []).filter(c => {
+    let op = c.idOperation ?? c.operation ?? c.id_operation ?? c.$kind;
+    if (op && typeof op === 'object') op = op.$kind;
+    return typeof op === 'string' && /created/i.test(op);
+  });
+  const chosen = createdEntries[createdEntries.length - 1];
+  return chosen?.objectId ?? chosen?.id ?? chosen?.object_id ?? null;
+}
+
 // Creates a BookingEscrow shared object on Sui testnet.
 // The deployer signs the transaction; guestAddr is recorded explicitly in the contract.
 // depositMist: use depositAmount (dollars) * 1000 as a symbolic testnet amount.
@@ -85,30 +101,14 @@ async function createEscrowOnChain(bookingRef, guestAddr, hostAddr, depositAmoun
       return null;
     }
 
-    // changedObjects includes BOTH the ephemeral split-coin (created then
-    // wrapped/deleted within this tx) AND the real BookingEscrow (created,
-    // shared, persists). Find all "Created" entries, then prefer the one
-    // that is NOT a Coin type.
-    let escrowId = null;
-    const createdEntries = (changedObjects || []).filter(c => {
-      let op = c.idOperation ?? c.operation ?? c.id_operation ?? c.$kind;
-      if (op && typeof op === 'object') op = op.$kind;
-      return typeof op === 'string' && /created/i.test(op);
-    });
+    const escrowId = extractCreatedObjectId(changedObjects);
 
     fastify.log.info({
       kind:    result?.$kind,
       digest:  txResult?.digest,
       status:  txResult?.effects?.status,
-      createdCount:   createdEntries.length,
-      createdEntries: createdEntries.map(c => JSON.stringify(c)),
+      escrowId,
     }, 'escrow create result');
-
-    // PTB execution order guarantees this: command 0 (splitCoins) creates the
-    // ephemeral deposit coin FIRST; command 1 (create_escrow) creates+shares
-    // the BookingEscrow SECOND. The last "Created" entry is always the escrow.
-    const chosen = createdEntries[createdEntries.length - 1];
-    escrowId = chosen?.objectId ?? chosen?.id ?? chosen?.object_id ?? null;
 
     if (escrowId) fastify.log.info({ escrowId }, 'escrow id found via changedObjects (Created)');
     return escrowId;
