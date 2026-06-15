@@ -5,9 +5,6 @@ const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
 const fmtDate = (d) => new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
-// Calendar dates (check-in / check-out) are stored without a time. Render them
-// from their Y-M-D parts so they never shift across a timezone boundary —
-// works whether the API sends "2026-06-03" or "2026-06-03T00:00:00.000Z".
 const fmtDay = (d) => {
   const s = String(d).slice(0, 10);
   const [y, mo, day] = s.split('-').map(Number);
@@ -46,6 +43,13 @@ export default function Host() {
   const [icalSaved, setIcalSaved] = useState({});
   const [releasingId, setReleasingId] = useState(null);
   const [messageCounts, setMessageCounts] = useState({});
+  const [addrCopied, setAddrCopied] = useState(false);
+
+  const copyAddr = () => {
+    navigator.clipboard.writeText(user?.address);
+    setAddrCopied(true);
+    setTimeout(() => setAddrCopied(false), 2000);
+  };
 
   // Tax state
   const [taxData, setTaxData] = useState(null);
@@ -85,7 +89,6 @@ export default function Host() {
         const rvRes = await authFetch(`${API}/reviews/all`);
         const rvData = await rvRes.json();
         setReviews(rvData.reviews || []);
-        // Load applications count on mount
         loadApplications(true);
         setLoading(false);
       })
@@ -274,19 +277,28 @@ export default function Host() {
         <div className="hs-nav-desktop">
           <div style={{ textAlign: 'right' }}>
             <div style={{ fontSize: '13px', fontWeight: '500' }}>{user?.name}</div>
-            <div style={{ fontSize: '11px', color: '#00ff44', fontFamily: 'monospace' }}>{user?.address?.slice(0, 8)}...{user?.address?.slice(-6)}</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'flex-end' }}>
+              <div style={{ fontSize: '11px', color: '#00ff44', fontFamily: 'monospace', wordBreak: 'break-all' }}>{user?.address}</div>
+              <button onClick={copyAddr} title="Copy address" style={{ background: 'none', border: 'none', cursor: 'pointer', color: addrCopied ? '#00ff44' : '#555', fontSize: '12px', padding: '0 2px', flexShrink: 0 }}>
+                {addrCopied ? '✓' : '⧉'}
+              </button>
+            </div>
           </div>
           <button onClick={() => router.push('/bookings')} style={{ background: 'transparent', border: '1px solid #333', color: '#888', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>Guest View</button>
           <button onClick={() => router.push('/')} style={{ background: 'transparent', border: '1px solid #333', color: '#888', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>Back to Search</button>
         </div>
         {/* Mobile */}
         <div className="hs-nav-hamburger">
-          <div style={{ fontSize: '11px', color: '#00ff44', fontFamily: 'monospace' }}>{user?.address?.slice(0, 6)}...{user?.address?.slice(-4)}</div>
+          <button onClick={copyAddr} title="Copy address" style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', gap: '3px' }}>
+            <span style={{ fontSize: '11px', color: '#00ff44', fontFamily: 'monospace' }}>{user?.address?.slice(0, 6)}…{user?.address?.slice(-4)}</span>
+            <span style={{ color: addrCopied ? '#00ff44' : '#555', fontSize: '11px' }}>{addrCopied ? '✓' : '⧉'}</span>
+          </button>
           <button onClick={() => setMenuOpen(o => !o)} style={{ background: 'transparent', border: '1px solid #333', color: '#fff', borderRadius: '6px', width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', cursor: 'pointer' }}>
             {menuOpen ? '×' : '☰'}
           </button>
         </div>
       </div>
+
       {menuOpen && (
         <div style={{ background: '#111', borderBottom: '1px solid #222', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '8px', position: 'sticky', top: '60px', zIndex: 99 }}>
           <div style={{ paddingBottom: '8px', borderBottom: '1px solid #1a1a1a' }}>
@@ -678,7 +690,6 @@ export default function Host() {
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                {/* Summary row */}
                 <div style={{ display: 'flex', gap: '12px', marginBottom: '8px' }}>
                   {[
                     { label: 'TOTAL', value: applications.length, color: '#888' },
