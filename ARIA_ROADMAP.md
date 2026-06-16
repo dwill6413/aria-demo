@@ -1,5 +1,5 @@
 # ARIA — Product Roadmap & AI Handoff Document
-**Version:** 2.7 | **Updated:** June 15, 2026
+**Version:** 2.8 | **Updated:** June 16, 2026
 **Purpose:** Complete handoff for an AI assistant continuing ARIA development.
 Read this entire document before writing any code.
 
@@ -63,18 +63,51 @@ entry always comes first, the real object always comes last.
 
 **P0a — Migrate off JSON-RPC — ✅ COMPLETE (June 12, 2026)**
 
-**P0b — Guest-funded escrow (most important non-custodial gap) — NEXT UP**
+**P0b — Guest-funded escrow (most important non-custodial gap) — IN PROGRESS (started June 16, 2026)**
 
 On testnet the deployer funds the escrow from its own wallet. Production requires
 the guest's zkLogin wallet to sign `create_escrow` and provide the coin.
 
-This is a **both-sides change**:
+**Prerequisite gap found and fixed (June 16, 2026):** the ephemeral keypair, nonce,
+and randomness needed to produce a zkLogin signature were generated server-side in
+`auth.mjs:getZkLoginUrl`, round-tripped through the OAuth `state` param, and
+discarded after the callback ran. Nothing — frontend or backend — retained the
+material needed to sign anything as the guest's address after login. Fixed by:
+- New `lib/zklogin.js` (frontend): generates the ephemeral keypair + nonce
+  client-side (`beginZkLogin`), fetches and caches the ZK proof from the prover
+  service after the OAuth callback (`completeZkLogin`), and exposes
+  `signTransactionWithZkLogin()` for use once the unsigned-PTB work below lands.
+  Material lives in `sessionStorage`, never sent to the backend.
+- `auth.mjs`: `getZkLoginUrl` removed. `handleZkLoginCallback` now takes
+  `{id_token, nonce}` from a POST body (nonce generated client-side) instead of
+  decoding a server-issued state blob, and returns `{sid, address, email, name,
+  picture}` directly instead of redirecting.
+- `server.mjs`: `/auth/zklogin/init` route removed. `/auth/zklogin/callback` is
+  now POST.
+- `pages/index.jsx`: `handleLogin` builds the Google OAuth URL client-side
+  (needs `NEXT_PUBLIC_GOOGLE_CLIENT_ID` and optionally
+  `NEXT_PUBLIC_GOOGLE_CALLBACK_URL` in Vercel) instead of calling the backend
+  for it.
+- `pages/auth/zklogin/callback.jsx`: calls `completeZkLogin` then POSTs to the
+  new callback endpoint.
+
+**Still remaining for P0b** — this is a **both-sides change**:
 - **Backend (`server.mjs`)**: `createEscrowOnChain` stops funding the escrow.
   It builds the unsigned transaction and returns it to the frontend. After P0b,
   the backend signer's role shrinks to just `auto_release`.
-- **Frontend (`index.jsx`)**: receives the unsigned PTB, presents it to the guest
-  for signing via their zkLogin wallet, submits to Sui, returns the escrow object
-  ID to the backend to store in Postgres.
+- **Frontend (booking flow)**: receives the unsigned PTB, presents it to the guest
+  for signing via `signTransactionWithZkLogin()`, submits directly to Sui
+  (decision: frontend submits straight to the fullnode — not routed through the
+  backend — to keep the design maximally non-custodial), then reports
+  `{bookingRef, escrowObjectId, digest}` back to the backend.
+- **Backend verification step (new, required for record integrity)**: before
+  writing `escrow_object_id` and flipping `deposit_status`, the backend must
+  re-query the chain to confirm the reported object is a real `BookingEscrow`
+  with matching booking_ref/guest/host/amount — don't trust the frontend's
+  report blindly. This matters because host tax records
+  (`/tax/summary`, `tax_remittances`) join against `bookings`, and those numbers
+  need to stay trustworthy even though pricing/tax itself is computed
+  server-side and unaffected by who signs the escrow tx.
 
 Scope decisions (locked):
 - SuiUSD only — not multi-coin/USDC. Multi-coin support deferred indefinitely.
@@ -324,56 +357,4 @@ Follow-up: one-time authorization code exchange.
 | Arbitrator scope | Can only split between guest and host | Limits blast radius if compromised |
 | SDK client for tx submission | `SuiGrpcClient` + `keypair.signAndExecuteTransaction()` | P0a complete; gRPC is the working pattern |
 | Emergency withdraw / pause | **Rejected** | Admin drain path; undermines non-custodial claim |
-| Arbitrator key custody | Cold (KeePass), separate from deployer & backend signer | Bounded blast radius enables safe future scaling |
-| Private keys in documentation | **Never** — public addresses only | Roadmap/handoff docs are pushed to public GitHub |
-| extractCreatedObjectId | Named function in `server.mjs`, tested in `escrow.test.mjs` | Reuse for Phase 2 pii_access; do not inline |
-
----
-
-## 8. Environment Variables
-
-**In Railway (backend):**
-```
-DATABASE_URL, GOOGLE_CLIENT_ID, GOOGLE_CALLBACK_URL, FRONTEND_URL
-HOST_ADDRESSES, SESSION_SECRET, XAI_API_KEY, RESEND_API_KEY, STRIPE_SECRET_KEY
-ESCROW_PACKAGE_ID       = 0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe
-ESCROW_MODULE_NAME      = escrow
-ARIA_DEPLOYER_KEY       = <suiprivkey1... bech32 format — KeePass + Railway only, never committed>
-ARIA_ARBITRATOR_ADDRESS = 0x0069868f93f9127b3e8b51bf95bc529925ca382e6305da0bb01f693826b983f8
-```
-
-**To add for Phase 2:**
-```
-SEAL_PACKAGE_ID = 0x<from pii_access.move deployment>
-```
-
-**In Vercel (frontend):**
-```
-NEXT_PUBLIC_API_URL = https://aria-demo-production-e590.up.railway.app
-```
-
----
-
-## 9. Resources
-
-| Resource | URL |
-|---|---|
-| Sui documentation | `https://docs.sui.io` |
-| Move book | `https://move-book.com` |
-| Seal documentation | `https://seal-docs.wal.app` |
-| Seal GitHub (examples) | `https://github.com/MystenLabs/seal` |
-| Walrus documentation | `https://docs.walrus.site` |
-| Sui testnet explorer | `https://suiexplorer.com/?network=testnet` |
-| Sui testnet faucet | `https://faucet.sui.io` |
-| Sui data stack overview (gRPC/GraphQL) | `https://blog.sui.io/graphql-archival-store-sui-data-stack/` |
-| Deployed escrow | `https://suiexplorer.com/object/0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe?network=testnet` |
-
----
-
-*ARIA Roadmap v2.7 — June 15, 2026*
-*Changes from v2.6: Marked Phase 1f1.5 (extractCreatedObjectId + 15 unit tests)
-and Phase 1f1.6 (full wallet address visibility + copy button) as complete.
-Removed those items from Tech Debt Backlog. Clarified P0b as a both-sides
-change (frontend + backend). Added extractCreatedObjectId architectural decision.
-Updated SDK client decision to reflect P0a completion. Updated "What Is Already
-Built" section. P0b is the next session's primary task.*
+| Arbitrator key cus

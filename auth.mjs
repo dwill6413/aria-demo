@@ -1,6 +1,5 @@
 import crypto from 'node:crypto';
-import { generateNonce, generateRandomness, jwtToAddress } from '@mysten/sui/zklogin';
-import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
+import { jwtToAddress } from '@mysten/sui/zklogin';
 import { dotenvConfig } from './config.mjs';
 import { pool } from './db.mjs';
 
@@ -95,82 +94,52 @@ async function verifyGoogleIdToken(idToken) {
   return payload;
 }
 
-// ─── zkLogin URL ──────────────────────────────────────────────────────────────
-
-export async function getZkLoginUrl(request, reply) {
-  const ephemeralKeypair = new Ed25519Keypair();
-  const epochRes = await fetch('https://fullnode.testnet.sui.io:443', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'suix_getLatestSuiSystemState', params: [] })
-  });
-  const epochData = await epochRes.json();
-  const maxEpoch = parseInt(epochData.result.epoch) + 10;
-
-  const randomness = generateRandomness();
-  const nonce = generateNonce(ephemeralKeypair.getPublicKey(), maxEpoch, randomness);
-  const privateKey = ephemeralKeypair.getSecretKey();
-
-  const stateData = Buffer.from(JSON.stringify({
-    privateKey, maxEpoch,
-    randomness: randomness.toString(),
-    nonce: nonce.toString(),
-    createdAt: Date.now()
-  })).toString('base64url');
-
-  const params = new URLSearchParams({
-    client_id: process.env.GOOGLE_CLIENT_ID,
-    response_type: 'id_token',
-    redirect_uri: process.env.GOOGLE_CALLBACK_URL || 'http://localhost:3000/auth/zklogin/callback',
-    scope: 'openid email profile',
-    nonce,
-    state: stateData
-  });
-
-  const googleUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
-  return { url: googleUrl };
-}
-
 // ─── zkLogin Callback ─────────────────────────────────────────────────────────
+//
+// P0b prerequisite change: the ephemeral keypair, nonce, and randomness used
+// to be generated HERE (server-side), round-tripped through the OAuth
+// `state` param, and discarded after this function ran — meaning nothing,
+// frontend or backend, retained the material needed to produce a zkLogin
+// signature after login. That made "guest signs the escrow transaction"
+// impossible regardless of what the backend did with the PTB.
+//
+// The ephemeral keypair + nonce are now generated client-side (see
+// lib/zklogin.js: beginZkLogin) and never leave the browser. This endpoint's
+// job shrinks to what it should always have been: verify the Google id_token,
+// confirm it was minted for the nonce this browser generated, derive the Sui
+// address, and create the app session. The nonce arrives as a plain request
+// field instead of inside a server-issued state blob.
 
 export async function handleZkLoginCallback(request, reply) {
-  const { state, id_token } = request.query;
+  const { id_token, nonce } = request.body || {};
 
-  if (!state || !id_token) {
-    return reply.code(400).send({ error: 'Missing state or id_token' });
-  }
-
-  let pending;
-  try {
-    pending = JSON.parse(Buffer.from(state, 'base64url').toString());
-  } catch {
-    return reply.code(400).send({ error: 'Invalid state parameter' });
-  }
-
-  if (!pending.createdAt || Date.now() - pending.createdAt > 600000) {
-    return reply.code(400).send({ error: 'State expired' });
+  if (!id_token || !nonce) {
+    return reply.code(400).send({ error: 'Missing id_token or nonce' });
   }
 
   try {
     // Verify signature + claims against Google BEFORE trusting anything.
     const payload = await verifyGoogleIdToken(id_token);
 
-    // Bind the token to this login attempt — the nonce must match the one we
-    // generated and sent to Google in getZkLoginUrl.
-    if (!pending.nonce || String(payload.nonce) !== String(pending.nonce)) {
+    // Bind the token to this login attempt — the nonce must match the one
+    // embedded in the Google OAuth URL the browser was redirected to
+    // (generated client-side in lib/zklogin.js: beginZkLogin).
+    if (String(payload.nonce) !== String(nonce)) {
       throw new Error('Nonce mismatch');
     }
 
     // NOTE: salt is kept at '0' to preserve existing derived addresses.
     // Rotating to a per-user secret salt is a separate, data-migrating change.
+    // Must match the SALT constant in lib/zklogin.js.
     const salt = '0';
     const suiAddress = jwtToAddress(id_token, salt, true);
 
     // Cryptographically strong, opaque session id (was Math.random()).
     const sessionId = crypto.randomBytes(32).toString('base64url');
 
-    // Store only what the app actually reads. The ephemeral private key and
-    // raw id_token are NOT persisted (nothing else consumes them).
+    // Store only what the app actually reads. The raw id_token is NOT
+    // persisted server-side — the frontend retains it just long enough to
+    // fetch its ZK proof (see lib/zklogin.js: completeZkLogin), then drops it.
     const sessionData = {
       suiAddress,
       email: payload.email,
@@ -189,9 +158,15 @@ export async function handleZkLoginCallback(request, reply) {
       path: '/'
     });
 
-    // Cross-domain frontends read this and store it for the x-session-id header.
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-    return reply.redirect(`${frontendUrl}?auth=success&sid=${sessionId}`);
+    // Cross-domain frontends can't read the httpOnly cookie directly, so we
+    // also return the session id in the body for the x-session-id header path.
+    return {
+      sid: sessionId,
+      address: suiAddress,
+      email: payload.email,
+      name: payload.name,
+      picture: payload.picture
+    };
 
   } catch (err) {
     console.error('zkLogin callback error:', err.message);

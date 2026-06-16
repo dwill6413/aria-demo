@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/router';
+import { completeZkLogin } from '../../../lib/zklogin';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -10,43 +11,46 @@ export default function Callback() {
     const hash = window.location.hash.substring(1);
     const params = new URLSearchParams(hash);
     const id_token = params.get('id_token');
-    const state = params.get('state');
 
-    if (!id_token || !state) {
+    if (!id_token) {
       router.push('/?error=missing_token');
       return;
     }
 
-    fetch(`${API}/auth/zklogin/callback?state=${encodeURIComponent(state)}&id_token=${encodeURIComponent(id_token)}`, {
-      credentials: 'include'
-    })
-    .then(res => {
-      // Backend redirects to FRONTEND_URL?auth=success&sid=XXX
-      // fetch follows the redirect — final URL contains sid
-      const url = new URL(res.url);
-      const sid = url.searchParams.get('sid');
-      if (sid) {
-        try { localStorage.setItem('aria_sid', sid); } catch {}
-        router.push('/');
-      } else if (res.ok) {
-        router.push('/');
-      } else {
-        return res.json().then(data => {
+    (async () => {
+      try {
+        // Fetches and caches the ZK proof for this login using the ephemeral
+        // key generated client-side in handleLogin (lib/zklogin.js:
+        // beginZkLogin). This is the step that makes it possible for the
+        // guest to later sign transactions (e.g. P0b escrow creation) as
+        // their own zkLogin address — nothing server-side holds this material.
+        const { nonce } = await completeZkLogin(id_token);
+
+        const res = await fetch(`${API}/auth/zklogin/callback`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id_token, nonce }),
+        });
+
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
           console.error('Auth error:', data);
           router.push('/?error=auth_failed');
-        }).catch(() => router.push('/?error=auth_failed'));
+          return;
+        }
+
+        const data = await res.json();
+        if (data.sid) {
+          try { localStorage.setItem('aria_sid', data.sid); } catch {}
+        }
+        router.push('/');
+      } catch (err) {
+        console.error('Callback error:', err);
+        router.push('/?error=network');
       }
-    })
-    .catch(err => {
-      console.error('Callback fetch error:', err);
-      router.push('/?error=network');
-    });
+    })();
   }, []);
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#0a0a0a', color: '#fff', flexDirection: 'column', gap: '12px' }}>
-      <div style={{ fontSize: '32px' }}>🏠</div>
-      <p style={{ color: '#888', fontSize: '14px' }}>Completing sign in...</p>
-    </div>
-  );
-}
+    <div style={{ display: 'flex', ali

@@ -12,7 +12,7 @@ import { getSuiUSDLiquidity, calculateHostPayout } from './deepbook.mjs';
 import { generateICal, saveExternalCalendar, checkAvailability } from './ical.mjs';
 import { Resend } from 'resend';
 import { registerAIRoute } from './ai_route.mjs';
-import { getZkLoginUrl, handleZkLoginCallback, getSession } from './auth.mjs';
+import { handleZkLoginCallback, getSession } from './auth.mjs';
 import { initDB, pool } from './db.mjs';
 
 dotenvConfig();
@@ -211,11 +211,11 @@ fastify.get('/health', async () => {
 });
 
 // Auth
-fastify.get('/auth/zklogin/init', async (request, reply) => {
-  return getZkLoginUrl(request, reply);
-});
-
-fastify.get('/auth/zklogin/callback', async (request, reply) => {
+// Ephemeral key + nonce generation moved client-side (lib/zklogin.js) — the
+// backend no longer issues the Google OAuth URL itself. This is now a POST
+// because the frontend sends {id_token, nonce} as a JSON body rather than
+// the GET query+state pattern used when the backend minted the state blob.
+fastify.post('/auth/zklogin/callback', async (request, reply) => {
   return handleZkLoginCallback(request, reply);
 });
 

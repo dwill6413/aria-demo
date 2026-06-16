@@ -2,8 +2,11 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
+import { beginZkLogin } from '../lib/zklogin';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
+const GOOGLE_CALLBACK_URL = process.env.NEXT_PUBLIC_GOOGLE_CALLBACK_URL || (typeof window !== 'undefined' ? `${window.location.origin}/auth/zklogin/callback` : '');
 
 const getStoredSid = () => { try { return localStorage.getItem('aria_sid') || ''; } catch { return ''; } };
 const authFetch = (url, options = {}) => {
@@ -149,9 +152,24 @@ export default function Home() {
   };
 
   const handleLogin = async () => {
-    const res = await fetch(`${API}/auth/zklogin/init`);
-    const { url } = await res.json();
-    window.location.href = url;
+    if (!GOOGLE_CLIENT_ID) { alert('Sign-in is misconfigured (missing Google client ID). Please try again later.'); return; }
+    try {
+      // Generates the ephemeral keypair + nonce client-side and stashes it in
+      // sessionStorage — the backend never sees or holds this key material.
+      // See lib/zklogin.js for why this moved out of the backend.
+      const nonce = await beginZkLogin();
+      const params = new URLSearchParams({
+        client_id: GOOGLE_CLIENT_ID,
+        response_type: 'id_token',
+        redirect_uri: GOOGLE_CALLBACK_URL,
+        scope: 'openid email profile',
+        nonce,
+      });
+      window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
+    } catch (err) {
+      console.error('Failed to start sign-in:', err);
+      alert('Could not start sign-in. Please check your connection and try again.');
+    }
   };
 
   const handleLogout = async () => {
@@ -593,6 +611,7 @@ export default function Home() {
                   {booking.walrusBlobId && (
                     <div style={{ marginTop: '10px', background: '#050f05', borderRadius: '6px', padding: '10px' }}>
                       <div style={{ color: '#555', fontSize: '10px', marginBottom: '4px' }}>RECEIPT STORED PERMANENTLY ON WALRUS</div>
+
                       <a href={`https://aggregator.walrus-testnet.walrus.space/v1/blobs/${booking.walrusBlobId}`} target="_blank" rel="noreferrer" style={{ color: '#00ff44', fontFamily: 'monospace', fontSize: '10px', wordBreak: 'break-all' }}>{booking.walrusBlobId}</a>
                     </div>
                   )}
