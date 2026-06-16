@@ -1,5 +1,5 @@
 # ARIA — Product Roadmap & AI Handoff Document
-**Version:** 2.8 | **Updated:** June 16, 2026
+**Version:** 2.9 | **Updated:** June 16, 2026
 **Purpose:** Complete handoff for an AI assistant continuing ARIA development.
 Read this entire document before writing any code.
 
@@ -63,10 +63,16 @@ entry always comes first, the real object always comes last.
 
 **P0a — Migrate off JSON-RPC — ✅ COMPLETE (June 12, 2026)**
 
-**P0b — Guest-funded escrow (most important non-custodial gap) — IN PROGRESS (started June 16, 2026)**
+**P0b — Guest-funded escrow (most important non-custodial gap) — ✅ COMPLETE (June 16, 2026)**
 
-On testnet the deployer funds the escrow from its own wallet. Production requires
-the guest's zkLogin wallet to sign `create_escrow` and provide the coin.
+The guest's own zkLogin wallet now signs `create_escrow` and provides the deposit
+coin from their own balance. ARIA's backend builds the unsigned PTB but never
+funds or signs the escrow-creation transaction — it only re-verifies on-chain
+after the fact. Live-tested end-to-end on testnet (Railway + Vercel): a real
+booking went through with the guest signing in-browser, submitting directly to
+a public Sui fullnode, and the backend independently confirming the resulting
+`BookingEscrow` object before writing `deposit_status = 'held'` to Postgres.
+Confirmed visually via the bookings page ("confirmed" + "Deposit $661 held").
 
 **Prerequisite gap found and fixed (June 16, 2026):** the ephemeral keypair, nonce,
 and randomness needed to produce a zkLogin signature were generated server-side in
@@ -91,20 +97,23 @@ material needed to sign anything as the guest's address after login. Fixed by:
 - `pages/auth/zklogin/callback.jsx`: calls `completeZkLogin` then POSTs to the
   new callback endpoint.
 
-**Still remaining for P0b** — this is a **both-sides change**:
-- **Backend (`server.mjs`)**: `createEscrowOnChain` stops funding the escrow.
-  It builds the unsigned transaction and returns it to the frontend. After P0b,
-  the backend signer's role shrinks to just `auto_release`.
-- **Frontend (booking flow)**: receives the unsigned PTB, presents it to the guest
-  for signing via `signTransactionWithZkLogin()`, submits directly to Sui
-  (decision: frontend submits straight to the fullnode — not routed through the
-  backend — to keep the design maximally non-custodial), then reports
-  `{bookingRef, escrowObjectId, digest}` back to the backend.
-- **Backend verification step (new, required for record integrity)**: before
-  writing `escrow_object_id` and flipping `deposit_status`, the backend must
-  re-query the chain to confirm the reported object is a real `BookingEscrow`
-  with matching booking_ref/guest/host/amount — don't trust the frontend's
-  report blindly. This matters because host tax records
+**What shipped (both-sides change):**
+- **Backend (`server.mjs`)**: `createEscrowOnChain`/`buildEscrowTransaction` no
+  longer funds the escrow. It builds the unsigned transaction (`tx.setSender(guestAddr)`)
+  and returns it to the frontend. The backend signer (`ARIA_DEPLOYER_KEY`)'s role
+  is now scoped to just `auto_release` (see task #10 review comment above
+  `autoReleaseEscrow` in `server.mjs` for why that's still safe — it never moves
+  a deployer-owned coin, only triggers the contract's own release logic).
+- **Frontend (`lib/zklogin.js` + `pages/index.jsx`)**: `handleEscrowSign()` receives
+  the unsigned PTB, signs it via `signTransactionWithZkLogin()`, and submits
+  directly to a public Sui fullnode via `submitSignedTransaction()` — never
+  routed through ARIA's backend, to keep the design maximally non-custodial —
+  then reports `{bookingRef, digest}` to `/booking/:bookingRef/escrow/confirm`.
+- **Backend verification (`verifyEscrowTransaction`)**: before writing
+  `escrow_object_id` and flipping `deposit_status`, the backend re-queries the
+  chain to confirm the reported transaction produced a real `BookingEscrow`
+  with matching booking_ref/guest/host/amount — it never trusts the frontend's
+  digest blindly. This matters because host tax records
   (`/tax/summary`, `tax_remittances`) join against `bookings`, and those numbers
   need to stay trustworthy even though pricing/tax itself is computed
   server-side and unaffected by who signs the escrow tx.
@@ -122,10 +131,12 @@ Scope decisions (locked):
 - Set as `ARIA_ARBITRATOR_ADDRESS` in Railway. Confirmed on-chain.
 - `*.key` files added to `.gitignore`.
 
-*Remaining (lower priority, after P0b):*
+*Remaining — NEXT UP now that P0b is done:*
 Deployer and backend signer are still the same hot key (`ARIA_DEPLOYER_KEY`).
-Once P0b lands, the backend signer's role shrinks to just `auto_release`,
-making deployer/UpgradeCap separation a clean, low-risk operation.
+Now that P0b has landed, the backend signer's role has shrunk to just
+`auto_release`, making deployer/UpgradeCap separation a clean, low-risk
+operation — generate a fresh narrowly-scoped key for `auto_release`, move the
+original deployer key to cold KeePass-only storage.
 
 *Custody model — assign by blast radius:*
 - **Deployer / UpgradeCap key**: cold KeePass only, regardless of scale.
@@ -162,9 +173,9 @@ See Phase 3 below.
 
 **Pre-mainnet gate**
 - [x] P0a complete (June 12, 2026 — JSON-RPC migration, ahead of Jul 31 deadline)
-- [ ] P0b complete (guest-funded escrow) — **NEXT SESSION**
+- [x] P0b complete (June 16, 2026 — guest-funded escrow, live-tested end-to-end)
 - [x] P1a complete (arbitrator key separated, wired, on-chain)
-- [ ] P1b complete (deployer/backend-signer separation, after P0b)
+- [ ] P1b complete (deployer/backend-signer separation) — **NEXT SESSION**
 - [ ] P2 complete
 - [ ] Independent Move audit (OtterSec, Zellic, or similar)
 - [ ] Burn UpgradeCap after audit
@@ -282,8 +293,8 @@ SEAL_PACKAGE_ID = 0x<from deployment>
 ✅ Phase 1f1: P0a — Migrate off JSON-RPC to gRPC (done June 12, 2026)
 ✅ Phase 1f1.5: extractCreatedObjectId extracted + 15 unit tests (done June 15, 2026)
 ✅ Phase 1f1.6: Wallet address full visibility + copy button (done June 15, 2026)
-⬜ Phase 1f2: P0b — Guest wallet funds escrow, SuiUSD only — NEXT UP
-⬜ Phase 1g2: P1b — Deployer/backend-signer separation (after P0b)
+✅ Phase 1f2: P0b — Guest wallet funds escrow (done June 16, 2026)
+⬜ Phase 1g2: P1b — Deployer/backend-signer separation — NEXT UP
 ⬜ Phase 1h: P2 — Auto-release cron job
 ⬜ Phase 1h.5: Fee collection/routing mechanism (Stripe + SuiUSD paths — needs design)
 ⬜ Phase 1i: P2 — Production host address lookup
@@ -309,8 +320,7 @@ SEAL_PACKAGE_ID = 0x<from deployment>
 
 | Item | Priority | Notes |
 |---|---|---|
-| Guest-funded escrow | **P0** | Testnet gap — deployer funds; must fix for mainnet. Next session. |
-| Key separation | **P1** | Same hot key for all roles — must fix for mainnet. After P0b. |
+| Key separation | **P1** | Same hot key for deployer + backend signer — must fix for mainnet. P0b is done, so backend signer's role is now scoped to `auto_release`; unblocked, next session. |
 | Fee collection/routing mechanism | High | Currently zero implementation. ARIA's revenue (booking fee) is separate from the escrow (guest security deposit) — no mechanism exists to collect or route ARIA's cut. Two paths to design: Stripe Connect-style split (fiat), and a SuiUSD on-chain split (PTB splits rental payment between host and ARIA in one tx, similar to resolve_dispute's split logic). Needs design before/alongside P0b. |
 | Auto-release job | P2 | Phase 1h |
 | Production host address | P2 | Phase 1i |
@@ -357,4 +367,57 @@ Follow-up: one-time authorization code exchange.
 | Arbitrator scope | Can only split between guest and host | Limits blast radius if compromised |
 | SDK client for tx submission | `SuiGrpcClient` + `keypair.signAndExecuteTransaction()` | P0a complete; gRPC is the working pattern |
 | Emergency withdraw / pause | **Rejected** | Admin drain path; undermines non-custodial claim |
-| Arbitrator key cus
+| Arbitrator key custody | Cold (KeePass), separate from deployer & backend signer | Bounded blast radius enables safe future scaling |
+| Private keys in documentation | **Never** — public addresses only | Roadmap/handoff docs are pushed to public GitHub |
+| extractCreatedObjectId | Named function in `server.mjs`, tested in `escrow.test.mjs` | Reuse for Phase 2 pii_access; do not inline |
+
+---
+
+## 8. Environment Variables
+
+**In Railway (backend):**
+```
+DATABASE_URL, GOOGLE_CLIENT_ID, GOOGLE_CALLBACK_URL, FRONTEND_URL
+HOST_ADDRESSES, SESSION_SECRET, XAI_API_KEY, RESEND_API_KEY, STRIPE_SECRET_KEY
+ESCROW_PACKAGE_ID       = 0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe
+ESCROW_MODULE_NAME      = escrow
+ARIA_DEPLOYER_KEY       = <suiprivkey1... bech32 format — KeePass + Railway only, never committed>
+ARIA_ARBITRATOR_ADDRESS = 0x0069868f93f9127b3e8b51bf95bc529925ca382e6305da0bb01f693826b983f8
+```
+
+**To add for Phase 2:**
+```
+SEAL_PACKAGE_ID = 0x<from pii_access.move deployment>
+```
+
+**In Vercel (frontend):**
+```
+NEXT_PUBLIC_API_URL = https://aria-demo-production-e590.up.railway.app
+```
+
+---
+
+## 9. Resources
+
+| Resource | URL |
+|---|---|
+| Sui documentation | `https://docs.sui.io` |
+| Move book | `https://move-book.com` |
+| Seal documentation | `https://seal-docs.wal.app` |
+| Seal GitHub (examples) | `https://github.com/MystenLabs/seal` |
+| Walrus documentation | `https://docs.walrus.site` |
+| Sui testnet explorer | `https://suiexplorer.com/?network=testnet` |
+| Sui testnet faucet | `https://faucet.sui.io` |
+| Sui data stack overview (gRPC/GraphQL) | `https://blog.sui.io/graphql-archival-store-sui-data-stack/` |
+| Deployed escrow | `https://suiexplorer.com/object/0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe?network=testnet` |
+
+---
+
+*ARIA Roadmap v2.9 — June 16, 2026*
+*Changes from v2.8: Marked P0b (guest-funded escrow) complete and live-tested
+end-to-end on testnet (Railway + Vercel) — guest's zkLogin wallet now signs and
+submits `create_escrow` directly to a public Sui fullnode, backend independently
+verifies on-chain before trusting the result. Updated pre-mainnet gate, build
+order, and tech debt backlog accordingly. Removed "Guest-funded escrow" from
+Tech Debt Backlog (resolved). P1b (deployer/backend-signer separation) is now
+the next session's primary task.*

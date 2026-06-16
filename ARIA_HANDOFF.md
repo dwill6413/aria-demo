@@ -1,8 +1,8 @@
 # ARIA — Technical Handoff Document
-**Version:** 4.8 | **Updated:** June 15, 2026
+**Version:** 4.9 | **Updated:** June 16, 2026
 
 Deeper technical details for developers or AI assistants continuing work on ARIA.
-Reconciled against the code actually deployed to production as of June 15, 2026.
+Reconciled against the code actually deployed to production as of June 16, 2026.
 For the security change log see `ARIA_REMEDIATION.md`. For the build roadmap see `ARIA_ROADMAP.md`.
 
 ---
@@ -57,7 +57,21 @@ the deadline. Verified end-to-end on testnet: `create_escrow` and `auto_release`
 both execute successfully, with the `BookingEscrow` object correctly created,
 ID extracted, stored in Postgres, and later deleted on release.
 
-**The working pattern** (`@mysten/sui: "latest"`, Node 22):
+**STATUS: P0b COMPLETE (June 16, 2026).** `create_escrow` is no longer signed
+by the deployer — the code example below (`deployerKeypair.signAndExecuteTransaction`)
+now applies **only to `auto_release`**. For `create_escrow`, the backend
+(`buildEscrowTransaction` in `server.mjs`) builds an *unsigned* PTB with
+`tx.setSender(guestAddr)` and returns the serialized bytes to the frontend.
+The guest's own zkLogin wallet signs (`signTransactionWithZkLogin()` in
+`lib/zklogin.js`) and submits directly to a public Sui fullnode
+(`submitSignedTransaction()`) — never relayed through ARIA's backend. The
+frontend then reports `{bookingRef, digest}` to
+`/booking/:bookingRef/escrow/confirm`, which independently re-queries the chain
+(`verifyEscrowTransaction`) before trusting the result and writing
+`escrow_object_id`/`deposit_status` to Postgres. See "Pattern: guest-signed
+escrow creation" below for the actual code.
+
+**The working pattern for `auto_release`** (`@mysten/sui: "latest"`, Node 22):
 
 ```javascript
 import { SuiGrpcClient } from '@mysten/sui/grpc';
@@ -68,8 +82,38 @@ const suiClient = new SuiGrpcClient({
   baseUrl: 'https://fullnode.testnet.sui.io:443',
 });
 
+// auto_release — still deployer-signed (see task #10 review comment above
+// autoReleaseEscrow in server.mjs for why this remains safe post-P0b: it
+// never moves a deployer-owned coin, only triggers the contract's own
+// release logic on a coin the guest already deposited).
 const tx = new Transaction();
 tx.setSender(deployerKeypair.toSuiAddress());
+
+tx.moveCall({
+  target: `${PKG}::escrow::auto_release`,
+  typeArguments: ['0x2::sui::SUI'],
+  arguments: [tx.object(escrowObjectId), tx.object('0x6')],
+});
+
+const result = await deployerKeypair.signAndExecuteTransaction({
+  transaction: tx,
+  client: suiClient,
+  include: { effects: true },
+});
+
+if (result.$kind === 'FailedTransaction') {
+  // result.FailedTransaction.status.error.message
+} else {
+  // result.Transaction.digest, result.Transaction.effects.status
+}
+```
+
+**Pattern: guest-signed escrow creation (P0b)** — backend builds, frontend signs:
+
+```javascript
+// server.mjs — buildEscrowTransaction: builds an UNSIGNED PTB, never signs it.
+const tx = new Transaction();
+tx.setSender(guestAddr); // guest is the sender, not the deployer
 
 const coin = coinWithBalance({ balance: depositMist });
 
@@ -87,17 +131,15 @@ tx.moveCall({
   ],
 });
 
-const result = await deployerKeypair.signAndExecuteTransaction({
-  transaction: tx,
-  client: suiClient,
-  include: { effects: true },
-});
+const escrowTxBytes = await tx.build({ client: suiClient }); // base64 bytes returned to frontend, never signed here
+```
 
-if (result.$kind === 'FailedTransaction') {
-  // result.FailedTransaction.status.error.message
-} else {
-  // result.Transaction.digest, result.Transaction.effects.status
-}
+```javascript
+// lib/zklogin.js — signed and submitted entirely in the guest's browser.
+const signature = await signTransactionWithZkLogin(transactionBytes);
+const digest = await submitSignedTransaction(transactionBytesBase64, signature);
+// digest is POSTed to /booking/:bookingRef/escrow/confirm, which independently
+// re-verifies on-chain (verifyEscrowTransaction) before trusting it.
 ```
 
 **Critical gotcha — extracting the created object's ID:**
@@ -109,8 +151,11 @@ order guarantees the split-coin comes FIRST and the real object comes LAST.
 Always take the **last** "Created" entry.
 
 This logic is now extracted into `extractCreatedObjectId(changedObjects)` in
-`server.mjs`, covered by 15 unit tests in `escrow.test.mjs`. Use this function
-for Phase 2's `pii_access` object creation — do not inline the filter logic again.
+`server.mjs`, covered by 15 unit tests in `escrow.test.mjs`. Used both by
+`auto_release` and (post-P0b) by `verifyEscrowTransaction`, which calls it on
+the chain-queried result of the guest-submitted `create_escrow` digest. Use
+this function for Phase 2's `pii_access` object creation too — do not inline
+the filter logic again.
 
 ```javascript
 // server.mjs — extracted helper, tested in escrow.test.mjs
@@ -138,7 +183,7 @@ but worth a check before the deadline.
 - **Expiry**: `Date.now() + 300_000n` (5 min testnet) → `checkoutMs + 432_000_000n` (5 days)
 - **Move.toml**: `rev = "framework/testnet"` → `rev = "framework/mainnet"`
 - **UpgradeCap**: keep for testnet → burn after independent audit for mainnet
-- **Escrow funding**: deployer funds escrow (testnet) → guest wallet signs and funds (production)
+- **Escrow funding**: ✅ already guest-signed on testnet (P0b complete June 16, 2026) — same pattern carries to mainnet unchanged, only the coin type and expiry window differ.
 
 ---
 
@@ -173,35 +218,41 @@ The contract is suitable for demo and Sui Overflow.
 
 #### P0a — Migrate off JSON-RPC — ✅ COMPLETE (June 12, 2026)
 
-#### P0b — Deployer-funded escrow (most important non-custodial gap) — NEXT UP
+#### P0b — Guest-funded escrow (most important non-custodial gap) — ✅ COMPLETE (June 16, 2026)
 
-On testnet, ARIA's deployer wallet signs `create_escrow` and provides the deposit
-coin from its own SUI balance. The non-custodial claim only becomes true when the
-guest's zkLogin wallet signs the transaction and provides the coin from their own
-balance.
+The guest's own zkLogin wallet now signs `create_escrow` and provides the
+deposit coin from their own balance — ARIA's deployer wallet no longer funds
+or signs this transaction. Implemented as a both-sides change:
+- **Backend (`server.mjs`)**: `buildEscrowTransaction` builds an unsigned PTB
+  (`tx.setSender(guestAddr)`) and returns the serialized bytes to the frontend.
+  It never signs or funds escrow creation. The backend signer's role is now
+  scoped to just `auto_release`.
+- **Frontend (`lib/zklogin.js` + `pages/index.jsx`)**: `handleEscrowSign()`
+  signs the PTB via `signTransactionWithZkLogin()` and submits it directly to
+  a public Sui fullnode via `submitSignedTransaction()` — never routed through
+  ARIA's backend — then reports `{bookingRef, digest}` to
+  `/booking/:bookingRef/escrow/confirm`.
+- **Backend verification (`verifyEscrowTransaction`)**: re-queries the chain by
+  digest and confirms a real, matching `BookingEscrow` object was created
+  before writing `escrow_object_id`/`deposit_status` to Postgres — never
+  trusts the frontend's report blindly.
 
-Fix: implement client-side PTB signing using the guest's zkLogin wallet for
-`create_escrow`. The guest approves the transaction from their browser; the
-booking confirmation flow shows the expiry timestamp before they sign. ARIA's
-backend orchestrates but does not provide the coin.
-
-This is a both-sides change:
-- **Backend (`server.mjs`)**: `createEscrowOnChain` stops funding the escrow.
-  It builds the unsigned transaction and returns it to the frontend. The backend
-  signer's role shrinks to just `auto_release` after P0b lands.
-- **Frontend (`index.jsx`)**: receives the unsigned PTB, presents it to the guest
-  for signing via their zkLogin wallet, submits to Sui, returns the escrow object
-  ID to the backend to store in Postgres.
+Verified end-to-end on testnet: real booking, guest signed in-browser via
+zkLogin, deposit landed on-chain, backend confirmed it, bookings page showed
+"confirmed" + "Deposit $661 held".
 
 #### P1 — Fix before mainnet — ⚠️ PARTIALLY COMPLETE
 
 **Arbitrator separation: ✅ done (June 12, 2026).** Dedicated arbitrator keypair
 generated, private key/mnemonic in KeePass only, public address
 (`ARIA_ARBITRATOR_ADDRESS`) wired into `createEscrowOnChain` and confirmed on-chain.
+Mnemonic ownership independently re-confirmed June 16, 2026 — derived `suiAddress`
+via `sui keytool import`/`list` matches `ARIA_ARBITRATOR_ADDRESS` exactly.
 
-**Remaining: deployer / backend-signer separation.** After P0b lands, the backend
-signer's role shrinks to just `auto_release`. At that point, retiring the
-deployer/UpgradeCap key to cold KeePass-only storage becomes a clean, low-risk
+**Remaining: deployer / backend-signer separation — NEXT UP.** Now that P0b has
+landed, the backend signer's role has shrunk to just `auto_release`. Retiring
+the deployer/UpgradeCap key to cold KeePass-only storage, and generating a
+fresh narrowly-scoped key for `auto_release`, is now a clean, low-risk
 operation.
 
 #### P2 — Fix before launch with real users
@@ -218,9 +269,9 @@ operation.
 ### Pre-mainnet checklist
 
 - [x] **P0a**: Migrate off JSON-RPC to gRPC (done June 12, 2026)
-- [ ] **P0b**: Guest wallet signs and funds `create_escrow` (client-side PTB)
+- [x] **P0b**: Guest wallet signs and funds `create_escrow` (done June 16, 2026, live-tested)
 - [x] **P1a**: Arbitrator key separated (done June 12, 2026)
-- [ ] **P1b**: Separate deployer/UpgradeCap from backend signer (after P0b)
+- [ ] **P1b**: Separate deployer/UpgradeCap from backend signer — **NEXT SESSION**
 - [ ] **P2**: Auto-release cron job built and running
 - [ ] **P2**: Production host address lookup from `host_profiles`
 - [ ] **P2**: Claim/dispute backend routes wired
@@ -351,10 +402,12 @@ NEXT_PUBLIC_API_URL = https://aria-demo-production-e590.up.railway.app
 
 ---
 
-*Technical Handoff v4.8 — June 15, 2026*
-*Changes from v4.7: Marked Phase 1f1.5 and 1f1.6 complete. Updated Important
-Files table to include `escrow.test.mjs`. Updated `extractCreatedObjectId`
-section to reference the extracted function and test file. Removed wallet
-address tech debt item (fixed). Removed extractCreatedObjectId tech debt item
-(fixed). Updated Best Practices to reference `extractCreatedObjectId`. Clarified
-P0b as a both-sides change (frontend + backend). Updated Node version note.*
+*Technical Handoff v4.9 — June 16, 2026*
+*Changes from v4.8: Marked P0b (guest-funded escrow) complete and live-tested
+end-to-end on testnet. Replaced the deployer-signed `create_escrow` code
+example with the actual shipped pattern (unsigned PTB built server-side,
+signed and submitted entirely in the guest's browser via `lib/zklogin.js`);
+relabeled the original signing example as `auto_release`-only. Updated P1
+status to reflect arbitrator mnemonic re-confirmation and P1b (deployer/backend-signer
+separation) as the next session's primary task. Updated pre-mainnet checklist
+and testnet→mainnet diff accordingly.*
