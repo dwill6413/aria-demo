@@ -7,6 +7,7 @@ import { SuiGrpcClient } from '@mysten/sui/grpc';
 import { Transaction, coinWithBalance } from '@mysten/sui/transactions';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
+import { toBase64, isValidTransactionDigest } from '@mysten/sui/utils';
 import { dotenvConfig } from './config.mjs';
 import { getSuiUSDLiquidity, calculateHostPayout } from './deepbook.mjs';
 import { generateICal, saveExternalCalendar, checkAvailability } from './ical.mjs';
@@ -53,24 +54,36 @@ function extractCreatedObjectId(changedObjects) {
   return chosen?.objectId ?? chosen?.id ?? chosen?.object_id ?? null;
 }
 
-// Creates a BookingEscrow shared object on Sui testnet.
-// The deployer signs the transaction; guestAddr is recorded explicitly in the contract.
+// Builds (but does NOT sign or execute) the PTB that creates a BookingEscrow
+// shared object on Sui testnet, with the GUEST set as sender. This is the
+// non-custodial flip for P0b: ARIA's backend never holds a key that can move
+// guest funds — it only assembles the transaction's logic, then hands back
+// unsigned BCS bytes for the guest's own browser (via zkLogin) to sign and
+// submit directly to Sui. coinWithBalance resolves the deposit coin from the
+// SENDER's on-chain balance at build time, so once setSender(guestAddr)
+// replaces the old deployer sender, the guest's own SUI funds the deposit —
+// the deployer is never debited and never has signing authority over this tx.
 // depositMist: use depositAmount (dollars) * 1000 as a symbolic testnet amount.
 // For testnet testing, expiry is set to 5 minutes from now so auto_release
 // can be triggered quickly. Change to checkoutMs + FIVE_DAYS_MS for mainnet.
-async function createEscrowOnChain(bookingRef, guestAddr, hostAddr, depositAmount, checkOutStr) {
-  if (!deployerKeypair || !process.env.ESCROW_PACKAGE_ID) return null;
-  const sender = deployerKeypair.toSuiAddress();
-  const arbitrator = process.env.ARIA_ARBITRATOR_ADDRESS || sender;
+//
+// Returns { txBytes: base64 string } on success, or null if escrow is
+// unconfigured/unbuildable. Caller (/booking/create) ships txBytes to the
+// guest's browser; nothing is written to the DB here — see the
+// /booking/:bookingRef/escrow/confirm route for the verified, chain-checked
+// write (task #9), which is the only path allowed to set escrow_object_id.
+async function buildEscrowTransaction(bookingRef, guestAddr, hostAddr, depositAmount) {
+  if (!guestAddr || !hostAddr || !process.env.ESCROW_PACKAGE_ID) return null;
+  const arbitrator = process.env.ARIA_ARBITRATOR_ADDRESS || (deployerKeypair ? deployerKeypair.toSuiAddress() : hostAddr);
   try {
     const depositMist = BigInt(Math.max(1, depositAmount)) * 1000n;
     const expiryMs    = BigInt(Date.now()) + 300_000n; // 5-min testnet window
 
     const tx = new Transaction();
-    tx.setSender(sender);
+    tx.setSender(guestAddr);
 
-    // coinWithBalance resolves a coin of this balance from the signer's
-    // holdings automatically — no manual getCoins/splitCoins needed.
+    // coinWithBalance resolves a coin of this balance from the SENDER's
+    // (guest's) holdings automatically — no manual getCoins/splitCoins needed.
     const coin = coinWithBalance({ balance: depositMist });
 
     tx.moveCall({
@@ -87,37 +100,72 @@ async function createEscrowOnChain(bookingRef, guestAddr, hostAddr, depositAmoun
       ],
     });
 
-    const result = await deployerKeypair.signAndExecuteTransaction({
-      transaction: tx,
-      client: suiClient,
-      include: { effects: true },
-    });
-
-    const txResult = result?.Transaction;
-    const changedObjects = txResult?.effects?.changedObjects;
-
-    if (result?.$kind === 'FailedTransaction') {
-      console.warn('Escrow tx failed on-chain:', result.FailedTransaction?.status?.error?.message);
-      return null;
-    }
-
-    const escrowId = extractCreatedObjectId(changedObjects);
-
-    fastify.log.info({
-      kind:    result?.$kind,
-      digest:  txResult?.digest,
-      status:  txResult?.effects?.status,
-      escrowId,
-    }, 'escrow create result');
-
-    if (escrowId) fastify.log.info({ escrowId }, 'escrow id found via changedObjects (Created)');
-    return escrowId;
+    const txBytes = await tx.build({ client: suiClient });
+    return { txBytes: toBase64(txBytes) };
   } catch (err) {
-    fastify.log.error({ message: err.message, name: err.name, stack: err.stack?.split('\n').slice(0, 4).join(' | ') }, 'createEscrowOnChain error');
+    fastify.log.error({ message: err.message, name: err.name, stack: err.stack?.split('\n').slice(0, 4).join(' | ') }, 'buildEscrowTransaction error');
     return null;
   }
 }
 
+// Re-queries Sui directly for a transaction digest the guest reported after
+// signing+submitting their escrow tx client-side, and extracts the resulting
+// escrow object id from the CHAIN's own effects — never trusts a value the
+// client merely claims. This is the only legitimate source of truth for
+// writing escrow_object_id into bookings, since /tax/summary joins against
+// that table for host tax record-keeping.
+async function verifyEscrowTransaction(digest, expectedSender) {
+  const result = await suiClient.core.getTransaction({
+    digest,
+    include: { transaction: true, effects: true, objectTypes: true },
+  });
+
+  if (!result?.status?.success) {
+    return { ok: false, reason: 'Transaction did not succeed on-chain' };
+  }
+
+  const actualSender = result?.transaction?.sender;
+  if (expectedSender && actualSender && actualSender !== expectedSender) {
+    return { ok: false, reason: 'Transaction sender does not match the booking guest' };
+  }
+
+  const escrowId = extractCreatedObjectId(result?.effects?.changedObjects);
+  if (!escrowId) {
+    return { ok: false, reason: 'No created object found in transaction effects' };
+  }
+
+  return { ok: true, escrowId, sender: actualSender };
+}
+
+// ── Review (task #10): should this stay deployer-signed now that escrow
+// CREATION is guest-signed? Yes — kept as-is, deliberately. Reasoning:
+//
+// 1. This call never moves a deployer-owned coin. The deposit already lives
+//    in the on-chain BookingEscrow shared object (funded by the guest's own
+//    signature at creation time, see buildEscrowTransaction above). Calling
+//    auto_release only invokes that shared object's own release logic; the
+//    Move contract — not this signer — decides where the held coin goes.
+//    Signing this tx costs the deployer nothing but gas, and grants no
+//    custody, so it doesn't reintroduce the custodial gap P0b closed.
+// 2. The Move contract was created with this same address as `arbitrator`
+//    (see buildEscrowTransaction's ARIA_ARBITRATOR_ADDRESS argument), so the
+//    contract itself — not just this backend — expects this address to be
+//    the one invoking release/dispute logic. Having some address able to
+//    trigger time-based release is required: Sui has no native cron, so
+//    without a keeper/arbitrator able to call this, expired escrows could
+//    only ever be released by the guest or host manually.
+// 3. The HOST_ADDRESSES allowlist in this codebase is host *emails*, not Sui
+//    addresses (hosts don't have wallet-based sessions here) — so the
+//    /booking/release-deposit route can authorize *who may trigger the API
+//    call* via session/email, but cannot yet have the host sign the on-chain
+//    tx themselves. Until hosts have their own Sui-address-backed sessions,
+//    the arbitrator address is the only available signer for this step.
+//
+// If/when host accounts get their own Sui addresses, the better long-term
+// design is to make the Move contract's auto_release independently
+// re-check the expiry/dispute conditions on-chain (not just trust the
+// caller), and let the host sign it directly — removing the deployer from
+// this path entirely. Tracked as a follow-up, not done here.
 async function autoReleaseEscrow(escrowObjectId) {
   if (!deployerKeypair || !escrowObjectId || !process.env.ESCROW_PACKAGE_ID) return false;
   const sender = deployerKeypair.toSuiAddress();
@@ -329,8 +377,8 @@ fastify.post('/booking/create', {
     await pool.query(
       `INSERT INTO bookings (booking_ref, property_id, property_title, wallet_address, guest_name, guest_email,
         check_in, check_out, nights, price_per_night, subtotal, aria_fee, taxes, total_amount,
-        deposit_amount, payment_status, payment_method)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'confirmed','SuiUSD')`,
+        deposit_amount, payment_status, payment_method, deposit_status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'confirmed','SuiUSD','pending')`,
       [bookingRef, propertyId, propertyTitle, session.suiAddress, session.name, session.email,
        checkInStr, checkOutStr, nights, pricePerNight, subtotal, ariaFee, taxes, bookingTotal, depositAmount]
     );
@@ -354,7 +402,7 @@ fastify.post('/booking/create', {
       hostPayout: { amount: `$${hostPayout.hostPayout} SuiUSD`, ariaFee: `$${hostPayout.ariaFee} SuiUSD`, settlementMethod: hostPayout.settlementMethod },
       walletAddress: session.suiAddress, guestName: session.name, guestEmail: session.email,
       paymentMethod: 'SuiUSD', paymentStatus: 'confirmed',
-      depositAmount, depositStatus: 'held', chargeAmount,
+      depositAmount, depositStatus: 'pending', chargeAmount,
       jurisdiction: jurisdiction.name, jurisdictionBreakdown: jurisdiction.breakdown
     };
     const walrusRes  = await fetch('https://publisher.walrus-testnet.walrus.space/v1/blobs?epochs=3', {
@@ -368,24 +416,32 @@ fastify.post('/booking/create', {
     }
   } catch (err) { fastify.log.warn({ err }, 'Walrus storage failed'); }
 
-  // ── On-chain escrow creation (non-blocking) ──────────────────────────────
-  // Testnet: deployer acts as host since HOST_ADDRESSES contains emails not Sui addresses.
-  // Production: look up from host_profiles.sui_address based on property_id.
+  // ── On-chain escrow tx build (non-blocking, NOT signed/executed here) ────
+  // Non-custodial: the guest signs and submits this themselves from their
+  // browser (lib/zklogin.js signTransactionWithZkLogin), so deposit funds
+  // move directly from the guest's own Sui address. ARIA's backend never
+  // holds a key with authority over this transaction. The booking row stays
+  // deposit_status='pending' and escrow_object_id stays null until the guest
+  // reports a digest to /booking/:bookingRef/escrow/confirm, which re-queries
+  // the chain itself before trusting anything (see verifyEscrowTransaction).
+  //
+  // Testnet: deployer's address stands in as host since HOST_ADDRESSES
+  // contains emails not Sui addresses. Production: look up from
+  // host_profiles.sui_address based on property_id.
+  let escrowTxBytes = null;
   try {
     const hostAddr = deployerKeypair ? deployerKeypair.toSuiAddress() : null;
-    fastify.log.info({ bookingRef, guestAddr: session.suiAddress, hostAddr }, 'Attempting escrow creation');
+    fastify.log.info({ bookingRef, guestAddr: session.suiAddress, hostAddr }, 'Building guest-signed escrow tx');
     if (hostAddr) {
-      const escrowObjectId = await createEscrowOnChain(
-        bookingRef, session.suiAddress, hostAddr, depositAmount, checkOutStr
-      );
-      if (escrowObjectId) {
-        await pool.query('UPDATE bookings SET escrow_object_id=$1 WHERE booking_ref=$2', [escrowObjectId, bookingRef]);
-        fastify.log.info({ bookingRef, escrowObjectId }, 'Escrow created on-chain');
+      const built = await buildEscrowTransaction(bookingRef, session.suiAddress, hostAddr, depositAmount);
+      if (built?.txBytes) {
+        escrowTxBytes = built.txBytes;
+        fastify.log.info({ bookingRef }, 'Escrow tx built — awaiting guest signature');
       } else {
-        fastify.log.warn({ bookingRef }, 'createEscrowOnChain returned null');
+        fastify.log.warn({ bookingRef }, 'buildEscrowTransaction returned null');
       }
     }
-  } catch (err) { fastify.log.warn({ err }, 'On-chain escrow creation failed (non-blocking)'); }
+  } catch (err) { fastify.log.warn({ err }, 'Escrow tx build failed (non-blocking)'); }
 
   try {
     const taxPct     = (jurisdiction.rate * 100).toFixed(2);
@@ -422,10 +478,81 @@ fastify.post('/booking/create', {
     success: true, bookingRef, property: propertyTitle, nights,
     bookingTotal, depositAmount, chargeAmount,
     jurisdiction: jurisdiction.name,
-    depositNote: 'Refundable security deposit held in Sui escrow — no ARIA fee charged on deposit',
+    depositNote: escrowTxBytes
+      ? 'Sign the escrow transaction in your wallet to lock in your refundable security deposit'
+      : 'Refundable security deposit will be held in Sui escrow — no ARIA fee charged on deposit',
     walletAddress: session.suiAddress, network: 'sui:testnet',
-    message: 'Booking confirmed on Sui testnet', walrusBlobId
+    message: 'Booking confirmed on Sui testnet', walrusBlobId,
+    escrowTxBytes
   };
+});
+
+// Guest reports the digest of the escrow transaction they signed and
+// submitted themselves (directly to Sui, via their zkLogin signature). This
+// route is the ONLY place allowed to write escrow_object_id / flip
+// deposit_status to 'held' — it re-derives both from the chain itself
+// (verifyEscrowTransaction) rather than trusting the client's claim, because
+// /tax/summary joins against this same bookings row for host tax records.
+fastify.post('/booking/:bookingRef/escrow/confirm', {
+  config: {
+    rateLimit: {
+      max: 10, timeWindow: '15 minutes',
+      errorResponseBuilder: () => ({ error: 'Too many escrow confirmation attempts. Please wait and try again.' })
+    }
+  }
+}, async (request, reply) => {
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+  const session = await getSession(sessionId);
+  if (!session) return reply.code(401).send({ error: 'Session expired' });
+
+  const { bookingRef } = request.params;
+  const { digest } = request.body || {};
+  if (!digest || typeof digest !== 'string' || !isValidTransactionDigest(digest)) {
+    return reply.code(400).send({ error: 'A valid transaction digest is required' });
+  }
+
+  let booking;
+  try {
+    const result = await pool.query('SELECT * FROM bookings WHERE booking_ref = $1', [bookingRef]);
+    booking = result.rows[0];
+  } catch (err) {
+    fastify.log.error({ err }, 'Booking lookup failed');
+    return reply.code(500).send({ error: 'Booking lookup failed' });
+  }
+  if (!booking) return reply.code(404).send({ error: 'Booking not found' });
+  if (booking.wallet_address !== session.suiAddress) {
+    return reply.code(403).send({ error: 'This booking does not belong to your account' });
+  }
+  if (booking.deposit_status === 'held') {
+    return reply.code(200).send({ success: true, escrowObjectId: booking.escrow_object_id, alreadyConfirmed: true });
+  }
+
+  let verification;
+  try {
+    verification = await verifyEscrowTransaction(digest, session.suiAddress);
+  } catch (err) {
+    fastify.log.error({ err, digest, bookingRef }, 'On-chain escrow verification failed');
+    return reply.code(502).send({ error: 'Could not verify the transaction on-chain. It may still be processing — try again shortly.' });
+  }
+
+  if (!verification.ok) {
+    fastify.log.warn({ bookingRef, digest, reason: verification.reason }, 'Escrow verification rejected');
+    return reply.code(400).send({ error: verification.reason || 'Escrow transaction could not be verified' });
+  }
+
+  try {
+    await pool.query(
+      `UPDATE bookings SET escrow_object_id=$1, deposit_status='held' WHERE booking_ref=$2 AND wallet_address=$3`,
+      [verification.escrowId, bookingRef, session.suiAddress]
+    );
+  } catch (err) {
+    fastify.log.error({ err, bookingRef }, 'Failed to persist verified escrow id');
+    return reply.code(500).send({ error: 'Verified on-chain but failed to save — contact support' });
+  }
+
+  fastify.log.info({ bookingRef, escrowId: verification.escrowId, digest }, 'Escrow verified on-chain and recorded');
+  return { success: true, escrowObjectId: verification.escrowId };
 });
 
 // Booking Cancel

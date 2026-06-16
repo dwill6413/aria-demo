@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
-import { beginZkLogin } from '../lib/zklogin';
+import { beginZkLogin, signTransactionWithZkLogin, submitSignedTransaction } from '../lib/zklogin';
+import { fromBase64 } from '@mysten/sui/utils';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
@@ -92,6 +93,12 @@ export default function Home() {
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [addrCopied, setAddrCopied] = useState(false);
+  // escrowStatus: null | 'signing' | 'submitting' | 'confirming' | 'done' | 'error'
+  // Tracks the guest-side half of P0b — signing + submitting the escrow PTB
+  // the backend built (escrowTxBytes), then reporting the digest back so the
+  // backend can verify on-chain before recording anything.
+  const [escrowStatus, setEscrowStatus] = useState(null);
+  const [escrowError, setEscrowError] = useState('');
 
   const copyAddr = () => {
     navigator.clipboard.writeText(user.address);
@@ -111,8 +118,8 @@ export default function Home() {
   const getCardTotal     = (p, n) => (getChargeTotal(p, n) * 1.029 + 0.30).toFixed(2);
   const getCardFee       = (p, n) => (getChargeTotal(p, n) * 0.029 + 0.30).toFixed(2);
 
-  const openModal  = (p) => { setSelected(p); setBooking(null); setCheckIn(null); setCheckOut(null); setPhotoIndex(0); setTermsAccepted(false); };
-  const closeModal = () => { setSelected(null); setBooking(null); setCheckIn(null); setCheckOut(null); setPhotoIndex(0); setTermsAccepted(false); };
+  const openModal  = (p) => { setSelected(p); setBooking(null); setCheckIn(null); setCheckOut(null); setPhotoIndex(0); setTermsAccepted(false); setEscrowStatus(null); setEscrowError(''); };
+  const closeModal = () => { setSelected(null); setBooking(null); setCheckIn(null); setCheckOut(null); setPhotoIndex(0); setTermsAccepted(false); setEscrowStatus(null); setEscrowError(''); };
 
   const handleSearch = () => {
     let results = PROPERTIES;
@@ -182,6 +189,8 @@ export default function Home() {
     if (!checkIn || !checkOut) { alert('Please select check-in and check-out dates'); return; }
     if (nights < 1) { alert('Check-out must be after check-in'); return; }
     setBookingLoading(true);
+    setEscrowStatus(null);
+    setEscrowError('');
     const res = await authFetch(`${API}/booking/create`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ propertyId: selected.id, propertyTitle: selected.title, pricePerNight: selected.price, nights, totalAmount: getBookingTotal(selected, nights), checkIn: checkIn.toISOString().split('T')[0], checkOut: checkOut.toISOString().split('T')[0] })
@@ -190,6 +199,48 @@ export default function Home() {
     if (data.error === 'Property not available for selected dates') { alert('Sorry — those dates are already booked. Please select different dates.'); setBookingLoading(false); return; }
     setBooking(data);
     setBookingLoading(false);
+    // Non-custodial P0b: the backend only built an unsigned PTB
+    // (data.escrowTxBytes) with the guest as sender. The guest's own browser
+    // must sign and submit it — ARIA's backend never holds a key that could
+    // move this deposit.
+    if (data.escrowTxBytes) {
+      handleEscrowSign(data.bookingRef, data.escrowTxBytes);
+    }
+  };
+
+  // Signs the backend-built escrow PTB with the guest's zkLogin session,
+  // submits it directly to Sui from the browser, then reports just the
+  // resulting digest to the backend so it can independently verify on-chain
+  // before writing escrow_object_id / flipping deposit_status to 'held'.
+  const handleEscrowSign = async (bookingRef, escrowTxBytes) => {
+    setEscrowStatus('signing');
+    setEscrowError('');
+    try {
+      const txBytes = fromBase64(escrowTxBytes);
+      const signature = await signTransactionWithZkLogin(txBytes);
+
+      setEscrowStatus('submitting');
+      const digest = await submitSignedTransaction(escrowTxBytes, signature);
+
+      setEscrowStatus('confirming');
+      const confirmRes = await authFetch(`${API}/booking/${bookingRef}/escrow/confirm`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ digest }),
+      });
+      const confirmData = await confirmRes.json();
+      if (!confirmRes.ok || !confirmData.success) {
+        throw new Error(confirmData.error || 'Escrow could not be verified on-chain');
+      }
+
+      setEscrowStatus('done');
+      setBooking(prev => (prev && prev.bookingRef === bookingRef)
+        ? { ...prev, escrowObjectId: confirmData.escrowObjectId, escrowConfirmed: true }
+        : prev);
+    } catch (err) {
+      console.error('Escrow signing failed:', err);
+      setEscrowStatus('error');
+      setEscrowError(err.message || 'Could not complete the escrow deposit.');
+    }
   };
 
   const handleCardPayment = async () => {
@@ -607,7 +658,26 @@ export default function Home() {
               {booking && (
                 <div style={{ marginTop: '16px', background: '#0a1a0a', border: '1px solid #00ff44', borderRadius: '8px', padding: '16px', fontSize: '12px', color: '#00ff44', textAlign: 'center' }}>
                   ✅ Booking confirmed! Ref: {booking.bookingRef}
-                  {booking.depositAmount && <div style={{ marginTop: '8px', color: '#4a9eff', fontSize: '11px' }}>🔒 ${booking.depositAmount} deposit held in Sui escrow — you control release</div>}
+                  {booking.depositAmount && booking.escrowTxBytes && (
+                    <div style={{ marginTop: '8px', color: '#4a9eff', fontSize: '11px' }}>
+                      {escrowStatus === 'signing' && '🔏 Sign the escrow transaction in your wallet…'}
+                      {escrowStatus === 'submitting' && '📡 Submitting your deposit to Sui…'}
+                      {escrowStatus === 'confirming' && '⏳ Confirming escrow on-chain…'}
+                      {escrowStatus === 'done' && `🔒 $${booking.depositAmount} deposit held in Sui escrow — you control release`}
+                      {escrowStatus === 'error' && (
+                        <>
+                          <div style={{ color: '#ff5555' }}>⚠️ Deposit escrow not completed: {escrowError}</div>
+                          <button onClick={() => handleEscrowSign(booking.bookingRef, booking.escrowTxBytes)}
+                            style={{ marginTop: '6px', background: 'transparent', color: '#4a9eff', border: '1px solid #4a9eff', borderRadius: '6px', padding: '6px 10px', fontSize: '11px', cursor: 'pointer' }}>
+                            Retry escrow deposit
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
+                  {booking.depositAmount && !booking.escrowTxBytes && (
+                    <div style={{ marginTop: '8px', color: '#4a9eff', fontSize: '11px' }}>🔒 ${booking.depositAmount} deposit held in Sui escrow — you control release</div>
+                  )}
                   {booking.walrusBlobId && (
                     <div style={{ marginTop: '10px', background: '#050f05', borderRadius: '6px', padding: '10px' }}>
                       <div style={{ color: '#555', fontSize: '10px', marginBottom: '4px' }}>RECEIPT STORED PERMANENTLY ON WALRUS</div>
