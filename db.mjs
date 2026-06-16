@@ -88,6 +88,20 @@ export async function initDB() {
       notes TEXT,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
+    CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY,
+      data JSONB NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS property_ical_feeds (
+      id SERIAL PRIMARY KEY,
+      property_id INTEGER NOT NULL,
+      platform TEXT NOT NULL,
+      ical_url TEXT NOT NULL,
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (property_id, platform)
+    );
     CREATE TABLE IF NOT EXISTS host_profiles (
       id SERIAL PRIMARY KEY,
       sui_address TEXT UNIQUE NOT NULL,
@@ -116,6 +130,17 @@ export async function initDB() {
 
   // Idempotent column additions for existing deployments
   await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS escrow_object_id TEXT`);
+
+  // ── Indexes (Phase 3 / Finding #13) ───────────────────────────────────────
+  // bookings.booking_ref already has an implicit unique index from its UNIQUE
+  // NOT NULL column constraint above — no separate index needed there.
+  // wallet_address and property_id are looked up on nearly every request
+  // (guest's own bookings, availability checks, revenue summaries) and had
+  // no index backing those lookups; messages.booking_ref is looked up the
+  // same way for every message-thread read.
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_bookings_wallet_address ON bookings(wallet_address)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_bookings_property_id ON bookings(property_id)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_messages_booking_ref ON messages(booking_ref)`);
 
   console.log('Database initialized');
 }

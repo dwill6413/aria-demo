@@ -330,11 +330,14 @@ Railway runs **Node 22** (`nixpacks.toml`: `nodejs_22`). Required by
 | File | Purpose | Notes |
 |---|---|---|
 | `server.mjs` | Main Fastify server | Routes, RBAC, escrow helpers |
-| `escrow.test.mjs` | Unit tests for `extractCreatedObjectId` | 15 tests, no network needed. Run: `node escrow.test.mjs` |
+| `escrow.test.mjs` | Unit tests for `extractCreatedObjectId` | 15 tests, no network needed. Imports the real function from `escrow.mjs` (no longer a hand-copied duplicate). Run: `node escrow.test.mjs` |
 | `catalog.mjs` | Prices + tax rates | Single source of truth |
-| `db.mjs` | Pool + `initDB()` | 10 tables, `escrow_object_id` column, idempotent |
+| `db.mjs` | Pool + `initDB()` | 10 tables + indexes on `bookings.wallet_address`/`bookings.property_id`/`messages.booking_ref`, `escrow_object_id` column, idempotent |
 | `auth.mjs` | OAuth + sessions | JWT verification, CSPRNG IDs |
 | `ai_route.mjs` | Grok AI agent | Server-derived role, per-tool authz |
+| `validation.mjs` | zod request schemas | Validates `/booking/create`, `/payment/create-intent`, `/host/apply` bodies |
+| `bookings.mjs` | Shared `createBooking()` | Used by both REST and AI booking paths; booking refs include a random hex suffix |
+| `lib/authFetch.js` | Shared session-aware fetch | Used by all 6 authenticated frontend pages |
 | `nixpacks.toml` | Railway build config | Node 22 required |
 | `contracts/aria_escrow/` | Move smart contract | escrow.move + 23 tests |
 | `pages/ai.jsx` | AI chat UI | HTML-escaped output |
@@ -359,7 +362,7 @@ Railway runs **Node 22** (`nixpacks.toml`: `nodejs_22`). Required by
 3. Stripe: create-intent only; webhooks missing.
 4. Error handling inconsistent in some routes.
 5. No automated backend/frontend tests (backend unit tests started with `escrow.test.mjs`).
-6. `hosts` table and `@anthropic-ai/sdk` unused; `zod` not used for validation.
+6. `hosts` table and `@anthropic-ai/sdk` unused. `zod` is now adopted — see `validation.mjs`.
 7. **Fee collection/routing mechanism — zero implementation.** ARIA's revenue
    (booking fee) is entirely separate from the escrow (guest security deposit) —
    no mechanism exists to collect or route ARIA's cut. Needs design for both

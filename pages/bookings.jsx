@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
+import { authFetch } from '../lib/authFetch';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -10,14 +11,6 @@ const fmtDay = (d) => {
   const [y, mo, day] = s.split('-').map(Number);
   if (!y || !mo || !day) return fmtDate(d);
   return new Date(y, mo - 1, day).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-};
-
-const getStoredSid = () => { try { return localStorage.getItem('aria_sid') || ''; } catch { return ''; } };
-const authFetch = (url, options = {}) => {
-  const sid = getStoredSid();
-  const headers = { ...(options.headers || {}) };
-  if (sid) headers['x-session-id'] = sid;
-  return fetch(url, { ...options, credentials: 'include', headers });
 };
 
 export default function Bookings() {

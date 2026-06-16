@@ -10,9 +10,10 @@
  */
 export async function getSuiUSDLiquidity(amountUSD) {
   try {
-    // Query DeepBook testnet aggregator directly
+    // Query DeepBook testnet aggregator directly — must stay on testnet to
+    // match every other on-chain call in this app (escrow, zkLogin, fullnode).
     const res = await fetch(
-      'https://deepbook-indexer.mainnet.mystenlabs.com/get_pools',
+      'https://deepbook-indexer.testnet.mystenlabs.com/get_pools',
       { method: 'GET', headers: { 'Content-Type': 'application/json' } }
     );
     const pools = await res.json();

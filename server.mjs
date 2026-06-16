@@ -3,11 +3,7 @@ import cors from '@fastify/cors';
 import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
 import Stripe from 'stripe';
-import { SuiGrpcClient } from '@mysten/sui/grpc';
-import { Transaction, coinWithBalance } from '@mysten/sui/transactions';
-import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
-import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
-import { toBase64, isValidTransactionDigest } from '@mysten/sui/utils';
+import { isValidTransactionDigest } from '@mysten/sui/utils';
 import { dotenvConfig } from './config.mjs';
 import { getSuiUSDLiquidity, calculateHostPayout } from './deepbook.mjs';
 import { generateICal, saveExternalCalendar, checkAvailability } from './ical.mjs';
@@ -15,200 +11,26 @@ import { Resend } from 'resend';
 import { registerAIRoute } from './ai_route.mjs';
 import { handleZkLoginCallback, getSession } from './auth.mjs';
 import { initDB, pool } from './db.mjs';
+import { PROPERTIES, JURISDICTION_TAX_RATES } from './catalog.mjs';
+import { deployerKeypair, verifyEscrowTransaction, autoReleaseEscrow } from './escrow.mjs';
+import { createBooking } from './bookings.mjs';
+import { bookingCreateSchema, paymentCreateIntentSchema, hostApplySchema, validateBody } from './validation.mjs';
 
 dotenvConfig();
 
 // ─── Sui Escrow Client ────────────────────────────────────────────────────────
-const suiClient = new SuiGrpcClient({
-  network: 'testnet',
-  baseUrl: 'https://fullnode.testnet.sui.io:443',
-});
-let deployerKeypair = null;
-try {
-  if (process.env.ARIA_DEPLOYER_KEY) {
-    const { secretKey } = decodeSuiPrivateKey(process.env.ARIA_DEPLOYER_KEY);
-    deployerKeypair = Ed25519Keypair.fromSecretKey(secretKey);
-    console.log('Sui deployer keypair loaded:', deployerKeypair.toSuiAddress());
-  }
-} catch (err) {
-  console.warn('ARIA_DEPLOYER_KEY invalid or missing — escrow transactions disabled:', err.message);
-}
+// suiClient/deployerKeypair setup and the escrow PTB build/verify/auto-release
+// helpers moved to escrow.mjs (Phase 2b) so ai_route.mjs's create_booking tool
+// can build the exact same guest-signed escrow transaction that this REST path
+// already did — see escrow.mjs's header comment and bookings.mjs's
+// createBooking() for why (the AI chat flow previously skipped escrow
+// entirely while claiming the deposit was held in one).
 
 try { await initDB(); } catch (err) { console.error('DB init failed:', err.message); }
 
-// ─── On-Chain Escrow Helpers ──────────────────────────────────────────────────
-
-// Extracts the ID of the last "Created" object from a PTB's changedObjects array.
-// When a transaction splits a coin AND creates a shared object, both appear as
-// "Created" entries. PTB execution order guarantees the ephemeral split-coin
-// comes FIRST and the real persistent object comes LAST — so we always take last.
-// Reused by createEscrowOnChain and Phase 2's pii_access object creation.
-// Covered by 15 unit tests in escrow.test.mjs.
-function extractCreatedObjectId(changedObjects) {
-  const createdEntries = (changedObjects || []).filter(c => {
-    let op = c.idOperation ?? c.operation ?? c.id_operation ?? c.$kind;
-    if (op && typeof op === 'object') op = op.$kind;
-    return typeof op === 'string' && /created/i.test(op);
-  });
-  const chosen = createdEntries[createdEntries.length - 1];
-  return chosen?.objectId ?? chosen?.id ?? chosen?.object_id ?? null;
-}
-
-// Builds (but does NOT sign or execute) the PTB that creates a BookingEscrow
-// shared object on Sui testnet, with the GUEST set as sender. This is the
-// non-custodial flip for P0b: ARIA's backend never holds a key that can move
-// guest funds — it only assembles the transaction's logic, then hands back
-// unsigned BCS bytes for the guest's own browser (via zkLogin) to sign and
-// submit directly to Sui. coinWithBalance resolves the deposit coin from the
-// SENDER's on-chain balance at build time, so once setSender(guestAddr)
-// replaces the old deployer sender, the guest's own SUI funds the deposit —
-// the deployer is never debited and never has signing authority over this tx.
-// depositMist: use depositAmount (dollars) * 1000 as a symbolic testnet amount.
-// For testnet testing, expiry is set to 5 minutes from now so auto_release
-// can be triggered quickly. Change to checkoutMs + FIVE_DAYS_MS for mainnet.
-//
-// Returns { txBytes: base64 string } on success, or null if escrow is
-// unconfigured/unbuildable. Caller (/booking/create) ships txBytes to the
-// guest's browser; nothing is written to the DB here — see the
-// /booking/:bookingRef/escrow/confirm route for the verified, chain-checked
-// write (task #9), which is the only path allowed to set escrow_object_id.
-async function buildEscrowTransaction(bookingRef, guestAddr, hostAddr, depositAmount) {
-  if (!guestAddr || !hostAddr || !process.env.ESCROW_PACKAGE_ID) return null;
-  const arbitrator = process.env.ARIA_ARBITRATOR_ADDRESS || (deployerKeypair ? deployerKeypair.toSuiAddress() : hostAddr);
-  try {
-    const depositMist = BigInt(Math.max(1, depositAmount)) * 1000n;
-    const expiryMs    = BigInt(Date.now()) + 300_000n; // 5-min testnet window
-
-    const tx = new Transaction();
-    tx.setSender(guestAddr);
-
-    // coinWithBalance resolves a coin of this balance from the SENDER's
-    // (guest's) holdings automatically — no manual getCoins/splitCoins needed.
-    const coin = coinWithBalance({ balance: depositMist });
-
-    tx.moveCall({
-      target: `${process.env.ESCROW_PACKAGE_ID}::${process.env.ESCROW_MODULE_NAME || 'escrow'}::create_escrow`,
-      typeArguments: ['0x2::sui::SUI'],
-      arguments: [
-        tx.pure.string(bookingRef),
-        tx.pure.address(guestAddr),
-        tx.pure.address(hostAddr),
-        tx.pure.address(arbitrator),
-        tx.pure.u64(expiryMs),
-        coin,
-        tx.object('0x6'), // Clock — client resolves shared object version
-      ],
-    });
-
-    const txBytes = await tx.build({ client: suiClient });
-    return { txBytes: toBase64(txBytes) };
-  } catch (err) {
-    fastify.log.error({ message: err.message, name: err.name, stack: err.stack?.split('\n').slice(0, 4).join(' | ') }, 'buildEscrowTransaction error');
-    return null;
-  }
-}
-
-// Re-queries Sui directly for a transaction digest the guest reported after
-// signing+submitting their escrow tx client-side, and extracts the resulting
-// escrow object id from the CHAIN's own effects — never trusts a value the
-// client merely claims. This is the only legitimate source of truth for
-// writing escrow_object_id into bookings, since /tax/summary joins against
-// that table for host tax record-keeping.
-async function verifyEscrowTransaction(digest, expectedSender) {
-  const result = await suiClient.core.getTransaction({
-    digest,
-    include: { transaction: true, effects: true, objectTypes: true },
-  });
-
-  if (!result?.status?.success) {
-    return { ok: false, reason: 'Transaction did not succeed on-chain' };
-  }
-
-  const actualSender = result?.transaction?.sender;
-  if (expectedSender && actualSender && actualSender !== expectedSender) {
-    return { ok: false, reason: 'Transaction sender does not match the booking guest' };
-  }
-
-  const escrowId = extractCreatedObjectId(result?.effects?.changedObjects);
-  if (!escrowId) {
-    return { ok: false, reason: 'No created object found in transaction effects' };
-  }
-
-  return { ok: true, escrowId, sender: actualSender };
-}
-
-// ── Review (task #10): should this stay deployer-signed now that escrow
-// CREATION is guest-signed? Yes — kept as-is, deliberately. Reasoning:
-//
-// 1. This call never moves a deployer-owned coin. The deposit already lives
-//    in the on-chain BookingEscrow shared object (funded by the guest's own
-//    signature at creation time, see buildEscrowTransaction above). Calling
-//    auto_release only invokes that shared object's own release logic; the
-//    Move contract — not this signer — decides where the held coin goes.
-//    Signing this tx costs the deployer nothing but gas, and grants no
-//    custody, so it doesn't reintroduce the custodial gap P0b closed.
-// 2. The Move contract was created with this same address as `arbitrator`
-//    (see buildEscrowTransaction's ARIA_ARBITRATOR_ADDRESS argument), so the
-//    contract itself — not just this backend — expects this address to be
-//    the one invoking release/dispute logic. Having some address able to
-//    trigger time-based release is required: Sui has no native cron, so
-//    without a keeper/arbitrator able to call this, expired escrows could
-//    only ever be released by the guest or host manually.
-// 3. The HOST_ADDRESSES allowlist in this codebase is host *emails*, not Sui
-//    addresses (hosts don't have wallet-based sessions here) — so the
-//    /booking/release-deposit route can authorize *who may trigger the API
-//    call* via session/email, but cannot yet have the host sign the on-chain
-//    tx themselves. Until hosts have their own Sui-address-backed sessions,
-//    the arbitrator address is the only available signer for this step.
-//
-// If/when host accounts get their own Sui addresses, the better long-term
-// design is to make the Move contract's auto_release independently
-// re-check the expiry/dispute conditions on-chain (not just trust the
-// caller), and let the host sign it directly — removing the deployer from
-// this path entirely. Tracked as a follow-up, not done here.
-async function autoReleaseEscrow(escrowObjectId) {
-  if (!deployerKeypair || !escrowObjectId || !process.env.ESCROW_PACKAGE_ID) return false;
-  const sender = deployerKeypair.toSuiAddress();
-  try {
-    const tx = new Transaction();
-    tx.setSender(sender);
-
-    tx.moveCall({
-      target: `${process.env.ESCROW_PACKAGE_ID}::${process.env.ESCROW_MODULE_NAME || 'escrow'}::auto_release`,
-      typeArguments: ['0x2::sui::SUI'],
-      arguments: [
-        tx.object(escrowObjectId), // shared object — client resolves version
-        tx.object('0x6'),          // Clock — client resolves version
-      ],
-    });
-
-    const result = await deployerKeypair.signAndExecuteTransaction({
-      transaction: tx,
-      client: suiClient,
-      include: { effects: true },
-    });
-
-    if (result?.$kind === 'FailedTransaction') {
-      console.warn('autoRelease failed on-chain:', result.FailedTransaction?.status?.error?.message);
-      return false;
-    }
-    return true;
-  } catch (err) {
-    console.warn('autoReleaseEscrow failed:', err.message);
-    return false;
-  }
-}
-
-
 // ─── Jurisdiction Tax Rates ───────────────────────────────────────────────────
-const JURISDICTION_TAX_RATES = {
-  1: { rate: 0.13,   name: 'Miami-Dade County, FL',  breakdown: '6% FL sales tax + 7% Miami-Dade tourist tax' },
-  2: { rate: 0.17,   name: 'City of Austin, TX',      breakdown: '6% TX state HOT + 11% City of Austin HOT' },
-  3: { rate: 0.13,   name: 'Buncombe County, NC',     breakdown: '6.75% NC sales tax + 6% Buncombe County occupancy tax' },
-  4: { rate: 0.0805, name: 'City of Scottsdale, AZ',  breakdown: 'AZ state + city Transaction Privilege Tax combined' },
-  5: { rate: 0.10,   name: 'Placer County, CA',       breakdown: '10% Transient Occupancy Tax (Tahoe area)' },
-  6: { rate: 0.1475, name: 'New York City, NY',        breakdown: '4% NY state + 4.5% local sales tax + 5.875% NYC hotel occupancy tax' },
-};
+// Single source of truth now imported from catalog.mjs (Phase 1/2 fix) — see
+// PROPERTIES/JURISDICTION_TAX_RATES import above. Do not redefine these here.
 
 // ─── Role-Based Access Control ────────────────────────────────────────────────
 const HOST_ADDRESSES = (process.env.HOST_ADDRESSES || '').split(',').map(e => e.trim().toLowerCase());
@@ -226,6 +48,22 @@ async function checkDbHost(email) {
       [email.toLowerCase()]
     );
     return result.rows.length > 0;
+  } catch { return false; }
+}
+
+// Property-scoped authorization for actions that mutate a specific booking
+// (release deposit, tax remit/unremit, etc). Superadmins (HOST_ADDRESSES) may
+// act on any property; an approved host may only act on properties they own
+// in the `properties` table. Mirrors ai_route.mjs's release_deposit pattern
+// (Finding #4 / Phase 1b) so the two booking-mutation paths can't diverge.
+async function canManageProperty(session, propertyId) {
+  if (HOST_ADDRESSES.includes((session?.email || '').toLowerCase())) return true;
+  try {
+    const r = await pool.query(
+      'SELECT 1 FROM properties WHERE id = $1 AND host_address = $2',
+      [propertyId, session?.suiAddress]
+    );
+    return r.rows.length > 0;
   } catch { return false; }
 }
 
@@ -256,6 +94,26 @@ await registerAIRoute(fastify);
 // Health
 fastify.get('/health', async () => {
   return { status: 'ok', app: 'ARIA Demo', network: process.env.SUI_NETWORK };
+});
+
+// Properties — authoritative price/tax data from catalog.mjs (Phase 2a fix).
+// Public/read-only: this is the same price/tax info already hardcoded into
+// the frontend bundles today, so exposing it isn't a new disclosure. The
+// frontend pages (index.jsx, host.jsx) fetch this at load and merge it into
+// their local display-only arrays (images, ratings, location, beds/baths,
+// tags) so price/title/tax-rate have one source of truth instead of three.
+fastify.get('/properties', async () => {
+  const properties = Object.entries(PROPERTIES).map(([id, p]) => {
+    const jurisdiction = JURISDICTION_TAX_RATES[Number(id)];
+    return {
+      id: Number(id),
+      title: p.title,
+      price: p.price,
+      taxRate: jurisdiction?.rate ?? 0.08,
+      taxName: jurisdiction?.name ?? 'Occupancy Tax',
+    };
+  });
+  return { properties };
 });
 
 // Auth
@@ -306,13 +164,31 @@ fastify.post('/payment/create-intent', async (request, reply) => {
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
   const session = await getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
-  const { amount, propertyTitle } = request.body;
+  if (validateBody(paymentCreateIntentSchema, request, reply)) return;
+
+  const { propertyId } = request.body;
+  const nights = Number(request.body.nights);
+  const prop = PROPERTIES[Number(propertyId)];
+  if (!prop) return reply.code(400).send({ error: 'propertyId must be between 1 and 6' });
+  if (!nights || nights < 1 || nights > 90)
+    return reply.code(400).send({ error: 'nights must be between 1 and 90' });
+
+  // Server-authoritative charge total — mirrors /booking/create's math.
+  // Never trust a client-sent `amount` for a real Stripe charge (Finding #1).
+  const jurisdiction  = JURISDICTION_TAX_RATES[Number(propertyId)] || { rate: 0.08, name: 'Unknown' };
+  const subtotal      = prop.price * nights;
+  const ariaFee       = Math.round(subtotal * 0.03);
+  const taxes         = Math.round(subtotal * jurisdiction.rate);
+  const bookingTotal  = subtotal + ariaFee + taxes;
+  const depositAmount = Math.round(bookingTotal * 0.20);
+  const chargeAmount  = bookingTotal + depositAmount;
+
   const paymentIntent = await stripe.paymentIntents.create({
-    amount: amount * 100,
+    amount: chargeAmount * 100,
     currency: 'usd',
-    metadata: { property: propertyTitle, walletAddress: session.suiAddress, email: session.email }
+    metadata: { property: prop.title, propertyId: String(propertyId), walletAddress: session.suiAddress, email: session.email }
   });
-  return { clientSecret: paymentIntent.client_secret };
+  return { clientSecret: paymentIntent.client_secret, chargeAmount };
 });
 
 // Booking Create
@@ -329,162 +205,23 @@ fastify.post('/booking/create', {
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
   const session = await getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
+  if (validateBody(bookingCreateSchema, request, reply)) return;
 
-  const { propertyId, propertyTitle, nights, totalAmount } = request.body;
-  const checkInRaw  = request.body.checkIn;
-  const checkOutRaw = request.body.checkOut;
+  // Only propertyId + dates are taken from the client. Any client-sent
+  // propertyTitle/pricePerNight/nights/totalAmount is ignored — createBooking
+  // (bookings.mjs) recomputes all of it from PROPERTIES/JURISDICTION_TAX_RATES
+  // (Finding #1 / Phase 1a). Phase 2b: this is now the same shared function
+  // ai_route.mjs's create_booking tool calls, so the two paths can't diverge.
+  const { propertyId } = request.body;
+  const result = await createBooking({
+    propertyId, checkIn: request.body.checkIn, checkOut: request.body.checkOut, session, logger: fastify.log
+  });
 
-  if (!propertyId || !checkInRaw || !checkOutRaw)
-    return reply.code(400).send({ error: 'propertyId, checkIn, and checkOut are required' });
-  if (![1,2,3,4,5,6].includes(Number(propertyId)))
-    return reply.code(400).send({ error: 'propertyId must be between 1 and 6' });
-  if (isNaN(new Date(checkInRaw)) || isNaN(new Date(checkOutRaw)))
-    return reply.code(400).send({ error: 'checkIn and checkOut must be valid dates (YYYY-MM-DD)' });
-  if (new Date(checkOutRaw) <= new Date(checkInRaw))
-    return reply.code(400).send({ error: 'checkOut must be after checkIn' });
-  if (!nights || nights < 1 || nights > 90)
-    return reply.code(400).send({ error: 'nights must be between 1 and 90' });
-  if (!totalAmount || totalAmount <= 0)
-    return reply.code(400).send({ error: 'totalAmount must be a positive number' });
-
-  const checkInStr  = new Date(checkInRaw).toISOString().split('T')[0];
-  const checkOutStr = new Date(checkOutRaw).toISOString().split('T')[0];
-
-  try {
-    const conflict = await pool.query(
-      `SELECT booking_ref FROM bookings
-       WHERE property_id = $1 AND payment_status != 'cancelled'
-       AND check_in < $3 AND check_out > $2`,
-      [propertyId, checkInStr, checkOutStr]
-    );
-    if (conflict.rows.length > 0) {
-      return reply.code(409).send({ error: 'Property not available for selected dates' });
-    }
-  } catch (err) { fastify.log.warn({ err }, 'Availability check failed'); }
-
-  const jurisdiction  = JURISDICTION_TAX_RATES[Number(propertyId)] || { rate: 0.08, name: 'Unknown', breakdown: '8% occupancy tax' };
-  const pricePerNight = request.body.pricePerNight || Math.round(totalAmount / nights / 1.03 / (1 + jurisdiction.rate));
-  const subtotal      = pricePerNight * nights;
-  const ariaFee       = Math.round(subtotal * 0.03);
-  const taxes         = Math.round(subtotal * jurisdiction.rate);
-  const bookingTotal  = subtotal + ariaFee + taxes;
-  const depositAmount = Math.round(bookingTotal * 0.20);
-  const chargeAmount  = bookingTotal + depositAmount;
-  const hostPayout    = calculateHostPayout(subtotal);
-  const bookingRef    = `ARIA-${propertyId}-${Date.now()}`;
-
-  try {
-    await pool.query(
-      `INSERT INTO bookings (booking_ref, property_id, property_title, wallet_address, guest_name, guest_email,
-        check_in, check_out, nights, price_per_night, subtotal, aria_fee, taxes, total_amount,
-        deposit_amount, payment_status, payment_method, deposit_status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'confirmed','SuiUSD','pending')`,
-      [bookingRef, propertyId, propertyTitle, session.suiAddress, session.name, session.email,
-       checkInStr, checkOutStr, nights, pricePerNight, subtotal, ariaFee, taxes, bookingTotal, depositAmount]
-    );
-  } catch (err) { fastify.log.warn({ err }, 'DB booking save failed'); }
-
-  let walrusBlobId = null;
-  try {
-    const receipt = {
-      bookingRef, app: 'ARIA Demo', network: 'sui:testnet',
-      timestamp: new Date().toISOString(), property: propertyTitle, propertyId,
-      checkIn: checkInStr, checkOut: checkOutStr, nights,
-      breakdown: {
-        pricePerNight: `$${pricePerNight}`, nights,
-        subtotal: `$${subtotal}`,
-        ariaFee: `$${ariaFee} (3% of subtotal — not charged on deposit)`,
-        taxes: `$${taxes} (${(jurisdiction.rate * 100).toFixed(2)}% — ${jurisdiction.name})`,
-        bookingTotal: `$${bookingTotal} SuiUSD`,
-        depositAmount: `$${depositAmount} (refundable, held in Sui escrow — no ARIA fee)`,
-        chargeAmount: `$${chargeAmount} SuiUSD (total charged at booking)`
-      },
-      hostPayout: { amount: `$${hostPayout.hostPayout} SuiUSD`, ariaFee: `$${hostPayout.ariaFee} SuiUSD`, settlementMethod: hostPayout.settlementMethod },
-      walletAddress: session.suiAddress, guestName: session.name, guestEmail: session.email,
-      paymentMethod: 'SuiUSD', paymentStatus: 'confirmed',
-      depositAmount, depositStatus: 'pending', chargeAmount,
-      jurisdiction: jurisdiction.name, jurisdictionBreakdown: jurisdiction.breakdown
-    };
-    const walrusRes  = await fetch('https://publisher.walrus-testnet.walrus.space/v1/blobs?epochs=3', {
-      method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' },
-      body: Buffer.from(JSON.stringify(receipt))
-    });
-    const walrusData = await walrusRes.json();
-    walrusBlobId = walrusData?.newlyCreated?.blobObject?.blobId ?? walrusData?.alreadyCertified?.blobId ?? null;
-    if (walrusBlobId) {
-      await pool.query('UPDATE bookings SET walrus_blob_id = $1 WHERE booking_ref = $2', [walrusBlobId, bookingRef]);
-    }
-  } catch (err) { fastify.log.warn({ err }, 'Walrus storage failed'); }
-
-  // ── On-chain escrow tx build (non-blocking, NOT signed/executed here) ────
-  // Non-custodial: the guest signs and submits this themselves from their
-  // browser (lib/zklogin.js signTransactionWithZkLogin), so deposit funds
-  // move directly from the guest's own Sui address. ARIA's backend never
-  // holds a key with authority over this transaction. The booking row stays
-  // deposit_status='pending' and escrow_object_id stays null until the guest
-  // reports a digest to /booking/:bookingRef/escrow/confirm, which re-queries
-  // the chain itself before trusting anything (see verifyEscrowTransaction).
-  //
-  // Testnet: deployer's address stands in as host since HOST_ADDRESSES
-  // contains emails not Sui addresses. Production: look up from
-  // host_profiles.sui_address based on property_id.
-  let escrowTxBytes = null;
-  try {
-    const hostAddr = deployerKeypair ? deployerKeypair.toSuiAddress() : null;
-    fastify.log.info({ bookingRef, guestAddr: session.suiAddress, hostAddr }, 'Building guest-signed escrow tx');
-    if (hostAddr) {
-      const built = await buildEscrowTransaction(bookingRef, session.suiAddress, hostAddr, depositAmount);
-      if (built?.txBytes) {
-        escrowTxBytes = built.txBytes;
-        fastify.log.info({ bookingRef }, 'Escrow tx built — awaiting guest signature');
-      } else {
-        fastify.log.warn({ bookingRef }, 'buildEscrowTransaction returned null');
-      }
-    }
-  } catch (err) { fastify.log.warn({ err }, 'Escrow tx build failed (non-blocking)'); }
-
-  try {
-    const taxPct     = (jurisdiction.rate * 100).toFixed(2);
-    const walrusHtml = walrusBlobId ? `<div style="background:#111;border:1px solid #222;border-radius:8px;padding:16px;margin-bottom:20px"><p style="margin:0 0 8px;font-size:12px;color:#555">WALRUS RECEIPT</p><p style="margin:0;font-size:11px;color:#00ff44;word-break:break-all;font-family:monospace">${walrusBlobId}</p></div>` : '';
-    await resend.emails.send({
-      from: 'ARIA <onboarding@resend.dev>', to: session.email,
-      subject: `Booking Confirmed — ${propertyTitle} | Ref: ${bookingRef}`,
-      html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px">
-        <h1 style="color:#00ff44;font-size:24px;margin:0 0 8px">✅ Booking Confirmed</h1>
-        <p style="color:#888;margin:0 0 24px">Your ARIA booking receipt — ${session.name}</p>
-        <div style="background:#111;border:1px solid #222;border-radius:8px;padding:20px;margin-bottom:20px">
-          <h2 style="margin:0 0 16px;font-size:18px">${propertyTitle}</h2>
-          <table style="width:100%;border-collapse:collapse">
-            <tr><td style="color:#888;padding:6px 0">Booking Ref</td><td style="text-align:right">${bookingRef}</td></tr>
-            <tr><td style="color:#888;padding:6px 0">Check-in</td><td style="text-align:right">${checkInStr}</td></tr>
-            <tr><td style="color:#888;padding:6px 0">Check-out</td><td style="text-align:right">${checkOutStr}</td></tr>
-            <tr><td style="color:#888;padding:6px 0">Nights</td><td style="text-align:right">${nights}</td></tr>
-            <tr><td style="color:#888;padding:6px 0">Subtotal</td><td style="text-align:right">$${subtotal}</td></tr>
-            <tr><td style="color:#888;padding:6px 0">ARIA Fee (3% of subtotal only)</td><td style="text-align:right;color:#00ff44">$${ariaFee}</td></tr>
-            <tr><td style="color:#888;padding:6px 0">Taxes (${taxPct}% — ${jurisdiction.name})</td><td style="text-align:right">$${taxes}</td></tr>
-            <tr style="border-top:1px solid #333"><td style="padding:8px 0;font-weight:700">Booking Total</td><td style="text-align:right;font-weight:700;color:#00ff44">$${bookingTotal} SuiUSD</td></tr>
-            <tr><td style="color:#4a9eff;padding:6px 0">🔒 Refundable Security Deposit</td><td style="text-align:right;color:#4a9eff">$${depositAmount} SuiUSD</td></tr>
-            <tr style="border-top:1px solid #444"><td style="padding:10px 0;font-weight:700;font-size:15px">Total Charged</td><td style="text-align:right;font-weight:700;font-size:15px;color:#fff">$${chargeAmount} SuiUSD</td></tr>
-          </table>
-          <p style="color:#555;font-size:12px;margin:12px 0 0;line-height:1.6">The $${depositAmount} deposit is held in Sui escrow and returned after checkout. ARIA's 3% fee applies to your stay cost only — never to your deposit.</p>
-        </div>
-        ${walrusHtml}
-        <p style="color:#555;font-size:12px;text-align:center;margin:0">Powered by ARIA — Built on Sui | The Airbnb killer</p>
-      </div>`
-    });
-  } catch (err) { fastify.log.warn({ err }, 'Booking confirmation email failed'); }
-
-  return {
-    success: true, bookingRef, property: propertyTitle, nights,
-    bookingTotal, depositAmount, chargeAmount,
-    jurisdiction: jurisdiction.name,
-    depositNote: escrowTxBytes
-      ? 'Sign the escrow transaction in your wallet to lock in your refundable security deposit'
-      : 'Refundable security deposit will be held in Sui escrow — no ARIA fee charged on deposit',
-    walletAddress: session.suiAddress, network: 'sui:testnet',
-    message: 'Booking confirmed on Sui testnet', walrusBlobId,
-    escrowTxBytes
-  };
+  if (result.error) {
+    const status = result.error === 'Property not available for selected dates' ? 409 : 400;
+    return reply.code(status).send(result);
+  }
+  return result;
 });
 
 // Guest reports the digest of the escrow transaction they signed and
@@ -635,6 +372,8 @@ fastify.post('/booking/release-deposit', {
     const result = await pool.query('SELECT * FROM bookings WHERE booking_ref = $1', [bookingRef]);
     if (result.rows.length === 0) return reply.code(404).send({ error: 'Booking not found' });
     const booking = result.rows[0];
+    if (!(await canManageProperty(session, booking.property_id)))
+      return reply.code(403).send({ error: 'You do not manage this property' });
     if (booking.deposit_status === 'released') return reply.code(400).send({ error: 'Deposit already released' });
 
     // ── On-chain escrow release (non-blocking) ───────────────────────────────
@@ -687,12 +426,15 @@ fastify.get('/bookings/history', async (request, reply) => {
       return {
         bookingRef: b.booking_ref, property: b.property_title, propertyId: b.property_id,
         checkIn: b.check_in, checkOut: b.check_out, nights: b.nights,
-        totalAmount: b.total_amount, chargeAmount,
+        totalAmount: b.total_amount, ariaFee: b.aria_fee, taxes: b.taxes, chargeAmount,
         paymentStatus: b.payment_status,
         depositAmount: b.deposit_amount, depositStatus: b.deposit_status,
         walrusBlobId: b.walrus_blob_id,
         cancellationWalrusBlobId: b.cancellation_walrus_blob_id,
         timestamp: b.created_at, walletAddress: b.wallet_address,
+        // ariaFee/taxes above are raw numeric fields for callers that need to
+        // compute (e.g. pages/host.jsx revenue summaries — Finding #9). The
+        // breakdown.* strings below remain purely for display.
         breakdown: {
           pricePerNight: `$${b.price_per_night}`, nights: b.nights,
           subtotal: `$${b.subtotal}`,
@@ -705,7 +447,7 @@ fastify.get('/bookings/history', async (request, reply) => {
         }
       };
     })};
-  } catch (err) { return { bookings: [] }; }
+  } catch (err) { fastify.log.error({ err }, '/bookings/history query failed'); return { bookings: [] }; }
 });
 
 // Bookings All — HOST ONLY
@@ -723,7 +465,7 @@ fastify.get('/bookings/all', async (request, reply) => {
       return {
         bookingRef: b.booking_ref, property: b.property_title, propertyId: b.property_id,
         checkIn: b.check_in, checkOut: b.check_out, nights: b.nights,
-        totalAmount: b.total_amount, chargeAmount,
+        totalAmount: b.total_amount, ariaFee: b.aria_fee, taxes: b.taxes, chargeAmount,
         paymentStatus: b.payment_status,
         depositAmount: b.deposit_amount, depositStatus: b.deposit_status,
         walrusBlobId: b.walrus_blob_id,
@@ -731,6 +473,9 @@ fastify.get('/bookings/all', async (request, reply) => {
         guestName: b.guest_name, guestEmail: b.guest_email,
         walletAddress: b.wallet_address, timestamp: b.created_at,
         jurisdiction: jur.name,
+        // ariaFee/taxes above are raw numeric fields — host.jsx revenue
+        // summaries sum these directly instead of regex-parsing the display
+        // strings in breakdown.* (Finding #9).
         breakdown: {
           pricePerNight: `$${b.price_per_night}`, nights: b.nights,
           subtotal: `$${b.subtotal}`,
@@ -743,7 +488,7 @@ fastify.get('/bookings/all', async (request, reply) => {
         }
       };
     })};
-  } catch (err) { return { bookings: [] }; }
+  } catch (err) { fastify.log.error({ err }, '/bookings/all query failed'); return { bookings: [] }; }
 });
 
 // DeepBook
@@ -948,6 +693,8 @@ fastify.post('/tax/remit', async (request, reply) => {
     const bkResult = await pool.query('SELECT * FROM bookings WHERE booking_ref = $1 AND payment_status != $2', [bookingRef, 'cancelled']);
     if (bkResult.rows.length === 0) return reply.code(404).send({ error: 'Booking not found or is cancelled' });
     const booking = bkResult.rows[0];
+    if (!(await canManageProperty(session, booking.property_id)))
+      return reply.code(403).send({ error: 'You do not manage this property' });
     const jur = JURISDICTION_TAX_RATES[Number(booking.property_id)] || { name: jurisdiction || 'Unknown' };
     const existing = await pool.query('SELECT id FROM tax_remittances WHERE booking_ref = $1', [bookingRef]);
     if (existing.rows.length > 0) return reply.code(400).send({ error: 'Taxes already marked as remitted for this booking' });
@@ -969,6 +716,11 @@ fastify.post('/tax/unremit', async (request, reply) => {
   const { bookingRef } = request.body;
   if (!bookingRef) return reply.code(400).send({ error: 'bookingRef is required' });
   try {
+    const bkResult = await pool.query('SELECT property_id FROM bookings WHERE booking_ref = $1', [bookingRef]);
+    if (bkResult.rows.length === 0) return reply.code(404).send({ error: 'Booking not found' });
+    if (!(await canManageProperty(session, bkResult.rows[0].property_id)))
+      return reply.code(403).send({ error: 'You do not manage this property' });
+
     const result = await pool.query('DELETE FROM tax_remittances WHERE booking_ref = $1 RETURNING *', [bookingRef]);
     if (result.rows.length === 0) return reply.code(404).send({ error: 'No remittance record found' });
     return { success: true, bookingRef };
@@ -1005,12 +757,13 @@ fastify.post('/host/apply', {
   if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
   const session = await getSession(sessionId);
   if (!session) return reply.code(401).send({ error: 'Session expired' });
+  if (validateBody(hostApplySchema, request, reply)) return;
 
   const { name, email, phone, propertyAddress, city, state, zip, country,
           jurisdiction, strPermit, payoutSuiAddress, payoutNotes, termsAgreed, complianceConfirmed } = request.body;
 
-  if (!name || !email || !termsAgreed || !complianceConfirmed)
-    return reply.code(400).send({ error: 'Name, email, terms agreement, and compliance confirmation are required' });
+  if (!termsAgreed || !complianceConfirmed)
+    return reply.code(400).send({ error: 'Terms agreement and compliance confirmation are required' });
 
   try {
     const existing = await pool.query('SELECT id, status FROM host_profiles WHERE sui_address = $1', [session.suiAddress]);

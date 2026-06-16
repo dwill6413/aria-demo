@@ -4,29 +4,20 @@ import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 import { beginZkLogin, signTransactionWithZkLogin, submitSignedTransaction } from '../lib/zklogin';
 import { fromBase64 } from '@mysten/sui/utils';
+import { authFetch } from '../lib/authFetch';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
 const GOOGLE_CALLBACK_URL = process.env.NEXT_PUBLIC_GOOGLE_CALLBACK_URL || (typeof window !== 'undefined' ? `${window.location.origin}/auth/zklogin/callback` : '');
 
-const getStoredSid = () => { try { return localStorage.getItem('aria_sid') || ''; } catch { return ''; } };
-const authFetch = (url, options = {}) => {
-  const sid = getStoredSid();
-  const headers = { ...(options.headers || {}) };
-  if (sid) headers['x-session-id'] = sid;
-  return fetch(url, { ...options, credentials: 'include', headers });
-};
-
-const JURISDICTION_TAX_RATES = {
-  1: { rate: 0.13,   name: 'Miami-Dade County, FL' },
-  2: { rate: 0.17,   name: 'City of Austin, TX' },
-  3: { rate: 0.13,   name: 'Buncombe County, NC' },
-  4: { rate: 0.0805, name: 'City of Scottsdale, AZ' },
-  5: { rate: 0.10,   name: 'Placer County, CA' },
-  6: { rate: 0.1475, name: 'New York City, NY' },
-};
-
-const PROPERTIES = [
+// PROPERTY_DISPLAY holds cosmetic/display-only fields (images, location,
+// rating, beds/baths, tag) that have no backend equivalent. price/title/
+// taxRate/taxName below are fallback defaults only — on mount we fetch the
+// authoritative values from GET /properties (backed by catalog.mjs) and
+// merge them in, so there's a single source of truth for anything that
+// affects money (Phase 2a fix; was previously duplicated three ways across
+// catalog.mjs, server.mjs, and this file).
+const PROPERTY_DISPLAY = [
   {
     id: 1, title: 'Oceanfront Villa', location: 'Miami Beach, FL', price: 285, rating: 4.97, reviews: 124,
     image: 'https://images.unsplash.com/photo-1499793983690-e29da59ef1c2?w=600&q=80',
@@ -86,7 +77,8 @@ export default function Home() {
   const [searchLocation, setSearchLocation] = useState('All Locations');
   const [searchCheckIn, setSearchCheckIn] = useState(null);
   const [searchCheckOut, setSearchCheckOut] = useState(null);
-  const [filteredProperties, setFilteredProperties] = useState(PROPERTIES);
+  const [properties, setProperties] = useState(PROPERTY_DISPLAY);
+  const [filteredProperties, setFilteredProperties] = useState(PROPERTY_DISPLAY);
   const [searched, setSearched] = useState(false);
   const [liveRatings, setLiveRatings] = useState({});
   const [photoIndex, setPhotoIndex] = useState(0);
@@ -108,7 +100,7 @@ export default function Home() {
 
   const nights = checkIn && checkOut ? Math.round((checkOut - checkIn) / (1000 * 60 * 60 * 24)) : 0;
 
-  const getJurisdiction  = (p) => JURISDICTION_TAX_RATES[p?.id] || { rate: 0.08, name: 'Occupancy Tax' };
+  const getJurisdiction  = (p) => (p?.taxRate != null ? { rate: p.taxRate, name: p.taxName } : { rate: 0.08, name: 'Occupancy Tax' });
   const getSubtotal      = (p, n) => p.price * n;
   const getAriaFee       = (p, n) => Math.round(getSubtotal(p, n) * 0.03);
   const getTax           = (p, n) => Math.round(getSubtotal(p, n) * getJurisdiction(p).rate);
@@ -122,7 +114,7 @@ export default function Home() {
   const closeModal = () => { setSelected(null); setBooking(null); setCheckIn(null); setCheckOut(null); setPhotoIndex(0); setTermsAccepted(false); setEscrowStatus(null); setEscrowError(''); };
 
   const handleSearch = () => {
-    let results = PROPERTIES;
+    let results = properties;
     if (searchLocation !== 'All Locations') results = results.filter(p => p.location === searchLocation);
     setFilteredProperties(results);
     setSearched(true);
@@ -130,7 +122,7 @@ export default function Home() {
 
   const handleClearSearch = () => {
     setSearchLocation('All Locations'); setSearchCheckIn(null); setSearchCheckOut(null);
-    setFilteredProperties(PROPERTIES); setSearched(false);
+    setFilteredProperties(properties); setSearched(false);
   };
 
   useEffect(() => {
@@ -143,13 +135,29 @@ export default function Home() {
       .then(data => { if (data.address) setUser(data); setLoading(false); })
       .catch(() => setLoading(false));
 
-    Promise.all(PROPERTIES.map(p =>
+    Promise.all(PROPERTY_DISPLAY.map(p =>
       fetch(`${API}/reviews/${p.id}`).then(r => r.json()).then(d => ({ id: p.id, rating: d.averageRating, count: d.count })).catch(() => ({ id: p.id, rating: 0, count: 0 }))
     )).then(results => {
       const ratings = {};
       results.forEach(r => { ratings[r.id] = { rating: r.rating, count: r.count }; });
       setLiveRatings(ratings);
     });
+
+    // Merge in the authoritative price/title/tax fields from the backend
+    // (catalog.mjs via GET /properties) so this page can't silently drift
+    // from what the server will actually charge (Phase 2a fix). Cosmetic
+    // fields (images, location, rating, beds/baths, tag) stay local — those
+    // aren't a correctness risk and have no backend equivalent.
+    fetch(`${API}/properties`).then(r => r.json()).then(d => {
+      if (!Array.isArray(d.properties)) return;
+      const live = new Map(d.properties.map(p => [p.id, p]));
+      const merged = PROPERTY_DISPLAY.map(p => {
+        const l = live.get(p.id);
+        return l ? { ...p, title: l.title, price: l.price, taxRate: l.taxRate, taxName: l.taxName } : p;
+      });
+      setProperties(merged);
+      setFilteredProperties(prev => prev === PROPERTY_DISPLAY ? merged : prev);
+    }).catch(() => {});
   }, []);
 
   const getDisplayRating = (p) => {
@@ -246,7 +254,9 @@ export default function Home() {
   const handleCardPayment = async () => {
     if (!checkIn || !checkOut) { alert('Please select check-in and check-out dates'); return; }
     setBookingLoading(true);
-    const res = await authFetch(`${API}/payment/create-intent`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ amount: getChargeTotal(selected, nights), propertyTitle: selected.title }) });
+    // Server recomputes the charge amount from propertyId+nights — it never
+    // trusts a client-sent amount for a real Stripe charge (Finding #1).
+    const res = await authFetch(`${API}/payment/create-intent`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ propertyId: selected.id, nights }) });
     const data = await res.json();
     if (data.clientSecret) { setBooking({ bookingRef: 'STRIPE-' + Date.now(), stripeIntent: true }); }
     setBookingLoading(false);

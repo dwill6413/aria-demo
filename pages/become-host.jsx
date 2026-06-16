@@ -1,15 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
+import { authFetch } from '../lib/authFetch';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
-
-const getStoredSid = () => { try { return localStorage.getItem('aria_sid') || ''; } catch { return ''; } };
-const authFetch = (url, options = {}) => {
-  const sid = getStoredSid();
-  const headers = { ...(options.headers || {}) };
-  if (sid) headers['x-session-id'] = sid;
-  return fetch(url, { ...options, credentials: 'include', headers });
-};
 
 const STEPS = ['Identity', 'Property & Jurisdiction', 'Payout', 'Review & Submit'];
 
@@ -20,6 +13,11 @@ const inputStyle = {
 };
 
 const labelStyle = { fontSize: '12px', color: '#888', marginBottom: '6px', fontWeight: '600', display: 'block' };
+
+// Basic client-side sanity check only — the server is the real authority on
+// whether this is a valid, usable Sui address. This just catches obvious
+// typos (wrong prefix/length) before they're submitted.
+const isValidSuiAddress = (addr) => /^0x[a-fA-F0-9]{64}$/.test((addr || '').trim());
 
 export default function BecomeHost() {
   const router = useRouter();
@@ -82,7 +80,7 @@ export default function BecomeHost() {
   const canProceed = () => {
     if (step === 0) return form.name.trim() && form.email.trim();
     if (step === 1) return true; // All optional
-    if (step === 2) return true; // All optional
+    if (step === 2) return isValidSuiAddress(form.payoutSuiAddress);
     if (step === 3) return form.termsAgreed && form.complianceConfirmed;
     return true;
   };
@@ -270,8 +268,13 @@ export default function BecomeHost() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                 <div>
                   <label style={labelStyle}>SUI WALLET ADDRESS</label>
-                  <input value={form.payoutSuiAddress} onChange={set('payoutSuiAddress')} placeholder="0x..." style={{ ...inputStyle, fontFamily: 'monospace', fontSize: '12px' }} />
-                  <div style={{ fontSize: '11px', color: '#555', marginTop: '4px' }}>Pre-filled with your connected wallet. Change if you prefer a different payout address.</div>
+                  <input value={form.payoutSuiAddress} onChange={set('payoutSuiAddress')} placeholder="0x..."
+                    style={{ ...inputStyle, fontFamily: 'monospace', fontSize: '12px', border: form.payoutSuiAddress && !isValidSuiAddress(form.payoutSuiAddress) ? '1px solid #ff4444' : inputStyle.border }} />
+                  {form.payoutSuiAddress && !isValidSuiAddress(form.payoutSuiAddress) ? (
+                    <div style={{ fontSize: '11px', color: '#ff4444', marginTop: '4px' }}>Doesn't look like a valid Sui address (expected 0x followed by 64 hex characters).</div>
+                  ) : (
+                    <div style={{ fontSize: '11px', color: '#555', marginTop: '4px' }}>Pre-filled with your connected wallet. Change if you prefer a different payout address.</div>
+                  )}
                 </div>
                 <div>
                   <label style={labelStyle}>PAYOUT NOTES (optional)</label>

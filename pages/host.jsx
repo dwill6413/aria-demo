@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
+import { authFetch } from '../lib/authFetch';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -13,15 +14,12 @@ const fmtDay = (d) => {
 };
 const fmtDateTime = (d) => new Date(d).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
 
-const getStoredSid = () => { try { return localStorage.getItem('aria_sid') || ''; } catch { return ''; } };
-const authFetch = (url, options = {}) => {
-  const sid = getStoredSid();
-  const headers = { ...(options.headers || {}) };
-  if (sid) headers['x-session-id'] = sid;
-  return fetch(url, { ...options, credentials: 'include', headers });
-};
-
-const PROPERTIES = [
+// PROPERTY_DISPLAY holds cosmetic/display-only fields (image, location,
+// beds/baths, tag). `price` here is a fallback default only — on mount we
+// fetch the authoritative value from GET /properties (catalog.mjs) and
+// merge it in, so this page can't drift from what the server actually
+// charges (Phase 2a fix; mirrors the same change in pages/index.jsx).
+const PROPERTY_DISPLAY = [
   { id: 1, title: 'Oceanfront Villa', location: 'Miami Beach, FL', price: 285, beds: 4, baths: 3, tag: 'Beachfront', image: 'https://images.unsplash.com/photo-1499793983690-e29da59ef1c2?w=600&q=80' },
   { id: 2, title: 'Downtown Loft', location: 'Austin, TX', price: 145, beds: 2, baths: 1, tag: 'City View', image: 'https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?w=600&q=80' },
   { id: 3, title: 'Mountain Cabin', location: 'Asheville, NC', price: 195, beds: 3, baths: 2, tag: 'Nature', image: 'https://images.unsplash.com/photo-1542718610-a1d656d1884c?w=600&q=80' },
@@ -44,6 +42,7 @@ export default function Host() {
   const [releasingId, setReleasingId] = useState(null);
   const [messageCounts, setMessageCounts] = useState({});
   const [addrCopied, setAddrCopied] = useState(false);
+  const [properties, setProperties] = useState(PROPERTY_DISPLAY);
 
   const copyAddr = () => {
     navigator.clipboard.writeText(user?.address);
@@ -93,6 +92,17 @@ export default function Host() {
         setLoading(false);
       })
       .catch(() => { router.push('/'); });
+
+    // Merge authoritative price/title from catalog.mjs (Phase 2a fix) —
+    // cosmetic fields (image, location, beds/baths, tag) stay local.
+    fetch(`${API}/properties`).then(r => r.json()).then(d => {
+      if (!Array.isArray(d.properties)) return;
+      const live = new Map(d.properties.map(p => [p.id, p]));
+      setProperties(PROPERTY_DISPLAY.map(p => {
+        const l = live.get(p.id);
+        return l ? { ...p, title: l.title, price: l.price } : p;
+      }));
+    }).catch(() => {});
   }, []);
 
   const loadApplications = async (silent = false) => {
@@ -168,7 +178,7 @@ export default function Host() {
   const exportCSV = () => {
     if (!taxData) return;
     const rows = [
-      ['Booking Ref', 'Property', 'Guest', 'Check-In', 'Check-Out', 'Nights', 'Subtotal', 'Tax (8%)', 'Total', 'Remitted', 'Remitted At', 'Jurisdiction', 'Notes'],
+      ['Booking Ref', 'Property', 'Guest', 'Check-In', 'Check-Out', 'Nights', 'Subtotal', 'Tax', 'Total', 'Remitted', 'Remitted At', 'Jurisdiction', 'Notes'],
       ...taxData.bookings.map(b => [
         b.bookingRef, b.property, b.guestName,
         fmtDay(b.checkIn), fmtDay(b.checkOut),
@@ -210,22 +220,26 @@ export default function Host() {
     setReleasingId(null);
   };
 
+  // Finding #9: sum the raw numeric fields (totalAmount/ariaFee/taxes) the
+  // API now returns alongside the display strings, instead of regex-parsing
+  // breakdown.* — a display-format change could previously have silently
+  // corrupted these totals.
   const activeBookings    = bookings.filter(b => b.paymentStatus !== 'cancelled');
   const cancelledBookings = bookings.filter(b => b.paymentStatus === 'cancelled');
-  const totalRevenue      = activeBookings.reduce((sum, b) => sum + (b.breakdown?.totalPaid ? parseInt(b.breakdown.totalPaid.split(' ')[0].replace(/[^0-9]/g, '')) : (b.totalAmount || 0)), 0);
-  const totalAriaFees     = activeBookings.reduce((sum, b) => sum + (b.breakdown?.ariaFee ? parseInt(b.breakdown.ariaFee.split(' ')[0].replace(/[^0-9]/g, '')) : 0), 0);
-  const totalTaxes        = activeBookings.reduce((sum, b) => sum + (b.breakdown?.taxes ? parseInt(b.breakdown.taxes.split(' ')[0].replace(/[^0-9]/g, '')) : 0), 0);
+  const totalRevenue      = activeBookings.reduce((sum, b) => sum + (b.totalAmount || 0), 0);
+  const totalAriaFees     = activeBookings.reduce((sum, b) => sum + (b.ariaFee || 0), 0);
+  const totalTaxes        = activeBookings.reduce((sum, b) => sum + (b.taxes || 0), 0);
   const hostEarnings      = totalRevenue - totalAriaFees - totalTaxes;
   const depositsHeld      = activeBookings.filter(b => b.depositAmount && b.depositStatus === 'held').length;
   const totalUnread       = Object.values(messageCounts).reduce((sum, c) => sum + c, 0);
   const avgRating         = reviews.length ? (reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length).toFixed(1) : 0;
   const pendingApps       = applications.filter(a => a.status === 'pending').length;
 
-  const bookingsByProperty = PROPERTIES.map(p => ({
+  const bookingsByProperty = properties.map(p => ({
     ...p,
     bookings: activeBookings.filter(b => b.propertyId === p.id || b.propertyId === String(p.id)),
     revenue: activeBookings.filter(b => b.propertyId === p.id || b.propertyId === String(p.id))
-      .reduce((sum, b) => sum + (b.breakdown?.totalPaid ? parseInt(b.breakdown.totalPaid.split(' ')[0].replace(/[^0-9]/g, '')) : (b.totalAmount || 0)), 0)
+      .reduce((sum, b) => sum + (b.totalAmount || 0), 0)
   }));
 
   const tabStyle = (tab) => ({
@@ -329,8 +343,8 @@ export default function Host() {
             { label: 'GROSS REVENUE', value: `$${totalRevenue.toLocaleString()}`, color: '#00ff44', sub: 'SuiUSD' },
             { label: 'ARIA FEES (3%)', value: `$${totalAriaFees.toLocaleString()}`, color: '#ff4444', sub: 'vs 15% Airbnb' },
             { label: 'YOUR EARNINGS', value: `$${hostEarnings.toLocaleString()}`, color: '#4a9eff', sub: 'net payout' },
-            { label: 'ACTIVE LISTINGS', value: PROPERTIES.length, color: '#00ff44', sub: 'properties' },
-            { label: 'TAXES COLLECTED', value: `$${totalTaxes.toLocaleString()}`, color: '#ffaa00', sub: '8% occupancy tax' },
+            { label: 'ACTIVE LISTINGS', value: properties.length, color: '#00ff44', sub: 'properties' },
+            { label: 'TAXES COLLECTED', value: `$${totalTaxes.toLocaleString()}`, color: '#ffaa00', sub: 'occupancy tax, varies by jurisdiction' },
             { label: 'DEPOSITS HELD', value: depositsHeld, color: '#4a9eff', sub: 'in Sui escrow' },
             { label: 'MESSAGES', value: totalUnread, color: totalUnread > 0 ? '#ff4444' : '#555', sub: totalUnread > 0 ? 'need attention' : 'all caught up' },
             { label: 'AVG RATING', value: avgRating > 0 ? `${avgRating} ⭐` : '—', color: '#ffaa00', sub: `${reviews.length} review${reviews.length !== 1 ? 's' : ''}` },
@@ -473,7 +487,7 @@ export default function Host() {
           <div>
             <h3 style={{ fontSize: '16px', fontWeight: '600', margin: '0 0 16px' }}>Your Listings</h3>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '16px' }}>
-              {PROPERTIES.map(p => (
+              {properties.map(p => (
                 <div key={p.id} style={{ background: '#111', border: '1px solid #222', borderRadius: '12px', overflow: 'hidden' }}>
                   <div style={{ height: '160px', overflow: 'hidden', position: 'relative' }}>
                     <img src={p.image} alt={p.title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
@@ -497,7 +511,7 @@ export default function Host() {
                     </div>
                     <div style={{ display: 'flex', gap: '8px' }}>
                       {[['BOOKINGS', activeBookings.filter(b => b.propertyId === p.id || b.propertyId === String(p.id)).length, '#00ff44'],
-                        ['REVENUE', `$${activeBookings.filter(b => b.propertyId === p.id || b.propertyId === String(p.id)).reduce((s, b) => s + (parseInt((b.breakdown?.totalPaid || '0').split(' ')[0].replace(/[^0-9]/g, '')) || 0), 0).toLocaleString()}`, '#4a9eff'],
+                        ['REVENUE', `$${activeBookings.filter(b => b.propertyId === p.id || b.propertyId === String(p.id)).reduce((s, b) => s + (b.totalAmount || 0), 0).toLocaleString()}`, '#4a9eff'],
                         ['ARIA FEE', '3%', '#00ff44']].map(([label, val, color]) => (
                         <div key={label} style={{ flex: 1, background: '#1a1a1a', borderRadius: '6px', padding: '8px', textAlign: 'center' }}>
                           <div style={{ fontSize: '10px', color: '#555', marginBottom: '2px' }}>{label}</div>
@@ -520,7 +534,7 @@ export default function Host() {
               <p style={{ color: '#888', fontSize: '13px', margin: 0, lineHeight: '1.6' }}>Export your ARIA calendar to Airbnb/VRBO, and import their calendars here.</p>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              {PROPERTIES.map(p => (
+              {properties.map(p => (
                 <div key={p.id} style={{ background: '#111', border: '1px solid #222', borderRadius: '12px', padding: '20px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
                     <img src={p.image} alt={p.title} style={{ width: '48px', height: '48px', objectFit: 'cover', borderRadius: '8px' }} />
@@ -563,7 +577,7 @@ export default function Host() {
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 {reviews.map((r, i) => {
-                  const prop = PROPERTIES.find(p => p.id === r.propertyId || String(p.id) === String(r.propertyId));
+                  const prop = properties.find(p => p.id === r.propertyId || String(p.id) === String(r.propertyId));
                   return (
                     <div key={i} style={{ background: '#111', border: '1px solid #222', borderRadius: '12px', padding: '20px' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
@@ -591,7 +605,7 @@ export default function Host() {
                 <span style={{ fontSize: '16px' }}>⚖️</span>
                 <span style={{ fontWeight: '600', fontSize: '14px', color: '#ffaa00' }}>Occupancy Tax Compliance</span>
               </div>
-              <p style={{ color: '#888', fontSize: '12px', margin: 0, lineHeight: '1.6' }}>ARIA collects 8% occupancy tax on every booking. As the host, you are responsible for remitting these taxes to the appropriate local jurisdiction.</p>
+              <p style={{ color: '#888', fontSize: '12px', margin: 0, lineHeight: '1.6' }}>ARIA collects occupancy tax on every booking at the rate set by each property's jurisdiction (rates vary, typically 8–17%). As the host, you are responsible for remitting these taxes to the appropriate local jurisdiction.</p>
             </div>
             {taxLoading ? (
               <div style={{ textAlign: 'center', padding: '60px', color: '#555' }}>Loading tax data...</div>
@@ -606,7 +620,7 @@ export default function Host() {
                     { label: 'TOTAL COLLECTED', value: `$${taxData.summary.totalCollected.toLocaleString()}`, color: '#ffaa00', sub: `${taxData.summary.bookingCount} bookings` },
                     { label: 'REMITTED', value: `$${taxData.summary.totalRemitted.toLocaleString()}`, color: '#00ff44', sub: `${taxData.summary.remittedCount} bookings` },
                     { label: 'OUTSTANDING', value: `$${taxData.summary.totalOutstanding.toLocaleString()}`, color: taxData.summary.totalOutstanding > 0 ? '#ff4444' : '#555', sub: `${taxData.summary.pendingCount} pending` },
-                    { label: 'TAX RATE', value: '8%', color: '#888', sub: 'occupancy tax' },
+                    { label: 'TAX RATE', value: 'Varies', color: '#888', sub: 'set per jurisdiction' },
                   ].map((s, i) => (
                     <div key={i} style={{ background: '#111', border: `1px solid ${i === 2 && taxData.summary.totalOutstanding > 0 ? '#3a1a00' : '#222'}`, borderRadius: '12px', padding: '20px' }}>
                       <div style={{ fontSize: '10px', color: '#555', marginBottom: '8px', fontWeight: '600' }}>{s.label}</div>
@@ -644,7 +658,9 @@ export default function Host() {
                               <div style={{ fontSize: '14px', fontWeight: '600' }}>${b.subtotal}</div>
                             </div>
                             <div style={{ textAlign: 'center' }}>
-                              <div style={{ fontSize: '10px', color: '#555', marginBottom: '2px' }}>TAX (8%)</div>
+                              <div style={{ fontSize: '10px', color: '#555', marginBottom: '2px' }}>
+                                TAX{b.subtotal > 0 ? ` (${Math.round((b.taxAmount / b.subtotal) * 100)}%)` : ''}
+                              </div>
                               <div style={{ fontSize: '16px', fontWeight: '700', color: '#ffaa00' }}>${b.taxAmount}</div>
                             </div>
                             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
@@ -754,7 +770,9 @@ export default function Host() {
                 <span style={{ fontSize: '13px' }}>${remitModal.subtotal}</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: '#ffaa00', fontSize: '14px', fontWeight: '600' }}>Occupancy Tax (8%)</span>
+                <span style={{ color: '#ffaa00', fontSize: '14px', fontWeight: '600' }}>
+                  Occupancy Tax{remitModal.subtotal > 0 ? ` (${Math.round((remitModal.taxAmount / remitModal.subtotal) * 100)}%)` : ''}
+                </span>
                 <span style={{ color: '#ffaa00', fontSize: '16px', fontWeight: '700' }}>${remitModal.taxAmount}</span>
               </div>
             </div>

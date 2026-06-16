@@ -2,17 +2,13 @@
 // Unit tests for extractCreatedObjectId — no network, no Sui SDK needed.
 // Run with: node escrow.test.mjs
 
-// ─── Function under test (copy of the one in server.mjs) ─────────────────────
+// ─── Function under test ───────────────────────────────────────────────────
+// Finding #6: this used to be a hand-copied duplicate of the function in
+// server.mjs, which could silently diverge from the real implementation and
+// defeat the purpose of the tests. Now imports the real (Phase 2b-relocated)
+// implementation from escrow.mjs directly.
 
-function extractCreatedObjectId(changedObjects) {
-  const createdEntries = (changedObjects || []).filter(c => {
-    let op = c.idOperation ?? c.operation ?? c.id_operation ?? c.$kind;
-    if (op && typeof op === 'object') op = op.$kind;
-    return typeof op === 'string' && /created/i.test(op);
-  });
-  const chosen = createdEntries[createdEntries.length - 1];
-  return chosen?.objectId ?? chosen?.id ?? chosen?.object_id ?? null;
-}
+import { extractCreatedObjectId } from './escrow.mjs';
 
 // ─── Test runner ──────────────────────────────────────────────────────────────
 

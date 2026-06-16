@@ -9,10 +9,10 @@
 //   mode     = UI hint only — the actual host/guest role is decided SERVER-SIDE
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { calculateHostPayout } from './deepbook.mjs';
 import { pool } from './db.mjs';
 import { getSession } from './auth.mjs';
-import { PROPERTIES, JURISDICTION_TAX_RATES } from './catalog.mjs';
+import { JURISDICTION_TAX_RATES } from './catalog.mjs';
+import { createBooking } from './bookings.mjs';
 
 const GROK_MODEL   = 'grok-3-latest';
 const XAI_BASE_URL = 'https://api.x.ai/v1/chat/completions';
@@ -50,19 +50,15 @@ const GUEST_TOOLS = [
     type: 'function',
     function: {
       name: 'create_booking',
-      description: 'Book a property on ARIA for the guest. Always confirm details with the user before calling this.',
+      description: 'Book a property on ARIA for the guest. Always confirm details with the user before calling this. Price, nights, fees, and taxes are computed server-side from propertyId/checkIn/checkOut — you do not need to (and should not) supply them.',
       parameters: {
         type: 'object',
         properties: {
-          propertyId:    { type: 'number', description: 'Property ID (1-6)' },
-          propertyTitle: { type: 'string', description: 'Property name' },
-          checkIn:       { type: 'string', description: 'Check-in date YYYY-MM-DD' },
-          checkOut:      { type: 'string', description: 'Check-out date YYYY-MM-DD' },
-          nights:        { type: 'number', description: 'Number of nights' },
-          pricePerNight: { type: 'number', description: 'Price per night in USD' },
-          totalAmount:   { type: 'number', description: 'Total including ARIA fee and taxes' }
+          propertyId: { type: 'number', description: 'Property ID (1-6)' },
+          checkIn:    { type: 'string', description: 'Check-in date YYYY-MM-DD' },
+          checkOut:   { type: 'string', description: 'Check-out date YYYY-MM-DD' }
         },
-        required: ['propertyId', 'propertyTitle', 'checkIn', 'checkOut', 'nights', 'pricePerNight', 'totalAmount']
+        required: ['propertyId', 'checkIn', 'checkOut']
       }
     }
   },
@@ -352,123 +348,21 @@ async function executeTool(toolName, toolInput, session, isHost) {
       return JSON.stringify(result.rows);
     }
 
-    // ── Guest: create booking in Postgres ─────────────────────────────────────
+    // ── Guest: create booking ──────────────────────────────────────────────────
+    // Phase 2b: delegates to the same createBooking() in bookings.mjs that
+    // server.mjs's REST /booking/create uses, instead of a hand-maintained
+    // copy. This also closes a real gap: the old copy here never built an
+    // escrow transaction at all, yet still told the guest their deposit was
+    // "held in Sui escrow" — createBooking() now builds the same guest-signed
+    // escrow PTB the REST flow does, and returns escrowTxBytes for the
+    // frontend (pages/ai.jsx) to have the guest sign via zkLogin, exactly
+    // like pages/index.jsx already does after a REST-created booking.
+    // Date-derived nights (not the LLM's stated `nights`) decide stay length —
+    // see createBooking's comment on why client/LLM-supplied nights aren't trusted.
     if (toolName === 'create_booking') {
       const { propertyId, checkIn, checkOut } = toolInput;
-      const nights = Number(toolInput.nights);
-
-      // Server-authoritative property + price — ignore any client-supplied price.
-      const prop = PROPERTIES[Number(propertyId)];
-      if (!prop) return JSON.stringify({ error: 'Invalid propertyId (must be 1-6)' });
-      if (!nights || nights < 1 || nights > 90) return JSON.stringify({ error: 'nights must be between 1 and 90' });
-
-      const propertyTitle = prop.title;
-      const pricePerNight = prop.price;
-
-      // Double-booking guard
-      const conflict = await pool.query(
-        `SELECT booking_ref FROM bookings
-         WHERE property_id = $1 AND payment_status != 'cancelled'
-         AND check_in < $3 AND check_out > $2`,
-        [propertyId, checkIn, checkOut]
-      );
-      if (conflict.rows.length > 0) {
-        return JSON.stringify({ error: 'Property not available for selected dates', conflicts: conflict.rows });
-      }
-
-      const jurisdiction  = JURISDICTION_TAX_RATES[Number(propertyId)] || { rate: 0.08, name: 'Unknown', breakdown: '8% occupancy tax' };
-      const bookingRef    = `ARIA-${propertyId}-${Date.now()}`;
-      const subtotal      = pricePerNight * nights;
-      const ariaFee       = Math.round(subtotal * 0.03);
-      const taxes         = Math.round(subtotal * jurisdiction.rate);
-      const total         = subtotal + ariaFee + taxes;
-      const depositAmount = Math.round(total * 0.20);
-      const hostPayout    = calculateHostPayout(subtotal);
-      const taxPct        = (jurisdiction.rate * 100).toFixed(2);
-
-      // Insert into Postgres
-      await pool.query(
-        `INSERT INTO bookings (booking_ref, property_id, property_title, wallet_address, guest_name, guest_email,
-          check_in, check_out, nights, price_per_night, subtotal, aria_fee, taxes, total_amount,
-          deposit_amount, payment_status, payment_method)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'confirmed','SuiUSD')`,
-        [bookingRef, propertyId, propertyTitle, session.suiAddress, session.name, session.email,
-         checkIn, checkOut, nights, pricePerNight, subtotal, ariaFee, taxes, total, depositAmount]
-      );
-
-      // Push to Walrus
-      const walrusBlobId = await pushToWalrus({
-        bookingRef, app: 'ARIA Demo', network: 'sui:testnet',
-        timestamp: new Date().toISOString(), property: propertyTitle, propertyId,
-        checkIn, checkOut, nights,
-        breakdown: {
-          pricePerNight: `$${pricePerNight}`, nights,
-          subtotal: `$${subtotal}`, ariaFee: `$${ariaFee} (3%)`,
-          taxes: `$${taxes} (${taxPct}% — ${jurisdiction.name})`,
-          totalPaid: `$${total} SuiUSD`
-        },
-        hostPayout: {
-          amount: `$${hostPayout.hostPayout} SuiUSD`,
-          ariaFee: `$${hostPayout.ariaFee} SuiUSD`,
-          settlementMethod: hostPayout.settlementMethod
-        },
-        jurisdiction: jurisdiction.name, jurisdictionBreakdown: jurisdiction.breakdown,
-        walletAddress: session.suiAddress, guestName: session.name, guestEmail: session.email,
-        paymentMethod: 'SuiUSD', paymentStatus: 'confirmed', depositAmount, depositStatus: 'held'
-      });
-      if (walrusBlobId) {
-        await pool.query('UPDATE bookings SET walrus_blob_id = $1 WHERE booking_ref = $2', [walrusBlobId, bookingRef]);
-      }
-
-      // Confirmation email
-      try {
-        const { Resend } = await import('resend');
-        const resend    = new Resend(process.env.RESEND_API_KEY);
-        const emailRows = [
-          ['Booking Ref',     bookingRef],
-          ['Check-in',        checkIn],
-          ['Check-out',       checkOut],
-          ['Nights',          nights],
-          ['Price per night', `$${pricePerNight}`],
-          ['Subtotal',        `$${subtotal}`],
-          ['ARIA Fee (3%)',   `$${ariaFee}`],
-          [`Taxes (${taxPct}% — ${jurisdiction.name})`, `$${taxes}`],
-        ];
-        const rowsHtml   = emailRows.map(([l, v]) => `<tr><td style="color:#888;padding:6px 0">${l}</td><td style="text-align:right">${v}</td></tr>`).join('');
-        const totalRow   = `<tr style="border-top:1px solid #333"><td style="padding:10px 0;font-weight:700">Total Charged</td><td style="text-align:right;font-weight:700;color:#00ff44">$${total} SuiUSD</td></tr>`;
-        const depositRow = `<tr><td style="color:#4a9eff;padding:6px 0">Refundable Deposit (held in escrow)</td><td style="text-align:right;color:#4a9eff">$${depositAmount} SuiUSD</td></tr>`;
-        const walrusHtml = walrusBlobId
-          ? `<div style="background:#111;border:1px solid #222;border-radius:8px;padding:16px;margin-bottom:20px"><p style="margin:0 0 8px;font-size:12px;color:#555">WALRUS RECEIPT — PERMANENT ON-CHAIN RECORD</p><p style="margin:0;font-size:11px;color:#00ff44;word-break:break-all;font-family:monospace">${walrusBlobId}</p></div>`
-          : '';
-        await resend.emails.send({
-          from: 'ARIA <onboarding@resend.dev>',
-          to: session.email,
-          subject: `Booking Confirmed — ${propertyTitle} | Ref: ${bookingRef}`,
-          html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px">
-            <h1 style="color:#00ff44;font-size:24px;margin:0 0 8px">✅ Booking Confirmed</h1>
-            <p style="color:#888;margin:0 0 24px">Your ARIA booking receipt — ${session.name}</p>
-            <div style="background:#111;border:1px solid #222;border-radius:8px;padding:20px;margin-bottom:20px">
-              <h2 style="margin:0 0 16px;font-size:18px">${propertyTitle}</h2>
-              <table style="width:100%;border-collapse:collapse">${rowsHtml}${totalRow}${depositRow}</table>
-              <p style="color:#555;font-size:12px;margin:12px 0 0;line-height:1.6">The security deposit is held in Sui escrow and will be automatically returned after your checkout.</p>
-            </div>
-            ${walrusHtml}
-            <p style="color:#555;font-size:12px;text-align:center;margin:0">Powered by ARIA — Built on Sui | The Airbnb killer</p>
-          </div>`
-        });
-      } catch (emailErr) {
-        console.warn('AI booking email failed:', emailErr.message);
-      }
-
-      return JSON.stringify({
-        success: true, bookingRef, property: propertyTitle,
-        checkIn, checkOut, nights, totalAmount: total,
-        depositAmount, jurisdiction: jurisdiction.name,
-        taxRate: `${taxPct}%`,
-        depositNote: 'Refundable security deposit held in Sui escrow — returned after checkout',
-        network: 'sui:testnet', walrusBlobId,
-        message: 'Booking confirmed and saved! Confirmation email sent.'
-      });
+      const result = await createBooking({ propertyId, checkIn, checkOut, session });
+      return JSON.stringify(result);
     }
 
     // ── Cancel booking in Postgres ────────────────────────────────────────────
@@ -702,6 +596,11 @@ export async function registerAIRoute(fastify) {
     ];
     let finalText  = '';
     let iterations = 0;
+    // Captures the structured result of a successful create_booking tool call
+    // so the frontend (pages/ai.jsx) can render a "sign to lock deposit in
+    // escrow" button — the model's own reply is plain text and can't carry
+    // escrowTxBytes, so it rides alongside `response` in the HTTP result below.
+    let booking = null;
 
     while (iterations < 10) {
       iterations++;
@@ -726,6 +625,15 @@ export async function registerAIRoute(fastify) {
         const toolInput = JSON.parse(toolCall.function.arguments);
         const result    = await executeTool(toolName, toolInput, session, isHost);
 
+        if (toolName === 'create_booking') {
+          try {
+            const parsed = JSON.parse(result);
+            if (parsed.success && parsed.escrowTxBytes) {
+              booking = { bookingRef: parsed.bookingRef, escrowTxBytes: parsed.escrowTxBytes, property: parsed.property, depositAmount: parsed.depositAmount };
+            }
+          } catch {}
+        }
+
         apiMessages.push({
           role: 'tool',
           tool_call_id: toolCall.id,
@@ -734,6 +642,6 @@ export async function registerAIRoute(fastify) {
       }
     }
 
-    return { response: finalText };
+    return booking ? { response: finalText, booking } : { response: finalText };
   });
 }

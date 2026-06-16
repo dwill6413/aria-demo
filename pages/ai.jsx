@@ -1,15 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/router';
+import { signTransactionWithZkLogin, submitSignedTransaction } from '../lib/zklogin';
+import { fromBase64 } from '@mysten/sui/utils';
+import { authFetch } from '../lib/authFetch';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
-
-const getStoredSid = () => { try { return localStorage.getItem('aria_sid') || ''; } catch { return ''; } };
-const authFetch = (url, options = {}) => {
-  const sid = getStoredSid();
-  const headers = { ...(options.headers || {}) };
-  if (sid) headers['x-session-id'] = sid;
-  return fetch(url, { ...options, credentials: 'include', headers });
-};
 
 const GUEST_SUGGESTIONS = [
   'Show me my bookings',
@@ -137,7 +132,11 @@ export default function AI() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Request failed');
-      setMessages(prev => [...prev, { role: 'assistant', content: data.response }]);
+      // data.booking (when present) means create_booking succeeded and the
+      // backend built a guest-signed escrow tx (see ai_route.mjs) — attach it
+      // to this message so the bubble can render a "sign to lock deposit"
+      // button, same non-custodial flow pages/index.jsx already uses.
+      setMessages(prev => [...prev, { role: 'assistant', content: data.response, booking: data.booking ? { ...data.booking, status: null, error: '' } : undefined }]);
     } catch (err) {
       setMessages(prev => [...prev, { role: 'assistant', content: `Sorry, something went wrong: ${err.message}. Please try again.` }]);
     }
@@ -146,6 +145,41 @@ export default function AI() {
 
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  };
+
+  // Signs the backend-built escrow PTB with the guest's zkLogin session,
+  // submits it directly to Sui from the browser, then reports just the
+  // resulting digest to the backend so it can independently verify on-chain
+  // before writing escrow_object_id / flipping deposit_status to 'held'.
+  // Mirrors pages/index.jsx's handleEscrowSign exactly — same non-custodial
+  // guarantee applies whether the booking came from the REST flow or here.
+  const setMsgBooking = (msgIndex, patch) => {
+    setMessages(prev => prev.map((m, idx) => idx === msgIndex ? { ...m, booking: { ...m.booking, ...patch } } : m));
+  };
+
+  const handleEscrowSign = async (msgIndex, bookingRef, escrowTxBytes) => {
+    setMsgBooking(msgIndex, { status: 'signing', error: '' });
+    try {
+      const txBytes = fromBase64(escrowTxBytes);
+      const signature = await signTransactionWithZkLogin(txBytes);
+
+      setMsgBooking(msgIndex, { status: 'submitting' });
+      const digest = await submitSignedTransaction(escrowTxBytes, signature);
+
+      setMsgBooking(msgIndex, { status: 'confirming' });
+      const confirmRes = await authFetch(`${API}/booking/${bookingRef}/escrow/confirm`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ digest }),
+      });
+      const confirmData = await confirmRes.json();
+      if (!confirmRes.ok || !confirmData.success) {
+        throw new Error(confirmData.error || 'Escrow could not be verified on-chain');
+      }
+      setMsgBooking(msgIndex, { status: 'done' });
+    } catch (err) {
+      console.error('Escrow signing failed:', err);
+      setMsgBooking(msgIndex, { status: 'error', error: err.message || 'Could not complete the escrow deposit.' });
+    }
   };
 
   const SUGGESTIONS = isHost ? HOST_SUGGESTIONS : GUEST_SUGGESTIONS;
@@ -205,6 +239,33 @@ export default function AI() {
           <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: m.role === 'user' ? 'flex-end' : 'flex-start' }}>
             <div style={{ fontSize: '11px', color: '#555', marginBottom: '4px' }}>{m.role === 'user' ? 'You' : isHost ? '🏡 ARIA Host Agent' : '🤖 ARIA Agent'}</div>
             <MessageBubble message={m} isHost={isHost} />
+            {m.booking && (
+              <div style={{ marginTop: '8px', background: '#0a1a0a', border: '1px solid #1a3a1a', borderRadius: '10px', padding: '12px 14px', maxWidth: '85%' }}>
+                <div style={{ fontSize: '12px', color: '#888', marginBottom: '8px' }}>
+                  🔒 Refundable deposit for <strong style={{ color: '#fff' }}>{m.booking.property}</strong>: ${m.booking.depositAmount} SuiUSD
+                </div>
+                {m.booking.status === 'done' ? (
+                  <div style={{ color: '#00ff44', fontSize: '13px', fontWeight: '600' }}>✅ Escrow deposit confirmed on-chain</div>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => handleEscrowSign(i, m.booking.bookingRef, m.booking.escrowTxBytes)}
+                      disabled={['signing', 'submitting', 'confirming'].includes(m.booking.status)}
+                      style={{
+                        background: ['signing', 'submitting', 'confirming'].includes(m.booking.status) ? '#1a1a1a' : '#00ff44',
+                        color: ['signing', 'submitting', 'confirming'].includes(m.booking.status) ? '#555' : '#000',
+                        border: 'none', borderRadius: '6px', padding: '8px 16px', fontWeight: '700', fontSize: '13px',
+                        cursor: ['signing', 'submitting', 'confirming'].includes(m.booking.status) ? 'not-allowed' : 'pointer'
+                      }}>
+                      {m.booking.status === 'signing' ? 'Signing...' : m.booking.status === 'submitting' ? 'Submitting...' : m.booking.status === 'confirming' ? 'Confirming...' : 'Sign to lock deposit in escrow'}
+                    </button>
+                    {m.booking.status === 'error' && (
+                      <div style={{ color: '#ff4444', fontSize: '12px', marginTop: '6px' }}>{m.booking.error}</div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
           </div>
         ))}
 
