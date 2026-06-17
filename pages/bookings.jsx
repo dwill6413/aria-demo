@@ -195,13 +195,25 @@ export default function Bookings() {
                         {b.paymentStatus === 'cancelled' ? '✕ cancelled' : `✅ ${b.paymentStatus || 'confirmed'}`}
                       </span>
                       {b.depositAmount && b.paymentStatus !== 'cancelled' && (
+                        // Bug fix: this used to render "🔒 Deposit held" for ANY
+                        // non-released, non-cancelled booking — including ones
+                        // whose escrow tx never actually got verified on-chain
+                        // (depositStatus stays 'pending' until POST
+                        // /booking/:ref/escrow/confirm succeeds against
+                        // verifyEscrowTransaction). That misrepresented unverified
+                        // deposits as "held in escrow". Now branches on the real
+                        // depositStatus value instead of just != 'released'.
                         <span style={{
-                          background: b.depositStatus === 'released' ? '#0a1a0a' : '#0a0a1a',
-                          border: `1px solid ${b.depositStatus === 'released' ? '#1a3a1a' : '#1a1a3a'}`,
-                          color: b.depositStatus === 'released' ? '#00ff44' : '#4a9eff',
+                          background: b.depositStatus === 'released' ? '#0a1a0a' : b.depositStatus === 'held' ? '#0a0a1a' : '#1a1505',
+                          border: `1px solid ${b.depositStatus === 'released' ? '#1a3a1a' : b.depositStatus === 'held' ? '#1a1a3a' : '#3a2f0a'}`,
+                          color: b.depositStatus === 'released' ? '#00ff44' : b.depositStatus === 'held' ? '#4a9eff' : '#ffb84a',
                           fontSize: '11px', fontWeight: '600', padding: '3px 10px', borderRadius: '20px'
                         }}>
-                          {b.depositStatus === 'released' ? '🔓 Deposit returned' : `🔒 Deposit $${b.depositAmount} held`}
+                          {b.depositStatus === 'released'
+                            ? '🔓 Deposit returned'
+                            : b.depositStatus === 'held'
+                            ? `🔒 Deposit $${b.depositAmount} held`
+                            : '⏳ Deposit not yet confirmed on-chain'}
                         </span>
                       )}
                     </div>

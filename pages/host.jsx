@@ -445,8 +445,12 @@ export default function Host() {
                             {b.paymentStatus === 'cancelled' ? '✕ cancelled' : '✅ confirmed'}
                           </span>
                           {b.depositAmount && b.paymentStatus !== 'cancelled' && (
-                            <span style={{ background: b.depositStatus === 'released' ? '#0a1a0a' : '#0a0a1a', border: `1px solid ${b.depositStatus === 'released' ? '#1a3a1a' : '#1a1a3a'}`, color: b.depositStatus === 'released' ? '#00ff44' : '#4a9eff', fontSize: '11px', fontWeight: '600', padding: '2px 8px', borderRadius: '20px' }}>
-                              {b.depositStatus === 'released' ? '🔓 Deposit released' : `🔒 Deposit $${b.depositAmount} held`}
+                            // Same fix as pages/bookings.jsx: branch on the real
+                            // depositStatus instead of just "!= released", so a
+                            // never-verified escrow (depositStatus still 'pending')
+                            // doesn't get shown to the host as funds already held.
+                            <span style={{ background: b.depositStatus === 'released' ? '#0a1a0a' : b.depositStatus === 'held' ? '#0a0a1a' : '#1a1505', border: `1px solid ${b.depositStatus === 'released' ? '#1a3a1a' : b.depositStatus === 'held' ? '#1a1a3a' : '#3a2f0a'}`, color: b.depositStatus === 'released' ? '#00ff44' : b.depositStatus === 'held' ? '#4a9eff' : '#ffb84a', fontSize: '11px', fontWeight: '600', padding: '2px 8px', borderRadius: '20px' }}>
+                              {b.depositStatus === 'released' ? '🔓 Deposit released' : b.depositStatus === 'held' ? `🔒 Deposit $${b.depositAmount} held` : '⏳ Deposit not yet confirmed'}
                             </span>
                           )}
                         </div>
@@ -467,7 +471,12 @@ export default function Host() {
                             💬 Messages {messageCounts[b.bookingRef] > 0 && <span style={{ background: '#ff4444', color: '#fff', borderRadius: '50%', fontSize: '10px', fontWeight: '700', padding: '1px 5px' }}>{messageCounts[b.bookingRef]}</span>}
                           </button>
                         )}
-                        {b.depositAmount && b.paymentStatus !== 'cancelled' && b.depositStatus !== 'released' && (
+                        {/* Was "!== 'released'", which also matched 'pending' —
+                            letting hosts try to release a deposit that was never
+                            actually verified/held on-chain. autoReleaseEscrow
+                            already no-ops safely without an escrow_object_id, but
+                            showing the button at all was misleading. */}
+                        {b.depositAmount && b.depositStatus === 'held' && (
                           <button onClick={() => handleReleaseDeposit(b.bookingRef)} disabled={releasingId === b.bookingRef}
                             style={{ background: '#0a0a1a', border: '1px solid #1a1a3a', color: releasingId === b.bookingRef ? '#555' : '#4a9eff', fontSize: '11px', padding: '4px 10px', borderRadius: '6px', cursor: releasingId === b.bookingRef ? 'not-allowed' : 'pointer', fontWeight: '600' }}>
                             {releasingId === b.bookingRef ? 'Releasing...' : '🔓 Release Deposit'}
