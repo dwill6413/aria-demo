@@ -37,7 +37,7 @@ In the same Railway project:
 
 ## 3. Add the `prover-fe` service (public)
 
-1. New Service → Deploy from Docker Image → `mysten/zklogin:prover-fe`
+1. New Service → Deploy from Docker Image → `mysten/zklogin:prover-fe-stable`
    (no repo needed).
 2. Variables:
    - `PROVER_URI=http://zklogin-prover.railway.internal:8080/input`

@@ -23,7 +23,7 @@ RUN GIT_LFS_SKIP_SMUDGE=1 git clone --depth 1 \
       https://github.com/sui-foundation/zklogin-ceremony-contributions.git . \
     && git lfs pull --include "zkLogin-main.zkey"
 
-FROM mysten/zklogin:prover
+FROM mysten/zklogin:prover-stable
 
 COPY --from=zkey-fetch /fetch/zkLogin-main.zkey /app/binaries/zkLogin.zkey
 
