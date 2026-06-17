@@ -352,11 +352,13 @@ transaction: `JCA8daJ9mSByY6x51ZhEc6Ubfrv1LEbf3nsVccEFtJZK`. New package:
 (version 2). The original package ID stays the type-defining ID for existing
 `BookingEscrow` objects — only the bytecode changed.
 
-**Manual step remaining:** update `ESCROW_PACKAGE_ID` in Railway to the new
-package ID above (see Environment Variables) so new `create_escrow` calls get
-the 30-day expiry cap. Existing escrows and the claim/dispute/auto-release
-flow are unaffected either way — those calls work against either package ID
-since the underlying struct type and function signatures didn't change.
+**Fully live.** `ESCROW_PACKAGE_ID` updated in Railway to the new package ID
+above and redeployed (confirmed June 17, 2026, 3:05 PM CDT — deploy logs show
+both the auto-release and arbitrator keypairs loading correctly, DB
+initialized, server up). New `create_escrow` calls now get the 30-day expiry
+cap. Existing escrows and the claim/dispute/auto-release flow are unaffected
+either way — those calls work against either package ID since the underlying
+struct type and function signatures didn't change.
 
 ### Pre-mainnet checklist
 
@@ -367,7 +369,7 @@ since the underlying struct type and function signatures didn't change.
 - [x] **P2**: Auto-release cron job built and running (done June 17, 2026)
 - [x] **P2**: Production host address lookup from `host_profiles` (done June 17, 2026)
 - [x] **P2**: Claim/dispute backend routes wired (done June 17, 2026 — `ARIA_ARBITRATOR_KEY`/`ARIA_ARBITRATOR_ADDRESS` set in Railway June 17, 2026)
-- [x] **P3**: `STATUS_RESOLVED` dead code removed, 30-day expiry upper bound added, upgrade published on-chain (June 17, 2026 — package v2 at `0x98e712...4264f26`; Railway `ESCROW_PACKAGE_ID` still needs updating, see P3 section above)
+- [x] **P3**: `STATUS_RESOLVED` dead code removed, 30-day expiry upper bound added, upgrade published on-chain and fully deployed (June 17, 2026 — package v2 at `0x98e712...4264f26`; Railway `ESCROW_PACKAGE_ID` updated and redeployed, see P3 section above)
 - [ ] Independent Move audit (OtterSec, Zellic, or similar)
 - [ ] Burn UpgradeCap after audit passes
 
@@ -469,12 +471,13 @@ Railway runs **Node 22** (`nixpacks.toml`: `nodejs_22`). Required by
 DATABASE_URL, GOOGLE_CLIENT_ID, GOOGLE_CALLBACK_URL, FRONTEND_URL
 HOST_ADDRESSES, SESSION_SECRET, XAI_API_KEY, RESEND_API_KEY, STRIPE_SECRET_KEY
 ESCROW_PACKAGE_ID       = 0x98e712692f22f308bb6d097d2d8a2743ed0c01058135d71436b4abcd34264f26
-                           (UPDATED June 17, 2026 — P3 upgrade, package version 2.
-                           Original package: 0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe
+                           (LIVE in Railway since June 17, 2026, 3:05 PM CDT — P3
+                           upgrade, package version 2, redeploy confirmed clean via
+                           deploy logs. Original package:
+                           0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe
                            (still the type-defining ID for existing BookingEscrow
-                           objects — that doesn't change on upgrade). Manual step:
-                           update this value in Railway to the new package ID so
-                           new create_escrow calls get the 30-day expiry cap.)
+                           objects — that doesn't change on upgrade). New
+                           create_escrow calls now get the 30-day expiry cap.)
 ESCROW_MODULE_NAME      = escrow
 ARIA_AUTO_RELEASE_KEY   = <suiprivkey1... bech32 format — in Railway, never commit.
                            P1b: scoped to auto_release only, zero special privilege.
@@ -513,6 +516,11 @@ NEXT_PUBLIC_API_URL = https://aria-demo-production-e590.up.railway.app
 
 ---
 
+*Technical Handoff v4.15 — June 17, 2026*
+*Changes from v4.14: confirmed `ESCROW_PACKAGE_ID` set in Railway and
+redeployed — deploy logs (3:05 PM CDT) show both keypairs loading correctly,
+DB initialized, server up clean. P3 is now fully deployed end-to-end, no
+manual steps remain. Updated pre-mainnet checklist and Environment Variables.*
 *Technical Handoff v4.14 — June 17, 2026*
 *Changes from v4.13: P3 upgrade published successfully on-chain — transaction
 `JCA8daJ9mSByY6x51ZhEc6Ubfrv1LEbf3nsVccEFtJZK`, new package

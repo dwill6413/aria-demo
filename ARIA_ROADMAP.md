@@ -1,5 +1,5 @@
 # ARIA — Product Roadmap & AI Handoff Document
-**Version:** 2.14 | **Updated:** June 17, 2026
+**Version:** 2.15 | **Updated:** June 17, 2026
 **Purpose:** Complete handoff for an AI assistant continuing ARIA development.
 Read this entire document before writing any code.
 
@@ -244,11 +244,12 @@ escrow creation:
   package: `0x98e712692f22f308bb6d097d2d8a2743ed0c01058135d71436b4abcd34264f26`
   (version 2). Original package ID `0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe`
   remains the type-defining ID for existing `BookingEscrow` objects — that
-  never changes on upgrade, only the module bytecode does. **Manual step
-  remaining:** update `ESCROW_PACKAGE_ID` in Railway to the new package ID
-  (see Environment Variables below) so new `create_escrow` calls actually get
-  the 30-day expiry cap; existing claim/dispute/auto-release calls on
-  already-created escrows are unaffected either way.
+  never changes on upgrade, only the module bytecode does. **Fully deployed.**
+  `ESCROW_PACKAGE_ID` updated in Railway and redeployed (confirmed June 17,
+  2026, 3:05 PM CDT via deploy logs — both keypairs load correctly, server up
+  clean). New `create_escrow` calls now get the 30-day expiry cap; existing
+  claim/dispute/auto-release calls on already-created escrows are unaffected
+  either way.
 - First upgrade attempt failed: Sui's "compatible" upgrade policy (the
   default, and the most permissive available) forbids removing any public
   function from an already-deployed package — `status_resolved()` had to be
@@ -261,7 +262,7 @@ escrow creation:
 - [x] P1a complete (arbitrator key separated, wired, on-chain)
 - [x] P1b complete (June 17, 2026 — deployer/backend-signer separated; new key needs Railway/faucet setup, see P1 section above)
 - [x] P2 complete (June 17, 2026 — auto-release cron, production host lookup, claim/dispute routes; `ARIA_ARBITRATOR_KEY`/`ARIA_ARBITRATOR_ADDRESS` set in Railway, see P2 section above)
-- [x] P3 complete (June 17, 2026 — contract upgrade published on-chain, package v2 at `0x98e712...4264f26`; `ESCROW_PACKAGE_ID` in Railway still needs updating to this new package ID, see P3 section above)
+- [x] P3 complete (June 17, 2026 — contract upgrade published on-chain and fully deployed, package v2 at `0x98e712...4264f26`; `ESCROW_PACKAGE_ID` in Railway updated and redeployed, see P3 section above)
 - [ ] Independent Move audit (OtterSec, Zellic, or similar)
 - [ ] Burn UpgradeCap after audit
 
@@ -377,8 +378,8 @@ SEAL_PACKAGE_ID = 0x<from deployment>
 ✅ Phase 1i: P2 — Production host address lookup (done June 17, 2026)
 ✅ Phase 1j: P2 — Claim/dispute backend routes (done June 17, 2026)
 ✅ Phase 1k: P3 — STATUS_RESOLVED removed + 30-day expiry bound added, upgrade
-   published on-chain (June 17, 2026, package v2 at 0x98e712...4264f26);
-   Railway ESCROW_PACKAGE_ID still needs updating — see P3 section above
+   published on-chain and fully deployed (June 17, 2026, package v2 at
+   0x98e712...4264f26); Railway ESCROW_PACKAGE_ID updated and redeployed
 
 ⬜ Phase 2a: pii_access.move (Seal allowlist contract)
 ⬜ Phase 2b: Deploy allowlist, get SEAL_PACKAGE_ID
@@ -461,10 +462,11 @@ Follow-up: one-time authorization code exchange.
 DATABASE_URL, GOOGLE_CLIENT_ID, GOOGLE_CALLBACK_URL, FRONTEND_URL
 HOST_ADDRESSES, SESSION_SECRET, XAI_API_KEY, RESEND_API_KEY, STRIPE_SECRET_KEY
 ESCROW_PACKAGE_ID       = 0x98e712692f22f308bb6d097d2d8a2743ed0c01058135d71436b4abcd34264f26
-                           (UPDATED June 17, 2026 — P3 upgrade, package version 2.
+                           (LIVE in Railway since June 17, 2026, 3:05 PM CDT — P3
+                           upgrade, package version 2, confirmed via deploy logs.
                            Original package 0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe
                            remains the type-defining ID for existing BookingEscrow
-                           objects. Manual step: update this value in Railway.)
+                           objects.)
 ESCROW_MODULE_NAME      = escrow
 ARIA_AUTO_RELEASE_KEY   = <suiprivkey1... bech32 format — Railway only, never committed.
                            P1b: scoped to auto_release only, zero special on-chain
@@ -512,6 +514,12 @@ NEXT_PUBLIC_API_URL = https://aria-demo-production-e590.up.railway.app
 
 ---
 
+*ARIA Roadmap v2.15 — June 17, 2026*
+*Changes from v2.14: confirmed `ESCROW_PACKAGE_ID` updated in Railway and
+redeployed (deploy logs at 3:05 PM CDT show both keypairs loading correctly,
+server up clean). P3 is now fully deployed end-to-end — no manual steps
+remain. Updated P3 section, pre-mainnet gate, build order, and Environment
+Variables accordingly.*
 *ARIA Roadmap v2.14 — June 17, 2026*
 *Changes from v2.13: P3 upgrade published successfully on-chain — transaction
 `JCA8daJ9mSByY6x51ZhEc6Ubfrv1LEbf3nsVccEFtJZK`, new package
