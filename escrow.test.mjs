@@ -8,16 +8,16 @@
 // defeat the purpose of the tests. Now imports the real (Phase 2b-relocated)
 // implementation from escrow.mjs directly.
 
-import { extractCreatedObjectId } from './escrow.mjs';
+import { extractCreatedObjectId, verifyEscrowTransaction, suiClient } from './escrow.mjs';
 
 // ─── Test runner ──────────────────────────────────────────────────────────────
 
 let passed = 0;
 let failed = 0;
 
-function test(name, fn) {
+async function test(name, fn) {
   try {
-    fn();
+    await fn();
     console.log(`  ✅ ${name}`);
     passed++;
   } catch (err) {
@@ -37,7 +37,7 @@ function assertEqual(actual, expected, msg) {
 
 console.log('\nextractCreatedObjectId\n');
 
-test('normal PTB: two Created entries — returns the LAST one (the real escrow object)', () => {
+await test('normal PTB: two Created entries — returns the LAST one (the real escrow object)', () => {
   const changedObjects = [
     { objectId: 'ephemeral-coin-id', idOperation: 'Created' },  // splitCoins ephemeral coin — always first
     { objectId: 'real-escrow-id',    idOperation: 'Created' },  // BookingEscrow shared object — always last
@@ -45,26 +45,26 @@ test('normal PTB: two Created entries — returns the LAST one (the real escrow 
   assertEqual(extractCreatedObjectId(changedObjects), 'real-escrow-id');
 });
 
-test('single Created entry — returns it', () => {
+await test('single Created entry — returns it', () => {
   const changedObjects = [
     { objectId: 'only-object-id', idOperation: 'Created' },
   ];
   assertEqual(extractCreatedObjectId(changedObjects), 'only-object-id');
 });
 
-test('empty array — returns null', () => {
+await test('empty array — returns null', () => {
   assertEqual(extractCreatedObjectId([]), null);
 });
 
-test('null input — returns null', () => {
+await test('null input — returns null', () => {
   assertEqual(extractCreatedObjectId(null), null);
 });
 
-test('undefined input — returns null', () => {
+await test('undefined input — returns null', () => {
   assertEqual(extractCreatedObjectId(undefined), null);
 });
 
-test('no Created entries (only Mutated/Deleted) — returns null', () => {
+await test('no Created entries (only Mutated/Deleted) — returns null', () => {
   const changedObjects = [
     { objectId: 'gas-coin-id',  idOperation: 'Mutated' },
     { objectId: 'deleted-id',   idOperation: 'Deleted' },
@@ -72,42 +72,42 @@ test('no Created entries (only Mutated/Deleted) — returns null', () => {
   assertEqual(extractCreatedObjectId(changedObjects), null);
 });
 
-test('case-insensitive: "created" (lowercase) matches', () => {
+await test('case-insensitive: "created" (lowercase) matches', () => {
   const changedObjects = [
     { objectId: 'lowercase-id', idOperation: 'created' },
   ];
   assertEqual(extractCreatedObjectId(changedObjects), 'lowercase-id');
 });
 
-test('case-insensitive: "CREATED" (uppercase) matches', () => {
+await test('case-insensitive: "CREATED" (uppercase) matches', () => {
   const changedObjects = [
     { objectId: 'upper-id', idOperation: 'CREATED' },
   ];
   assertEqual(extractCreatedObjectId(changedObjects), 'upper-id');
 });
 
-test('nested $kind object (alternate SDK shape) — unwraps and matches', () => {
+await test('nested $kind object (alternate SDK shape) — unwraps and matches', () => {
   const changedObjects = [
     { objectId: 'nested-id', $kind: { $kind: 'Created' } },
   ];
   assertEqual(extractCreatedObjectId(changedObjects), 'nested-id');
 });
 
-test('fallback field: uses .id when .objectId absent', () => {
+await test('fallback field: uses .id when .objectId absent', () => {
   const changedObjects = [
     { id: 'fallback-id', idOperation: 'Created' },
   ];
   assertEqual(extractCreatedObjectId(changedObjects), 'fallback-id');
 });
 
-test('fallback field: uses .object_id when .objectId and .id absent', () => {
+await test('fallback field: uses .object_id when .objectId and .id absent', () => {
   const changedObjects = [
     { object_id: 'snake-case-id', idOperation: 'Created' },
   ];
   assertEqual(extractCreatedObjectId(changedObjects), 'snake-case-id');
 });
 
-test('three Created entries (e.g. future multi-object PTB) — returns the last one', () => {
+await test('three Created entries (e.g. future multi-object PTB) — returns the last one', () => {
   const changedObjects = [
     { objectId: 'first-id',  idOperation: 'Created' },
     { objectId: 'middle-id', idOperation: 'Created' },
@@ -116,7 +116,7 @@ test('three Created entries (e.g. future multi-object PTB) — returns the last 
   assertEqual(extractCreatedObjectId(changedObjects), 'last-id');
 });
 
-test('mix of Mutated + Created — only Created entries counted, last is returned', () => {
+await test('mix of Mutated + Created — only Created entries counted, last is returned', () => {
   const changedObjects = [
     { objectId: 'gas-id',    idOperation: 'Mutated' },
     { objectId: 'coin-id',   idOperation: 'Created' },
@@ -125,18 +125,77 @@ test('mix of Mutated + Created — only Created entries counted, last is returne
   assertEqual(extractCreatedObjectId(changedObjects), 'escrow-id');
 });
 
-test('operation field alias (alternate SDK shape)', () => {
+await test('operation field alias (alternate SDK shape)', () => {
   const changedObjects = [
     { objectId: 'alias-id', operation: 'Created' },
   ];
   assertEqual(extractCreatedObjectId(changedObjects), 'alias-id');
 });
 
-test('i_operation field alias (snake_case SDK shape)', () => {
+await test('i_operation field alias (snake_case SDK shape)', () => {
   const changedObjects = [
     { objectId: 'snake-op-id', id_operation: 'Created' },
   ];
   assertEqual(extractCreatedObjectId(changedObjects), 'snake-op-id');
+});
+
+console.log('\nverifyEscrowTransaction\n');
+
+// suiClient.core is a plain instance property (new GrpcCoreClient(...)), not a
+// getter, so it can be monkey-patched directly for these tests — no network
+// calls happen. These tests exist specifically to catch the bug found during
+// live testing: suiClient.core.getTransaction() returns a discriminated union
+// ({$kind:'Transaction', Transaction:{status, transaction, effects, ...}} or
+// {$kind:'FailedTransaction', FailedTransaction:{...}}) per @mysten/sui's own
+// SuiClientTypes.TransactionResult — NOT a flat object with top-level
+// status/transaction/effects. Reading result.status directly (the old,
+// buggy code) is always undefined, so it silently reported every successful
+// transaction as failed. These tests assert against the real wrapped shape.
+
+await test('successful transaction ($kind: Transaction) — returns ok:true with escrowId', async () => {
+  suiClient.core.getTransaction = async () => ({
+    $kind: 'Transaction',
+    Transaction: {
+      status: { success: true, error: null },
+      transaction: { sender: '0xguest' },
+      effects: {
+        changedObjects: [
+          { objectId: 'ephemeral-coin', idOperation: 'Created' },
+          { objectId: 'real-escrow-id', idOperation: 'Created' },
+        ],
+      },
+    },
+  });
+  const result = await verifyEscrowTransaction('0xdigest', '0xguest');
+  assertEqual(result.ok, true, 'expected ok:true');
+  assertEqual(result.escrowId, 'real-escrow-id');
+  assertEqual(result.sender, '0xguest');
+});
+
+await test('failed transaction ($kind: FailedTransaction) — returns ok:false', async () => {
+  suiClient.core.getTransaction = async () => ({
+    $kind: 'FailedTransaction',
+    FailedTransaction: {
+      status: { success: false, error: { message: 'InsufficientGas' } },
+    },
+  });
+  const result = await verifyEscrowTransaction('0xdigest', '0xguest');
+  assertEqual(result.ok, false, 'expected ok:false');
+  assertEqual(result.reason, 'InsufficientGas');
+});
+
+await test('sender mismatch on a successful transaction — returns ok:false', async () => {
+  suiClient.core.getTransaction = async () => ({
+    $kind: 'Transaction',
+    Transaction: {
+      status: { success: true, error: null },
+      transaction: { sender: '0xsomeoneelse' },
+      effects: { changedObjects: [{ objectId: 'escrow-id', idOperation: 'Created' }] },
+    },
+  });
+  const result = await verifyEscrowTransaction('0xdigest', '0xguest');
+  assertEqual(result.ok, false, 'expected ok:false');
+  assertEqual(result.reason, 'Transaction sender does not match the booking guest');
 });
 
 // ─── Summary ──────────────────────────────────────────────────────────────────

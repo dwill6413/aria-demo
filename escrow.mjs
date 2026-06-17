@@ -116,16 +116,28 @@ export async function verifyEscrowTransaction(digest, expectedSender) {
     include: { transaction: true, effects: true, objectTypes: true },
   });
 
-  if (!result?.status?.success) {
-    return { ok: false, reason: 'Transaction did not succeed on-chain' };
+  // suiClient.core.getTransaction returns a discriminated union, NOT a flat
+  // object — per @mysten/sui's own SuiClientTypes.TransactionResult, the real
+  // payload (status/transaction/effects) lives nested under `.Transaction`
+  // (success) or `.FailedTransaction` (failure), keyed by top-level `$kind`.
+  // The old code read result.status/.transaction/.effects directly, which are
+  // always undefined on the wrapper itself — so this reported "failed" for
+  // every transaction, including ones that succeeded on-chain (confirmed via
+  // Suiscan during live testing). See autoReleaseEscrow below, which already
+  // unwraps this same shape correctly via result.$kind/.FailedTransaction.
+  if (result?.$kind !== 'Transaction') {
+    const errMsg = result?.FailedTransaction?.status?.error?.message;
+    return { ok: false, reason: errMsg || 'Transaction did not succeed on-chain' };
   }
 
-  const actualSender = result?.transaction?.sender;
+  const txn = result.Transaction;
+
+  const actualSender = txn?.transaction?.sender;
   if (expectedSender && actualSender && actualSender !== expectedSender) {
     return { ok: false, reason: 'Transaction sender does not match the booking guest' };
   }
 
-  const escrowId = extractCreatedObjectId(result?.effects?.changedObjects);
+  const escrowId = extractCreatedObjectId(txn?.effects?.changedObjects);
   if (!escrowId) {
     return { ok: false, reason: 'No created object found in transaction effects' };
   }
