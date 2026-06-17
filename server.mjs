@@ -12,14 +12,14 @@ import { registerAIRoute } from './ai_route.mjs';
 import { handleZkLoginCallback, getSession } from './auth.mjs';
 import { initDB, pool } from './db.mjs';
 import { PROPERTIES, JURISDICTION_TAX_RATES } from './catalog.mjs';
-import { deployerKeypair, verifyEscrowTransaction, autoReleaseEscrow } from './escrow.mjs';
+import { verifyEscrowTransaction, autoReleaseEscrow } from './escrow.mjs';
 import { createBooking } from './bookings.mjs';
 import { bookingCreateSchema, paymentCreateIntentSchema, hostApplySchema, validateBody } from './validation.mjs';
 
 dotenvConfig();
 
 // ─── Sui Escrow Client ────────────────────────────────────────────────────────
-// suiClient/deployerKeypair setup and the escrow PTB build/verify/auto-release
+// suiClient/autoReleaseKeypair setup and the escrow PTB build/verify/auto-release
 // helpers moved to escrow.mjs (Phase 2b) so ai_route.mjs's create_booking tool
 // can build the exact same guest-signed escrow transaction that this REST path
 // already did — see escrow.mjs's header comment and bookings.mjs's

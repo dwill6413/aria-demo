@@ -1,8 +1,8 @@
 # ARIA — Technical Handoff Document
-**Version:** 4.9 | **Updated:** June 16, 2026
+**Version:** 4.10 | **Updated:** June 17, 2026
 
 Deeper technical details for developers or AI assistants continuing work on ARIA.
-Reconciled against the code actually deployed to production as of June 16, 2026.
+Reconciled against the code actually deployed to production as of June 17, 2026.
 For the security change log see `ARIA_REMEDIATION.md`. For the build roadmap see `ARIA_ROADMAP.md`.
 
 ---
@@ -58,9 +58,9 @@ both execute successfully, with the `BookingEscrow` object correctly created,
 ID extracted, stored in Postgres, and later deleted on release.
 
 **STATUS: P0b COMPLETE (June 16, 2026).** `create_escrow` is no longer signed
-by the deployer — the code example below (`deployerKeypair.signAndExecuteTransaction`)
+by the deployer — the code example below (`autoReleaseKeypair.signAndExecuteTransaction`)
 now applies **only to `auto_release`**. For `create_escrow`, the backend
-(`buildEscrowTransaction` in `server.mjs`) builds an *unsigned* PTB with
+(`buildEscrowTransaction` in `escrow.mjs`) builds an *unsigned* PTB with
 `tx.setSender(guestAddr)` and returns the serialized bytes to the frontend.
 The guest's own zkLogin wallet signs (`signTransactionWithZkLogin()` in
 `lib/zklogin.js`) and submits directly to a public Sui fullnode
@@ -82,12 +82,17 @@ const suiClient = new SuiGrpcClient({
   baseUrl: 'https://fullnode.testnet.sui.io:443',
 });
 
-// auto_release — still deployer-signed (see task #10 review comment above
-// autoReleaseEscrow in server.mjs for why this remains safe post-P0b: it
-// never moves a deployer-owned coin, only triggers the contract's own
-// release logic on a coin the guest already deposited).
+// auto_release — signed by a dedicated, narrowly-scoped key as of P1b
+// (June 17, 2026): ARIA_AUTO_RELEASE_KEY / autoReleaseKeypair, not the
+// deployer/UpgradeCap key. See the comment block above autoReleaseEscrow
+// in escrow.mjs for why this key needs no special on-chain privilege:
+// auto_release has no sender check at all ("Callable by anyone" in
+// escrow.move), so this signer never moves a deployer-owned coin — it only
+// triggers the contract's own release logic on a coin the guest already
+// deposited. The original deployer/UpgradeCap key has been retired to cold
+// KeePass-only storage and is no longer loaded by the backend.
 const tx = new Transaction();
-tx.setSender(deployerKeypair.toSuiAddress());
+tx.setSender(autoReleaseKeypair.toSuiAddress());
 
 tx.moveCall({
   target: `${PKG}::escrow::auto_release`,
@@ -95,7 +100,7 @@ tx.moveCall({
   arguments: [tx.object(escrowObjectId), tx.object('0x6')],
 });
 
-const result = await deployerKeypair.signAndExecuteTransaction({
+const result = await autoReleaseKeypair.signAndExecuteTransaction({
   transaction: tx,
   client: suiClient,
   include: { effects: true },
@@ -111,7 +116,7 @@ if (result.$kind === 'FailedTransaction') {
 **Pattern: guest-signed escrow creation (P0b)** — backend builds, frontend signs:
 
 ```javascript
-// server.mjs — buildEscrowTransaction: builds an UNSIGNED PTB, never signs it.
+// escrow.mjs — buildEscrowTransaction: builds an UNSIGNED PTB, never signs it.
 const tx = new Transaction();
 tx.setSender(guestAddr); // guest is the sender, not the deployer
 
@@ -151,14 +156,14 @@ order guarantees the split-coin comes FIRST and the real object comes LAST.
 Always take the **last** "Created" entry.
 
 This logic is now extracted into `extractCreatedObjectId(changedObjects)` in
-`server.mjs`, covered by 15 unit tests in `escrow.test.mjs`. Used both by
+`escrow.mjs`, covered by 15 unit tests in `escrow.test.mjs`. Used both by
 `auto_release` and (post-P0b) by `verifyEscrowTransaction`, which calls it on
 the chain-queried result of the guest-submitted `create_escrow` digest. Use
 this function for Phase 2's `pii_access` object creation too — do not inline
 the filter logic again.
 
 ```javascript
-// server.mjs — extracted helper, tested in escrow.test.mjs
+// escrow.mjs — extracted helper, tested in escrow.test.mjs
 function extractCreatedObjectId(changedObjects) {
   const createdEntries = (changedObjects || []).filter(c => {
     let op = c.idOperation ?? c.operation ?? c.id_operation ?? c.$kind;
@@ -170,7 +175,7 @@ function extractCreatedObjectId(changedObjects) {
 }
 ```
 
-**`autoReleaseEscrow`** uses the identical signing pattern. See `server.mjs`.
+**`autoReleaseEscrow`** uses the identical signing pattern. See `escrow.mjs`.
 
 **Remaining for the July 31 deadline:** `@mysten/deepbook-v3` may also use
 JSON-RPC internally for price/liquidity reads — not yet checked. Lower
@@ -241,19 +246,28 @@ Verified end-to-end on testnet: real booking, guest signed in-browser via
 zkLogin, deposit landed on-chain, backend confirmed it, bookings page showed
 "confirmed" + "Deposit $661 held".
 
-#### P1 — Fix before mainnet — ⚠️ PARTIALLY COMPLETE
+#### P1 — Fix before mainnet — ✅ COMPLETE
 
-**Arbitrator separation: ✅ done (June 12, 2026).** Dedicated arbitrator keypair
-generated, private key/mnemonic in KeePass only, public address
+**P1a — Arbitrator separation: ✅ done (June 12, 2026).** Dedicated arbitrator
+keypair generated, private key/mnemonic in KeePass only, public address
 (`ARIA_ARBITRATOR_ADDRESS`) wired into `createEscrowOnChain` and confirmed on-chain.
 Mnemonic ownership independently re-confirmed June 16, 2026 — derived `suiAddress`
 via `sui keytool import`/`list` matches `ARIA_ARBITRATOR_ADDRESS` exactly.
 
-**Remaining: deployer / backend-signer separation — NEXT UP.** Now that P0b has
-landed, the backend signer's role has shrunk to just `auto_release`. Retiring
-the deployer/UpgradeCap key to cold KeePass-only storage, and generating a
-fresh narrowly-scoped key for `auto_release`, is now a clean, low-risk
-operation.
+**P1b — Deployer / backend-signer separation: ✅ done (June 17, 2026).** Now
+that P0b had landed, the backend signer's role had shrunk to just
+`auto_release`. `escrow.mjs`/`bookings.mjs`/`server.mjs` renamed
+`ARIA_DEPLOYER_KEY`/`deployerKeypair` to `ARIA_AUTO_RELEASE_KEY`/
+`autoReleaseKeypair` throughout. This also corrected an inaccurate code
+comment that had claimed `auto_release` required arbitrator-level on-chain
+authority — confirmed against `escrow.move` that `auto_release` is actually
+permissionless ("Callable by anyone", no sender assertion), so the new key
+carries zero special privilege beyond holding gas. A fresh key was generated
+for this purpose; the original deployer/UpgradeCap key is being retired from
+Railway to cold KeePass-only storage and is no longer loaded by the backend.
+Remaining manual steps (Railway env var swap, faucet funding of the new
+address, confirming the old key's removal from Railway) are operator actions,
+not code changes — see `ARIA_ROADMAP.md` for the address.
 
 #### P2 — Fix before launch with real users
 
@@ -271,7 +285,7 @@ operation.
 - [x] **P0a**: Migrate off JSON-RPC to gRPC (done June 12, 2026)
 - [x] **P0b**: Guest wallet signs and funds `create_escrow` (done June 16, 2026, live-tested)
 - [x] **P1a**: Arbitrator key separated (done June 12, 2026)
-- [ ] **P1b**: Separate deployer/UpgradeCap from backend signer — **NEXT SESSION**
+- [x] **P1b**: Separate deployer/UpgradeCap from backend signer (code done June 17, 2026 — Railway/faucet setup for the new key is a pending manual step, see P1b above)
 - [ ] **P2**: Auto-release cron job built and running
 - [ ] **P2**: Production host address lookup from `host_profiles`
 - [ ] **P2**: Claim/dispute backend routes wired
@@ -379,7 +393,8 @@ DATABASE_URL, GOOGLE_CLIENT_ID, GOOGLE_CALLBACK_URL, FRONTEND_URL
 HOST_ADDRESSES, SESSION_SECRET, XAI_API_KEY, RESEND_API_KEY, STRIPE_SECRET_KEY
 ESCROW_PACKAGE_ID       = 0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe
 ESCROW_MODULE_NAME      = escrow
-ARIA_DEPLOYER_KEY       = <suiprivkey1... bech32 format — in Railway, never commit>
+ARIA_AUTO_RELEASE_KEY   = <suiprivkey1... bech32 format — in Railway, never commit.
+                           P1b: scoped to auto_release only, zero special privilege.>
 ARIA_ARBITRATOR_ADDRESS = 0x0069868f93f9127b3e8b51bf95bc529925ca382e6305da0bb01f693826b983f8
 ```
 
@@ -405,12 +420,14 @@ NEXT_PUBLIC_API_URL = https://aria-demo-production-e590.up.railway.app
 
 ---
 
-*Technical Handoff v4.9 — June 16, 2026*
-*Changes from v4.8: Marked P0b (guest-funded escrow) complete and live-tested
-end-to-end on testnet. Replaced the deployer-signed `create_escrow` code
-example with the actual shipped pattern (unsigned PTB built server-side,
-signed and submitted entirely in the guest's browser via `lib/zklogin.js`);
-relabeled the original signing example as `auto_release`-only. Updated P1
-status to reflect arbitrator mnemonic re-confirmation and P1b (deployer/backend-signer
-separation) as the next session's primary task. Updated pre-mainnet checklist
-and testnet→mainnet diff accordingly.*
+*Technical Handoff v4.10 — June 17, 2026*
+*Changes from v4.9: Marked P1b (deployer/backend-signer key separation) complete.
+Renamed `ARIA_DEPLOYER_KEY`/`deployerKeypair` to `ARIA_AUTO_RELEASE_KEY`/
+`autoReleaseKeypair` throughout `escrow.mjs`/`bookings.mjs`/`server.mjs`.
+Corrected an inaccurate comment (and this doc's matching code example) that had
+claimed `auto_release` required arbitrator-level authority — verified against
+`escrow.move` that it's actually permissionless, so the new key needs no special
+on-chain privilege. Also fixed several stale `server.mjs` file attributions for
+code that was already living in `escrow.mjs` since the Phase 2b extraction
+(`buildEscrowTransaction`, `extractCreatedObjectId`, `autoReleaseEscrow`).
+Updated pre-mainnet checklist and P1 audit section accordingly.*

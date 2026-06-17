@@ -16,7 +16,7 @@ import crypto from 'node:crypto';
 import { pool } from './db.mjs';
 import { PROPERTIES, JURISDICTION_TAX_RATES } from './catalog.mjs';
 import { calculateHostPayout } from './deepbook.mjs';
-import { buildEscrowTransaction, deployerKeypair } from './escrow.mjs';
+import { buildEscrowTransaction, autoReleaseKeypair } from './escrow.mjs';
 import { Resend } from 'resend';
 
 const resend = new Resend(process.env.RESEND_API_KEY);
@@ -174,12 +174,14 @@ export async function createBooking({ propertyId, checkIn, checkOut, session, lo
   // and escrow_object_id stays null until the guest reports a signed digest
   // to /booking/:bookingRef/escrow/confirm, which re-verifies on-chain.
   //
-  // Testnet: deployer's address stands in as host since HOST_ADDRESSES
-  // contains emails not Sui addresses. Production: look up from
-  // host_profiles.sui_address based on property_id.
+  // Testnet placeholder: stand in with the backend signer's own address as
+  // host since HOST_ADDRESSES contains emails not Sui addresses (P2, still
+  // unbuilt). This has no bearing on P1b — any address works as this
+  // placeholder, it's unrelated to the auto-release key's actual job.
+  // Production: look up from host_profiles.sui_address based on property_id.
   let escrowTxBytes = null;
   try {
-    const hostAddr = deployerKeypair ? deployerKeypair.toSuiAddress() : null;
+    const hostAddr = autoReleaseKeypair ? autoReleaseKeypair.toSuiAddress() : null;
     if (hostAddr) {
       const built = await buildEscrowTransaction(bookingRef, session.suiAddress, hostAddr, depositAmount, logger);
       if (built?.txBytes) {

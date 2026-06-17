@@ -1,5 +1,5 @@
 # ARIA — Product Roadmap & AI Handoff Document
-**Version:** 2.9 | **Updated:** June 16, 2026
+**Version:** 2.10 | **Updated:** June 17, 2026
 **Purpose:** Complete handoff for an AI assistant continuing ARIA development.
 Read this entire document before writing any code.
 
@@ -100,9 +100,9 @@ material needed to sign anything as the guest's address after login. Fixed by:
 **What shipped (both-sides change):**
 - **Backend (`server.mjs`)**: `createEscrowOnChain`/`buildEscrowTransaction` no
   longer funds the escrow. It builds the unsigned transaction (`tx.setSender(guestAddr)`)
-  and returns it to the frontend. The backend signer (`ARIA_DEPLOYER_KEY`)'s role
-  is now scoped to just `auto_release` (see task #10 review comment above
-  `autoReleaseEscrow` in `server.mjs` for why that's still safe — it never moves
+  and returns it to the frontend. The backend signer (now `ARIA_AUTO_RELEASE_KEY`,
+  see P1b below) is scoped to just `auto_release` (see the comment block above
+  `autoReleaseEscrow` in `escrow.mjs` for why that's still safe — it never moves
   a deployer-owned coin, only triggers the contract's own release logic).
 - **Frontend (`lib/zklogin.js` + `pages/index.jsx`)**: `handleEscrowSign()` receives
   the unsigned PTB, signs it via `signTransactionWithZkLogin()`, and submits
@@ -123,24 +123,42 @@ Scope decisions (locked):
 - Guest approves transaction in browser; expiry timestamp shown before signing.
 - ARIA backend orchestrates but does not provide the coin.
 
-**P1 — Key separation (before mainnet) — ARBITRATOR PORTION ✅ DONE (June 12, 2026)**
+**P1 — Key separation (before mainnet) — ✅ DONE (June 17, 2026)**
 
-*Completed:*
+*P1a — arbitrator portion (June 12, 2026):*
 - Dedicated arbitrator keypair generated. Mnemonic in KeePass only.
 - Public address: `0x0069868f93f9127b3e8b51bf95bc529925ca382e6305da0bb01f693826b983f8`
 - Set as `ARIA_ARBITRATOR_ADDRESS` in Railway. Confirmed on-chain.
 - `*.key` files added to `.gitignore`.
 
-*Remaining — NEXT UP now that P0b is done:*
-Deployer and backend signer are still the same hot key (`ARIA_DEPLOYER_KEY`).
-Now that P0b has landed, the backend signer's role has shrunk to just
-`auto_release`, making deployer/UpgradeCap separation a clean, low-risk
-operation — generate a fresh narrowly-scoped key for `auto_release`, move the
-original deployer key to cold KeePass-only storage.
+*P1b — deployer/backend-signer separation (June 17, 2026):*
+- Code renamed `ARIA_DEPLOYER_KEY` → `ARIA_AUTO_RELEASE_KEY` and
+  `deployerKeypair` → `autoReleaseKeypair` throughout (`escrow.mjs`,
+  `bookings.mjs`; `server.mjs` had an unused import, removed outright).
+- While doing this, found and corrected an inaccurate comment: `auto_release`
+  in `escrow.move` has **no on-chain sender check at all** (its own doc
+  comment says "Callable by anyone") — unlike `resolve_dispute`, which does
+  assert `tx_context::sender == escrow.arbitrator`. An older comment in
+  `escrow.mjs` conflated the two and implied auto_release required the
+  arbitrator address; it didn't. Practical upshot: the new auto-release key
+  carries **zero on-chain privilege** — it only needs to exist and hold gas —
+  which is exactly why a freshly generated, narrowly-scoped key is sufficient
+  and safe here.
+- Also removed `buildEscrowTransaction`'s old fallback that used the backend
+  signer's own address as `arbitrator` if `ARIA_ARBITRATOR_ADDRESS` were ever
+  unset. That fallback predated P1a and was stale/risky: it could have handed
+  arbitrator authority (`resolve_dispute` rights) to the now-low-privilege
+  auto-release key. Falls back to `hostAddr` instead.
+- A fresh keypair was generated for `ARIA_AUTO_RELEASE_KEY`. **Manual steps
+  required (not done by the agent — no Railway/faucet access from the
+  sandbox):** set the new secret as `ARIA_AUTO_RELEASE_KEY` in Railway, fund
+  the new address with testnet SUI (sandbox network blocks the faucet
+  domain), remove `ARIA_DEPLOYER_KEY` from Railway, move the original
+  deployer/UpgradeCap key to cold KeePass-only storage if not already there.
 
 *Custody model — assign by blast radius:*
-- **Deployer / UpgradeCap key**: cold KeePass only, regardless of scale.
-- **Backend signer** (`ARIA_DEPLOYER_KEY`): Railway env var, scoped to `auto_release` after P0b.
+- **Deployer / UpgradeCap key**: cold KeePass only, regardless of scale. Never in Railway.
+- **Backend signer** (`ARIA_AUTO_RELEASE_KEY`): Railway env var, scoped to `auto_release` only — and `auto_release` itself is permissionless on-chain, so this key has no special authority even if compromised. Worst case is gas-fee griefing, not fund loss.
 - **Arbitrator key**: cold KeePass, manual signing. Bounded blast radius by contract
   design (`resolve_dispute` can only split one disputed escrow between its guest/host).
 
@@ -175,7 +193,7 @@ See Phase 3 below.
 - [x] P0a complete (June 12, 2026 — JSON-RPC migration, ahead of Jul 31 deadline)
 - [x] P0b complete (June 16, 2026 — guest-funded escrow, live-tested end-to-end)
 - [x] P1a complete (arbitrator key separated, wired, on-chain)
-- [ ] P1b complete (deployer/backend-signer separation) — **NEXT SESSION**
+- [x] P1b complete (June 17, 2026 — deployer/backend-signer separated; new key needs Railway/faucet setup, see P1 section above)
 - [ ] P2 complete
 - [ ] Independent Move audit (OtterSec, Zellic, or similar)
 - [ ] Burn UpgradeCap after audit
@@ -294,7 +312,7 @@ SEAL_PACKAGE_ID = 0x<from deployment>
 ✅ Phase 1f1.5: extractCreatedObjectId extracted + 15 unit tests (done June 15, 2026)
 ✅ Phase 1f1.6: Wallet address full visibility + copy button (done June 15, 2026)
 ✅ Phase 1f2: P0b — Guest wallet funds escrow (done June 16, 2026)
-⬜ Phase 1g2: P1b — Deployer/backend-signer separation — NEXT UP
+✅ Phase 1g2: P1b — Deployer/backend-signer separation (done June 17, 2026)
 ⬜ Phase 1h: P2 — Auto-release cron job
 ⬜ Phase 1h.5: Fee collection/routing mechanism (Stripe + SuiUSD paths — needs design)
 ⬜ Phase 1i: P2 — Production host address lookup
@@ -381,7 +399,10 @@ DATABASE_URL, GOOGLE_CLIENT_ID, GOOGLE_CALLBACK_URL, FRONTEND_URL
 HOST_ADDRESSES, SESSION_SECRET, XAI_API_KEY, RESEND_API_KEY, STRIPE_SECRET_KEY
 ESCROW_PACKAGE_ID       = 0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe
 ESCROW_MODULE_NAME      = escrow
-ARIA_DEPLOYER_KEY       = <suiprivkey1... bech32 format — KeePass + Railway only, never committed>
+ARIA_AUTO_RELEASE_KEY   = <suiprivkey1... bech32 format — Railway only, never committed.
+                           P1b: scoped to auto_release only, zero special on-chain
+                           privilege (see escrow.mjs). The original deployer/UpgradeCap
+                           key has been retired from Railway to cold KeePass-only storage.>
 ARIA_ARBITRATOR_ADDRESS = 0x0069868f93f9127b3e8b51bf95bc529925ca382e6305da0bb01f693826b983f8
 ```
 
@@ -413,11 +434,12 @@ NEXT_PUBLIC_API_URL = https://aria-demo-production-e590.up.railway.app
 
 ---
 
-*ARIA Roadmap v2.9 — June 16, 2026*
-*Changes from v2.8: Marked P0b (guest-funded escrow) complete and live-tested
-end-to-end on testnet (Railway + Vercel) — guest's zkLogin wallet now signs and
-submits `create_escrow` directly to a public Sui fullnode, backend independently
-verifies on-chain before trusting the result. Updated pre-mainnet gate, build
-order, and tech debt backlog accordingly. Removed "Guest-funded escrow" from
-Tech Debt Backlog (resolved). P1b (deployer/backend-signer separation) is now
-the next session's primary task.*
+*ARIA Roadmap v2.10 — June 17, 2026*
+*Changes from v2.9: Marked P1b (deployer/backend-signer key separation) complete.
+`escrow.mjs`/`bookings.mjs`/`server.mjs` renamed `ARIA_DEPLOYER_KEY`/`deployerKeypair`
+to `ARIA_AUTO_RELEASE_KEY`/`autoReleaseKeypair`; corrected an inaccurate code comment
+that had claimed `auto_release` required arbitrator-level on-chain authority (it's
+actually permissionless — confirmed against escrow.move — so the new key carries no
+special privilege). A fresh narrowly-scoped key was generated for this one remaining
+backend-signed action; the original deployer/UpgradeCap key is being retired to cold
+KeePass-only storage. Updated pre-mainnet gate and build order accordingly.*

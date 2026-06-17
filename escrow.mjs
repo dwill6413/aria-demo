@@ -24,15 +24,23 @@ export const suiClient = new SuiGrpcClient({
   baseUrl: 'https://fullnode.testnet.sui.io:443',
 });
 
-export let deployerKeypair = null;
+// P1b (key separation): this used to be ARIA_DEPLOYER_KEY, the same hot key
+// that originally published the package and held the UpgradeCap. Now that
+// escrow CREATION is guest-signed (P0b), the only thing the backend itself
+// still signs is auto_release — and auto_release is permissionless on-chain
+// (see escrow.move: "Callable by anyone"), so this key carries zero special
+// privilege. It only needs enough gas to submit the call. The original
+// deployer/UpgradeCap key has been retired from Railway and moved to cold
+// KeePass-only storage; it is never loaded by this backend anymore.
+export let autoReleaseKeypair = null;
 try {
-  if (process.env.ARIA_DEPLOYER_KEY) {
-    const { secretKey } = decodeSuiPrivateKey(process.env.ARIA_DEPLOYER_KEY);
-    deployerKeypair = Ed25519Keypair.fromSecretKey(secretKey);
-    console.log('Sui deployer keypair loaded:', deployerKeypair.toSuiAddress());
+  if (process.env.ARIA_AUTO_RELEASE_KEY) {
+    const { secretKey } = decodeSuiPrivateKey(process.env.ARIA_AUTO_RELEASE_KEY);
+    autoReleaseKeypair = Ed25519Keypair.fromSecretKey(secretKey);
+    console.log('Sui auto-release keypair loaded:', autoReleaseKeypair.toSuiAddress());
   }
 } catch (err) {
-  console.warn('ARIA_DEPLOYER_KEY invalid or missing — escrow transactions disabled:', err.message);
+  console.warn('ARIA_AUTO_RELEASE_KEY invalid or missing — auto_release transactions disabled:', err.message);
 }
 
 // Extracts the ID of the last "Created" object from a PTB's changedObjects array.
@@ -70,7 +78,13 @@ export function extractCreatedObjectId(changedObjects) {
 // chain-checked write, which is the only path allowed to set escrow_object_id.
 export async function buildEscrowTransaction(bookingRef, guestAddr, hostAddr, depositAmount, logger = console) {
   if (!guestAddr || !hostAddr || !process.env.ESCROW_PACKAGE_ID) return null;
-  const arbitrator = process.env.ARIA_ARBITRATOR_ADDRESS || (deployerKeypair ? deployerKeypair.toSuiAddress() : hostAddr);
+  // P1b: no longer falls back to the backend signer's own address. That key
+  // is now intentionally low-privilege (gas-only, for auto_release) and must
+  // never end up holding arbitrator authority (resolve_dispute checks
+  // tx_context::sender == escrow.arbitrator on-chain) just because
+  // ARIA_ARBITRATOR_ADDRESS happened to be unset. Fall back to hostAddr
+  // instead, same as before P1a's dedicated arbitrator key existed.
+  const arbitrator = process.env.ARIA_ARBITRATOR_ADDRESS || hostAddr;
   try {
     const depositMist = BigInt(Math.max(1, depositAmount)) * 1000n;
     const expiryMs    = BigInt(Date.now()) + 300_000n; // 5-min testnet window
@@ -145,38 +159,40 @@ export async function verifyEscrowTransaction(digest, expectedSender) {
   return { ok: true, escrowId, sender: actualSender };
 }
 
-// ── Review (task #10): should this stay deployer-signed now that escrow
-// CREATION is guest-signed? Yes — kept as-is, deliberately. Reasoning:
+// ── P1b (key separation, corrects an earlier inaccurate comment here): who
+// needs to sign auto_release, and why a minimally-scoped key is sufficient.
 //
 // 1. This call never moves a deployer-owned coin. The deposit already lives
 //    in the on-chain BookingEscrow shared object (funded by the guest's own
 //    signature at creation time, see buildEscrowTransaction above). Calling
 //    auto_release only invokes that shared object's own release logic; the
 //    Move contract — not this signer — decides where the held coin goes.
-//    Signing this tx costs the deployer nothing but gas, and grants no
-//    custody, so it doesn't reintroduce the custodial gap P0b closed.
-// 2. The Move contract was created with this same address as `arbitrator`
-//    (see buildEscrowTransaction's ARIA_ARBITRATOR_ADDRESS argument), so the
-//    contract itself — not just this backend — expects this address to be
-//    the one invoking release/dispute logic. Having some address able to
-//    trigger time-based release is required: Sui has no native cron, so
-//    without a keeper/arbitrator able to call this, expired escrows could
-//    only ever be released by the guest or host manually.
-// 3. The HOST_ADDRESSES allowlist in this codebase is host *emails*, not Sui
-//    addresses (hosts don't have wallet-based sessions here) — so the
-//    /booking/release-deposit route can authorize *who may trigger the API
-//    call* via session/email, but cannot yet have the host sign the on-chain
-//    tx themselves. Until hosts have their own Sui-address-backed sessions,
-//    the arbitrator address is the only available signer for this step.
+//    Signing this tx costs only gas and grants no custody, so it doesn't
+//    reintroduce the custodial gap P0b closed.
+// 2. Unlike resolve_dispute (which asserts tx_context::sender ==
+//    escrow.arbitrator on-chain), auto_release in escrow.move has NO sender
+//    check at all — its doc comment says so explicitly: "Callable by
+//    anyone." An earlier version of this comment claimed the contract
+//    expected the caller to be the arbitrator; that was wrong for this
+//    function specifically (true only for resolve_dispute). Because
+//    auto_release is permissionless, this signer needs no special on-chain
+//    privilege — it only needs to exist and hold enough gas, which is
+//    exactly why it's safe to give it its own narrowly-scoped key
+//    (ARIA_AUTO_RELEASE_KEY) instead of reusing the deployer/UpgradeCap key.
+// 3. Some address still has to be the one with a server actually watching
+//    the clock and submitting the call — Sui has no native cron, so without
+//    a keeper able to call this, expired escrows could only ever be
+//    released by the guest or host manually. ARIA's backend plays that
+//    keeper role; it just no longer needs deployer-level trust to do it.
 //
 // If/when host accounts get their own Sui addresses, the better long-term
 // design is to make the Move contract's auto_release independently
 // re-check the expiry/dispute conditions on-chain (not just trust the
-// caller), and let the host sign it directly — removing the deployer from
+// caller), and let the host sign it directly — removing ARIA's backend from
 // this path entirely. Tracked as a follow-up, not done here.
 export async function autoReleaseEscrow(escrowObjectId) {
-  if (!deployerKeypair || !escrowObjectId || !process.env.ESCROW_PACKAGE_ID) return false;
-  const sender = deployerKeypair.toSuiAddress();
+  if (!autoReleaseKeypair || !escrowObjectId || !process.env.ESCROW_PACKAGE_ID) return false;
+  const sender = autoReleaseKeypair.toSuiAddress();
   try {
     const tx = new Transaction();
     tx.setSender(sender);
@@ -190,7 +206,7 @@ export async function autoReleaseEscrow(escrowObjectId) {
       ],
     });
 
-    const result = await deployerKeypair.signAndExecuteTransaction({
+    const result = await autoReleaseKeypair.signAndExecuteTransaction({
       transaction: tx,
       client: suiClient,
       include: { effects: true },
