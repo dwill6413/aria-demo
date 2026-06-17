@@ -1,5 +1,5 @@
 # ARIA — Product Roadmap & AI Handoff Document
-**Version:** 2.11 | **Updated:** June 17, 2026
+**Version:** 2.12 | **Updated:** June 17, 2026
 **Purpose:** Complete handoff for an AI assistant continuing ARIA development.
 Read this entire document before writing any code.
 
@@ -226,10 +226,22 @@ escrow creation:
   only be resolved with that original cold key; this is a non-issue for fresh
   testnet bookings going forward.
 
-**P3 — Minor contract cleanup**
-- `STATUS_RESOLVED` constant is dead code (resolve_dispute deletes the object)
-- Optional: add 30-day expiry upper bound (`assert expiry_ms <= now + MAX_EXPIRY_MS`)
-- Neither is blocking; P3 priority
+**P3 — Minor contract cleanup (code done June 17, 2026; on-chain upgrade pending)**
+- [x] Removed dead `STATUS_RESOLVED` constant and its `status_resolved()` accessor
+  from `escrow.move` (resolve_dispute deletes the object, so this status value
+  was never actually set).
+- [x] Added a 30-day expiry upper bound: new `MAX_EXPIRY_MS` constant
+  (`2_592_000_000`), new `EExpiryTooFar` error code, and an assertion in
+  `create_escrow` (`expiry_ms <= now + MAX_EXPIRY_MS`). Added `max_expiry_ms()`
+  accessor and two new tests (`test_create_with_expiry_too_far_fails`,
+  `test_create_with_expiry_at_max_boundary_succeeds`).
+- [ ] **Not yet live on-chain.** This is a Move source change to an already-deployed
+  package — it only takes effect once published as an on-chain upgrade, signed
+  by the deployer's cold `UpgradeCap` key (Section 8, key #1). This requires
+  the `sui` CLI run manually by the operator; see Build Order Phase 1k for the
+  exact commands. Neither change is behaviorally risky (one removes dead code,
+  the other tightens an existing input validation), but both require a real
+  package upgrade transaction, not just a code commit.
 
 **Pre-mainnet gate**
 - [x] P0a complete (June 12, 2026 — JSON-RPC migration, ahead of Jul 31 deadline)
@@ -351,7 +363,9 @@ SEAL_PACKAGE_ID = 0x<from deployment>
 ⬜ Phase 1h.5: Fee collection/routing mechanism (Stripe + SuiUSD paths — needs design)
 ✅ Phase 1i: P2 — Production host address lookup (done June 17, 2026)
 ✅ Phase 1j: P2 — Claim/dispute backend routes (done June 17, 2026)
-⬜ Phase 1k: P3 — STATUS_RESOLVED + optional expiry bound
+🟡 Phase 1k: P3 — STATUS_RESOLVED removed + expiry bound added in code (June 17,
+   2026); on-chain upgrade still pending (cold UpgradeCap key, manual `sui` CLI
+   step — see P3 section above for exact commands)
 
 ⬜ Phase 2a: pii_access.move (Seal allowlist contract)
 ⬜ Phase 2b: Deploy allowlist, get SEAL_PACKAGE_ID
@@ -481,7 +495,14 @@ NEXT_PUBLIC_API_URL = https://aria-demo-production-e590.up.railway.app
 
 ---
 
-*ARIA Roadmap v2.11 — June 17, 2026*
+*ARIA Roadmap v2.12 — June 17, 2026*
+*Changes from v2.11: P3 contract cleanup in `escrow.move` — removed dead
+`STATUS_RESOLVED` constant/accessor; added `MAX_EXPIRY_MS` (30-day) upper
+bound on `expiry_ms` with new `EExpiryTooFar` error code and `max_expiry_ms()`
+accessor; added 2 new Move unit tests (25 total in `escrow_tests.move`). Code
+complete; on-chain upgrade still pending — requires the operator to run
+`sui client upgrade` with the cold UpgradeCap key. Updated P3 section, build
+order Phase 1k, and pre-mainnet gate accordingly.*
 *Changes from v2.10: Marked P2 (auto-release cron job, production host address
 lookup, claim/dispute backend routes) and Phase 3 (5-day inspection window
 business logic) complete. Added `runAutoReleaseSweep()` to `server.mjs`;

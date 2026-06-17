@@ -479,4 +479,49 @@ module aria_escrow::escrow_tests {
         };
         ts::end(s);
     }
+
+    /// Creating an escrow with an expiry more than MAX_EXPIRY_MS (30 days) out must fail.
+    #[test, expected_failure(abort_code = aria_escrow::escrow::EExpiryTooFar)]
+    fun test_create_with_expiry_too_far_fails() {
+        let mut s = ts::begin(GUEST);
+        ts::next_tx(&mut s, GUEST);
+        {
+            let mut clock = clock::create_for_testing(ts::ctx(&mut s));
+            clock::set_for_testing(&mut clock, T_BEFORE); // now = T_BEFORE
+            let coin = coin::mint_for_testing<SUI>(DEPOSIT, ts::ctx(&mut s));
+            // expiry = now + MAX_EXPIRY_MS + 1 — one millisecond past the cap
+            let too_far = T_BEFORE + escrow::max_expiry_ms() + 1;
+            escrow::create_escrow<SUI>(
+                ref_str(), GUEST, HOST, ARBITRATOR, too_far,
+                coin, &clock, ts::ctx(&mut s)
+            );
+            clock::destroy_for_testing(clock);
+        };
+        ts::end(s);
+    }
+
+    /// An expiry exactly at the MAX_EXPIRY_MS boundary (now + 30 days) must succeed.
+    #[test]
+    fun test_create_with_expiry_at_max_boundary_succeeds() {
+        let mut s = ts::begin(GUEST);
+        ts::next_tx(&mut s, GUEST);
+        {
+            let mut clock = clock::create_for_testing(ts::ctx(&mut s));
+            clock::set_for_testing(&mut clock, T_BEFORE); // now = T_BEFORE
+            let coin = coin::mint_for_testing<SUI>(DEPOSIT, ts::ctx(&mut s));
+            let at_max = T_BEFORE + escrow::max_expiry_ms();
+            escrow::create_escrow<SUI>(
+                ref_str(), GUEST, HOST, ARBITRATOR, at_max,
+                coin, &clock, ts::ctx(&mut s)
+            );
+            clock::destroy_for_testing(clock);
+        };
+        ts::next_tx(&mut s, GUEST);
+        {
+            let e = ts::take_shared<BookingEscrow<SUI>>(&s);
+            assert!(escrow::expiry_ms(&e) == T_BEFORE + escrow::max_expiry_ms(), 0);
+            ts::return_shared(e);
+        };
+        ts::end(s);
+    }
 }

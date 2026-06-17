@@ -1,5 +1,5 @@
 # ARIA — Technical Handoff Document
-**Version:** 4.11 | **Updated:** June 17, 2026
+**Version:** 4.12 | **Updated:** June 17, 2026
 
 Deeper technical details for developers or AI assistants continuing work on ARIA.
 Reconciled against the code actually deployed to production as of June 17, 2026.
@@ -327,8 +327,21 @@ state in Move, not something a config change retroactively fixes.
 
 #### P3 — Clean up, not blocking
 
-- `STATUS_RESOLVED` is dead code in the contract
-- Optional: 30-day expiry upper bound in contract
+Code done June 17, 2026 in `contracts/aria_escrow/sources/escrow.move`:
+- Removed dead `STATUS_RESOLVED` constant and its `status_resolved()` accessor
+  (resolve_dispute deletes the object, so this status was never actually set).
+- Added a 30-day expiry upper bound: new `MAX_EXPIRY_MS` constant
+  (`2_592_000_000` ms), new `EExpiryTooFar` error code, assertion in
+  `create_escrow` (`expiry_ms <= now + MAX_EXPIRY_MS`), and a `max_expiry_ms()`
+  accessor. Two new tests added in `escrow_tests.move`:
+  `test_create_with_expiry_too_far_fails` and
+  `test_create_with_expiry_at_max_boundary_succeeds`.
+
+**Not yet live on-chain.** Both changes are committed to the Move source but
+require a manual on-chain package upgrade, signed with the deployer's cold
+`UpgradeCap` key (see Environment Variables / Key Inventory — this key cannot
+be loaded by the backend or by Claude). The operator needs to run the upgrade
+manually with the `sui` CLI; exact commands were provided in chat.
 
 ### Pre-mainnet checklist
 
@@ -339,8 +352,7 @@ state in Move, not something a config change retroactively fixes.
 - [x] **P2**: Auto-release cron job built and running (done June 17, 2026)
 - [x] **P2**: Production host address lookup from `host_profiles` (done June 17, 2026)
 - [x] **P2**: Claim/dispute backend routes wired (done June 17, 2026 — `ARIA_ARBITRATOR_KEY`/`ARIA_ARBITRATOR_ADDRESS` set in Railway June 17, 2026)
-- [ ] **P3**: `STATUS_RESOLVED` dead code resolved
-- [ ] **P3**: Optional 30-day expiry upper bound
+- [x] **P3**: `STATUS_RESOLVED` dead code removed, 30-day expiry upper bound added (code done June 17, 2026 — on-chain upgrade still pending, see P3 section above)
 - [ ] Independent Move audit (OtterSec, Zellic, or similar)
 - [ ] Burn UpgradeCap after audit passes
 
@@ -403,7 +415,7 @@ Railway runs **Node 22** (`nixpacks.toml`: `nodejs_22`). Required by
 | `bookings.mjs` | Shared `createBooking()` | Used by both REST and AI booking paths; booking refs include a random hex suffix |
 | `lib/authFetch.js` | Shared session-aware fetch | Used by all 6 authenticated frontend pages |
 | `nixpacks.toml` | Railway build config | Node 22 required |
-| `contracts/aria_escrow/` | Move smart contract | escrow.move + 23 tests |
+| `contracts/aria_escrow/` | Move smart contract | escrow.move + 25 tests (23 original + 2 added for P3 expiry bound) |
 | `pages/ai.jsx` | AI chat UI | HTML-escaped output |
 | `pages/bookings.jsx` | Guest dashboard | Full wallet address + copy button |
 | `pages/host.jsx` | Host dashboard | Full wallet address + copy button |
@@ -480,7 +492,15 @@ NEXT_PUBLIC_API_URL = https://aria-demo-production-e590.up.railway.app
 
 ---
 
-*Technical Handoff v4.11 — June 17, 2026*
+*Technical Handoff v4.12 — June 17, 2026*
+*Changes from v4.11: P3 contract cleanup — removed dead `STATUS_RESOLVED`
+constant and `status_resolved()` accessor from `escrow.move`; added a 30-day
+expiry upper bound (`MAX_EXPIRY_MS` constant, `EExpiryTooFar` error code,
+assertion in `create_escrow`, `max_expiry_ms()` accessor) plus two new tests
+in `escrow_tests.move`. Code-complete but not yet live on-chain — publishing
+the upgrade requires the operator to run `sui client upgrade` manually with
+the cold `UpgradeCap` key (commands given in chat, not committed anywhere).
+Updated pre-mainnet checklist and Important Files table accordingly.*
 *Changes from v4.10: Marked P2 complete — auto-release cron job
 (`runAutoReleaseSweep()`, interval + 30s startup sweep), production host
 address lookup (`getPropertyHostAddress()` now reads `host_profiles.payout_sui_address`

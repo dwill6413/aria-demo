@@ -15,7 +15,6 @@ module aria_escrow::escrow {
     const STATUS_RELEASED: u8 = 1;
     const STATUS_CLAIMED:  u8 = 2;
     const STATUS_DISPUTED: u8 = 3;
-    const STATUS_RESOLVED: u8 = 4;
 
     // === Error Codes ===
     const ENotGuest:            u64 = 0;
@@ -28,9 +27,13 @@ module aria_escrow::escrow {
     const EZeroAmount:          u64 = 7;
     const ESplitMismatch:       u64 = 8;
     const EExpiryInPast:        u64 = 9;
+    const EExpiryTooFar:        u64 = 10;
 
     // 5 days in milliseconds
     const FIVE_DAYS_MS: u64 = 432_000_000;
+
+    // 30 days in milliseconds — upper bound on how far out expiry_ms can be set
+    const MAX_EXPIRY_MS: u64 = 2_592_000_000;
 
     // === Core Object ===
 
@@ -110,6 +113,7 @@ module aria_escrow::escrow {
         let amount = coin::value(&coin);
         assert!(amount > 0, EZeroAmount);
         assert!(expiry_ms > clock::timestamp_ms(clock), EExpiryInPast);
+        assert!(expiry_ms <= clock::timestamp_ms(clock) + MAX_EXPIRY_MS, EExpiryTooFar);
 
         let escrow = BookingEscrow<T> {
             id:           object::new(ctx),
@@ -315,9 +319,9 @@ module aria_escrow::escrow {
     public fun booking_ref<T>(e: &BookingEscrow<T>): String { e.booking_ref }
 
     public fun five_days_ms():    u64 { FIVE_DAYS_MS    }
+    public fun max_expiry_ms():   u64 { MAX_EXPIRY_MS   }
     public fun status_active():   u8  { STATUS_ACTIVE   }
     public fun status_released(): u8  { STATUS_RELEASED }
     public fun status_claimed():  u8  { STATUS_CLAIMED  }
     public fun status_disputed(): u8  { STATUS_DISPUTED }
-    public fun status_resolved(): u8  { STATUS_RESOLVED }
 }
