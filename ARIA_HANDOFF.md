@@ -158,9 +158,11 @@ Always take the **last** "Created" entry.
 This logic is now extracted into `extractCreatedObjectId(changedObjects)` in
 `escrow.mjs`, covered by 15 unit tests in `escrow.test.mjs`. Used both by
 `auto_release` and (post-P0b) by `verifyEscrowTransaction`, which calls it on
-the chain-queried result of the guest-submitted `create_escrow` digest. Use
-this function for Phase 2's `pii_access` object creation too — do not inline
-the filter logic again.
+the chain-queried result of the guest-submitted `create_escrow` digest.
+(Phase 2's Seal integration no longer creates a separate on-chain object —
+see `ARIA_ROADMAP.md` Phase 2, revised June 17, 2026 — so this helper isn't
+needed there. Still the right pattern for any future PTB that creates a new
+shared object.)
 
 ```javascript
 // escrow.mjs — extracted helper, tested in escrow.test.mjs
@@ -516,6 +518,10 @@ NEXT_PUBLIC_API_URL = https://aria-demo-production-e590.up.railway.app
 
 ---
 
+*Technical Handoff v4.16 — June 17, 2026*
+*Changes from v4.15: noted that Phase 2 (Seal/PII) was re-scoped in
+`ARIA_ROADMAP.md` — no longer creates a separate on-chain object, so
+`extractCreatedObjectId()` isn't needed for it. See roadmap for full detail.*
 *Technical Handoff v4.15 — June 17, 2026*
 *Changes from v4.14: confirmed `ESCROW_PACKAGE_ID` set in Railway and
 redeployed — deploy logs (3:05 PM CDT) show both keypairs loading correctly,

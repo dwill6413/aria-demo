@@ -1,5 +1,5 @@
 # ARIA — Product Roadmap & AI Handoff Document
-**Version:** 2.15 | **Updated:** June 17, 2026
+**Version:** 2.16 | **Updated:** June 17, 2026
 **Purpose:** Complete handoff for an AI assistant continuing ARIA development.
 Read this entire document before writing any code.
 
@@ -265,76 +265,123 @@ escrow creation:
 - [x] P3 complete (June 17, 2026 — contract upgrade published on-chain and fully deployed, package v2 at `0x98e712...4264f26`; `ESCROW_PACKAGE_ID` in Railway updated and redeployed, see P3 section above)
 - [ ] Independent Move audit (OtterSec, Zellic, or similar)
 - [ ] Burn UpgradeCap after audit
+- [ ] Add ARIA-side audit logging for Seal PII decrypt requests before any
+  real (non-demo) guest PII flows through Phase 2 — see Seal compliance note
+  in Phase 2 above
 
 ---
 
 ### PHASE 2 — Guest PII with Walrus + Seal
-**Priority: High. Required before onboarding real users.**
+**Priority: High. Required before onboarding real users with real PII (see
+compliance note below — testnet work here uses fake/demo data only).**
 
-#### Architecture (decided — do not re-debate)
-Guest PII encrypted client-side with Seal SDK, stored on Walrus. ARIA stores only
-the Walrus blob ID — no PII on ARIA's servers. Host added to Seal allowlist at
-booking confirmation; removed when deposit is released (same PTB, atomic).
+#### Architecture — REVISED June 17, 2026 against verified Seal mechanics
+The original placeholder architecture (a standalone `pii_access.move` module
+with a `GuestPIIAccess{allowed_hosts: vector<address>}` object and manual
+`grant_access`/`revoke_access` calls) was checked against Seal's actual SDK
+behavior and found structurally wrong in three ways — it was missing the
+mandatory `seal_approve*` gate function that key servers actually call (not
+arbitrary "grant/revoke" functions), missing the client-side `SessionKey`
+requirement, and missing any key-server/threshold configuration. Verified,
+corrected design below.
 
-#### PII access lifecycle
-```
-Booking confirmed  → host added to Seal allowlist (access from booking, not check-in)
-During stay        → host access active
-Post-checkout window → host access active (needed for damage claims)
-Deposit released   → SAME PTB calls escrow::auto_release AND pii_access::revoke_access
-                     → host access permanently closed
-Dispute active     → host retains access while deposit_status = 'held'
-```
-
-#### Seal allowlist contract (new Move module)
+**No separate Move module needed.** Add a single new function directly to the
+existing, already-deployed `escrow.move`, via a normal package upgrade (this
+will be v3):
 ```move
-public struct GuestPIIAccess has key {
-    id: UID,
-    guest: address,
-    allowed_hosts: vector<address>,
+/// Called by Seal key servers (via dry-run, never an actual transaction) to
+/// authorize decrypting a guest's PII blob. id's bytes must encode the
+/// escrow's guest address; only that booking's host may decrypt.
+entry fun seal_approve<T>(id: vector<u8>, escrow: &BookingEscrow<T>, ctx: &TxContext) {
+    assert!(/* id corresponds to escrow.guest */, ENotGuest);
+    assert!(tx_context::sender(ctx) == escrow.host, ENotHost);
 }
-public entry fun create_access(ctx: &mut TxContext)
-public entry fun grant_access(access: &mut GuestPIIAccess, host: address, ctx: &mut TxContext)
-public entry fun revoke_access(access: &mut GuestPIIAccess, host: address, ctx: &mut TxContext)
 ```
-Adapt from Mysten's allowlist examples in the Seal GitHub repo.
-When creating the `pii_access` object on-chain, use `extractCreatedObjectId()`
-to extract its ID — the same PTB pattern applies.
+This is valid because Seal's identity namespace (`[PkgId]*`) is anchored to a
+package's **original/first-published ID forever** — confirmed from Seal's
+key-server source (`fetch_first_pkg_id`) — while the actual `seal_approve`
+call at decrypt time targets whatever package address is current. A function
+added in a later upgrade is callable normally; nothing requires isolating
+access-control logic into its own package (Seal's own reference patterns mix
+allowlist logic with feature state in one module).
 
-#### Database change
+**Access lifecycle becomes fully automatic — no revoke call, no atomicity
+requirement.** `auto_release`, `accept_claim`, and `resolve_dispute` already
+call `object::delete(id)` on the `BookingEscrow` when they finalize. Since
+Seal's key servers resolve object references to "current on-chain state" on
+every dry-run, a deleted object can't be referenced — decryption access
+disappears the instant the escrow object does, for free:
+```
+Booking confirmed    → BookingEscrow exists, escrow.host == this host → access live
+During stay / window → object still exists → access live
+Dispute active        → object still exists (deleted only on resolve_dispute) → access live
+Deposit finalized      → auto_release/accept_claim/resolve_dispute delete the
+                       object → seal_approve can no longer be satisfied → access gone
+```
+This eliminates the old plan's "same PTB" requirement and the entire
+`revoke_access` build item — there is nothing to call.
+
+**SessionKey requirement (missing from original plan, mandatory per Seal
+docs).** Being on-chain-authorized is not sufficient — each host must also
+create and sign a time-limited `SessionKey` with their wallet
+(`SessionKey.create({address, packageId, ttlMin, suiClient})` →
+`getPersonalMessage()` → `signPersonalMessage()` →
+`setPersonalMessageSignature()`) before any `decrypt()`/`fetchKeys()` call
+will succeed. One signature, then a TTL window of decrypts without re-signing.
+Needs handling in the host UI (Phase 2h below).
+
+**Key-server / threshold configuration (missing from original plan, required
+client-side decision).** Testnet: Mysten's `mysten-testnet-1`
+(`0x73d05d62c18d9374e3ea529e8e0ed6161da1a141a94d3f76ae3fe4e99356db75`),
+`mysten-testnet-2`
+(`0xf5d14a81a982144ae441cd7d64b09027f116a468bd36e7eca494f750591623c8`), and/or
+the decentralized committee aggregator
+(`https://seal-aggregator-testnet.mystenlabs.com`, object
+`0xb012378c9f3799fb5b1a7083da74a4069e3c3f1c93de0b27212a5799ce1e1e98`) — no
+self-hosted key server needed. **Mainnet has no free Mysten-run Open server**
+— will need a paid/third-party provider (Ruby Nodes, NodeInfra, Studio Mirai,
+Enoki, etc.) or to run one; pick and budget this before going live.
+
+**Compliance note.** Seal's own docs state it isn't intended for regulated
+PII/PHI as currently scoped — key delivery isn't logged on-chain (no audit
+trail), testnet servers carry no SLA, and third-party key servers see decrypt
+requests (not the underlying plaintext). Decision (June 17, 2026): build the
+real architecture now since testnet carries no real guest data; before real
+PII flows through this path at mainnet, add ARIA-side audit logging (log every
+successful decrypt dry-run / `/host/guest-identity` fetch in Postgres) and
+revisit. Tracked as a pre-mainnet gate item alongside the Move audit and
+UpgradeCap burn (see Pre-mainnet gate below).
+
+#### Database change (unchanged from original plan, minus the dropped object-ID column)
 ```sql
 CREATE TABLE IF NOT EXISTS guest_verifications (
     sui_address    TEXT PRIMARY KEY,
     walrus_blob_id TEXT NOT NULL,
-    pii_object_id  TEXT NOT NULL,
     phone_verified BOOLEAN DEFAULT false,
     created_at     TIMESTAMPTZ DEFAULT NOW()
 );
 ```
-No PII columns. Just pointers.
+No PII columns, just a pointer. `pii_object_id` dropped — there's no separate
+on-chain PII object anymore; `seal_approve` reads the existing `BookingEscrow`.
 
 #### New routes
 ```
-POST /guest/profile                     — store { walrus_blob_id, pii_object_id }
+POST /guest/profile                     — store { walrus_blob_id }
 GET  /guest/profile                     — return { verified, walrus_blob_id }
-GET  /host/guest-identity/:bookingRef   — return blob_id for host to decrypt client-side
+GET  /host/guest-identity/:bookingRef   — return { blob_id, escrow_object_id }
+                                           for the host to build the
+                                           seal_approve PTB and decrypt client-side
 ```
 
-#### Booking gate
+#### Booking gate (unchanged)
 ```javascript
 const v = await pool.query('SELECT 1 FROM guest_verifications WHERE sui_address=$1', [session.suiAddress]);
 if (!v.rows.length) return reply.code(400).send({ error: 'Complete identity verification first' });
 ```
 
-#### Critical integration with Phase 1
-`/booking/release-deposit` must call BOTH in the SAME PTB:
-1. `escrow::auto_release`
-2. `pii_access::revoke_access`
-
-#### New env var
-```
-SEAL_PACKAGE_ID = 0x<from deployment>
-```
+#### No new env var
+No `SEAL_PACKAGE_ID` — Seal's identity namespace uses `escrow.move`'s existing
+original package ID (`0x538262...7fdbe`); no separate contract deployment.
 
 ---
 
@@ -381,15 +428,17 @@ SEAL_PACKAGE_ID = 0x<from deployment>
    published on-chain and fully deployed (June 17, 2026, package v2 at
    0x98e712...4264f26); Railway ESCROW_PACKAGE_ID updated and redeployed
 
-⬜ Phase 2a: pii_access.move (Seal allowlist contract)
-⬜ Phase 2b: Deploy allowlist, get SEAL_PACKAGE_ID
-⬜ Phase 2c: guest_verifications table in db.mjs
-⬜ Phase 2d: /guest/profile + /host/guest-identity routes
+⬜ Phase 2a: Add seal_approve() to escrow.move, publish upgrade (package v3)
+⬜ Phase 2b: Pick testnet key servers + threshold (no contract deploy — see Phase 2 above)
+⬜ Phase 2c: guest_verifications table in db.mjs (no pii_object_id column)
+⬜ Phase 2d: /guest/profile + /host/guest-identity routes (latter returns escrow_object_id too)
 ⬜ Phase 2e: Booking gate in /booking/create and AI create_booking
 ⬜ Phase 2f: hasGuestProfile in /auth/me
 ⬜ Phase 2g: pages/profile.jsx (Seal encrypt + Walrus store)
-⬜ Phase 2h: Host "View Guest Identity" modal in pages/host.jsx
-⬜ Phase 2i: Wire deposit release to call revoke_access in same PTB
+⬜ Phase 2h: Host "View Guest Identity" modal in pages/host.jsx — incl. SessionKey
+   create/sign step before decrypt
+(Phase 2i eliminated — access revocation is automatic via escrow object
+ deletion in auto_release/accept_claim/resolve_dispute; nothing to wire.)
 
 ⬜ Phase 3: 5-day timing gate + auto-release job + claim/dispute flows
 ```
@@ -514,6 +563,21 @@ NEXT_PUBLIC_API_URL = https://aria-demo-production-e590.up.railway.app
 
 ---
 
+*ARIA Roadmap v2.16 — June 17, 2026*
+*Changes from v2.15: scoped Phase 2 (Seal/Walrus guest PII) against verified
+Seal SDK mechanics — researched actual `seal_approve*` requirements,
+SessionKey flow, key-server/threshold config, and identity-namespace
+anchoring (confirmed tied to a package's original ID forever, so a function
+added via upgrade works fine). Found the original placeholder architecture
+(separate `pii_access.move` with manual grant/revoke) was structurally wrong
+and replaced it with a simpler design: add `seal_approve()` directly to
+`escrow.move`, gated on the existing `BookingEscrow` object, so access
+revokes itself automatically when the object is deleted at finalization —
+eliminating the old plan's separate contract, `SEAL_PACKAGE_ID`, and
+`revoke_access`/Phase 2i entirely. Added a pre-mainnet gate item for Seal
+audit logging, per Seal's own docs flagging it isn't scoped for regulated
+PII without additional safeguards — decided to build the real architecture
+now since testnet carries no real guest data, and revisit before mainnet.*
 *ARIA Roadmap v2.15 — June 17, 2026*
 *Changes from v2.14: confirmed `ESCROW_PACKAGE_ID` updated in Railway and
 redeployed (deploy logs at 3:05 PM CDT show both keypairs loading correctly,
