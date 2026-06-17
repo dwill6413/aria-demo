@@ -338,7 +338,7 @@ state in Move, not something a config change retroactively fixes.
 - [x] **P1b**: Separate deployer/UpgradeCap from backend signer (code done June 17, 2026 — Railway/faucet setup for the new key is a pending manual step, see P1b above)
 - [x] **P2**: Auto-release cron job built and running (done June 17, 2026)
 - [x] **P2**: Production host address lookup from `host_profiles` (done June 17, 2026)
-- [x] **P2**: Claim/dispute backend routes wired (done June 17, 2026 — `ARIA_ARBITRATOR_KEY` Railway env var setup still pending, see P2 above)
+- [x] **P2**: Claim/dispute backend routes wired (done June 17, 2026 — `ARIA_ARBITRATOR_KEY`/`ARIA_ARBITRATOR_ADDRESS` set in Railway June 17, 2026)
 - [ ] **P3**: `STATUS_RESOLVED` dead code resolved
 - [ ] **P3**: Optional 30-day expiry upper bound
 - [ ] Independent Move audit (OtterSec, Zellic, or similar)
@@ -444,14 +444,15 @@ HOST_ADDRESSES, SESSION_SECRET, XAI_API_KEY, RESEND_API_KEY, STRIPE_SECRET_KEY
 ESCROW_PACKAGE_ID       = 0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe
 ESCROW_MODULE_NAME      = escrow
 ARIA_AUTO_RELEASE_KEY   = <suiprivkey1... bech32 format — in Railway, never commit.
-                           P1b: scoped to auto_release only, zero special privilege.>
+                           P1b: scoped to auto_release only, zero special privilege.
+                           Public address: 0xc0b4e8b46731329fa83a8a5d93b1600b415fe0b050be986bb3f7cffda22e0ff9>
 ARIA_ARBITRATOR_KEY     = <suiprivkey1... bech32 format — in Railway, never commit.
                            NEW (P2, June 17, 2026): scoped to resolve_dispute only.
-                           Not yet set in Railway — pending manual step. Delivered
-                           to the user via chat text only, never written to a file.>
+                           Set in Railway June 17, 2026. Delivered to the user
+                           via chat text only, never written to a file.>
 ARIA_ARBITRATOR_ADDRESS = 0xf46527e18f2fd7d3093c9591ded66e3a8711a18de63cd0bede2d88692e6f6a65
-                           (NEW June 17, 2026 — supersedes the P1a cold-storage
-                           address 0x0069868f93f9127b3e8b51bf95bc529925ca382e6305da0bb01f693826b983f8
+                           (NEW June 17, 2026 — set in Railway, supersedes the P1a
+                           cold-storage address 0x0069868f93f9127b3e8b51bf95bc529925ca382e6305da0bb01f693826b983f8
                            for any escrow created going forward. Pre-existing
                            escrows still need the original P1a key to resolve.)
 AUTO_RELEASE_SWEEP_INTERVAL_MS = <optional, default 3600000 (1 hour)>

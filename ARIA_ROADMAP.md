@@ -217,14 +217,14 @@ escrow creation:
   manual-signing-only, so a new operational `ARIA_ARBITRATOR_KEY` was
   generated and funded with testnet SUI via the faucet this session. This
   effectively brings forward step 2 of the "arbitration scaling path" in the
-  P1 section above. **Manual step required:** set `ARIA_ARBITRATOR_KEY`
-  (private, bech32 `suiprivkey1...`) and update `ARIA_ARBITRATOR_ADDRESS` to
-  match (new public address in Section 8) in Railway — the private key was
-  delivered to the operator via chat only, never committed to any file, per
-  this doc's own rule (Section 7). Any escrow created before this Railway
-  update used the old P1a address as `arbitrator` on-chain and can only be
-  resolved with that original cold key; this is a non-issue for fresh testnet
-  bookings going forward.
+  P1 section above. **Manual step complete (June 17, 2026):** `ARIA_ARBITRATOR_KEY`
+  and `ARIA_ARBITRATOR_ADDRESS` (Section 8) are now set in Railway — the
+  private key was delivered to the operator via chat only, never committed to
+  any file, per this doc's own rule (Section 7), and confirmed set by the
+  operator directly in the Railway dashboard. Any escrow created before this
+  Railway update used the old P1a address as `arbitrator` on-chain and can
+  only be resolved with that original cold key; this is a non-issue for fresh
+  testnet bookings going forward.
 
 **P3 — Minor contract cleanup**
 - `STATUS_RESOLVED` constant is dead code (resolve_dispute deletes the object)
@@ -236,7 +236,7 @@ escrow creation:
 - [x] P0b complete (June 16, 2026 — guest-funded escrow, live-tested end-to-end)
 - [x] P1a complete (arbitrator key separated, wired, on-chain)
 - [x] P1b complete (June 17, 2026 — deployer/backend-signer separated; new key needs Railway/faucet setup, see P1 section above)
-- [x] P2 complete (June 17, 2026 — auto-release cron, production host lookup, claim/dispute routes; new `ARIA_ARBITRATOR_KEY` needs Railway setup, see P2 section above)
+- [x] P2 complete (June 17, 2026 — auto-release cron, production host lookup, claim/dispute routes; `ARIA_ARBITRATOR_KEY`/`ARIA_ARBITRATOR_ADDRESS` set in Railway, see P2 section above)
 - [ ] Independent Move audit (OtterSec, Zellic, or similar)
 - [ ] Burn UpgradeCap after audit
 
@@ -438,7 +438,8 @@ ESCROW_MODULE_NAME      = escrow
 ARIA_AUTO_RELEASE_KEY   = <suiprivkey1... bech32 format — Railway only, never committed.
                            P1b: scoped to auto_release only, zero special on-chain
                            privilege (see escrow.mjs). The original deployer/UpgradeCap
-                           key has been retired from Railway to cold KeePass-only storage.>
+                           key has been retired from Railway to cold KeePass-only storage.
+                           Public address: 0xc0b4e8b46731329fa83a8a5d93b1600b415fe0b050be986bb3f7cffda22e0ff9>
 ARIA_ARBITRATOR_KEY     = <suiprivkey1... bech32 format — Railway only, never committed.
                            P2: scoped to resolve_dispute only. Generated and funded
                            with testnet SUI June 17, 2026; delivered to the operator
