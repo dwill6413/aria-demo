@@ -1,5 +1,5 @@
 # ARIA — Product Roadmap & AI Handoff Document
-**Version:** 2.12 | **Updated:** June 17, 2026
+**Version:** 2.14 | **Updated:** June 17, 2026
 **Purpose:** Complete handoff for an AI assistant continuing ARIA development.
 Read this entire document before writing any code.
 
@@ -226,22 +226,34 @@ escrow creation:
   only be resolved with that original cold key; this is a non-issue for fresh
   testnet bookings going forward.
 
-**P3 — Minor contract cleanup (code done June 17, 2026; on-chain upgrade pending)**
-- [x] Removed dead `STATUS_RESOLVED` constant and its `status_resolved()` accessor
-  from `escrow.move` (resolve_dispute deletes the object, so this status value
-  was never actually set).
+**P3 — Minor contract cleanup (code done and live on-chain — June 17, 2026)**
+- [x] Removed the unused `STATUS_RESOLVED` constant from `escrow.move`
+  (resolve_dispute deletes the object, so this status value was never actually
+  set). The `status_resolved()` accessor had to stay — Sui's package upgrade
+  rules forbid removing a public function from an already-deployed package
+  under any upgrade policy, even the default "compatible" one. It now returns
+  a hardcoded `4` instead of referencing the removed constant; functionally
+  unchanged, just no longer backed by a named constant.
 - [x] Added a 30-day expiry upper bound: new `MAX_EXPIRY_MS` constant
   (`2_592_000_000`), new `EExpiryTooFar` error code, and an assertion in
   `create_escrow` (`expiry_ms <= now + MAX_EXPIRY_MS`). Added `max_expiry_ms()`
   accessor and two new tests (`test_create_with_expiry_too_far_fails`,
   `test_create_with_expiry_at_max_boundary_succeeds`).
-- [ ] **Not yet live on-chain.** This is a Move source change to an already-deployed
-  package — it only takes effect once published as an on-chain upgrade, signed
-  by the deployer's cold `UpgradeCap` key (Section 8, key #1). This requires
-  the `sui` CLI run manually by the operator; see Build Order Phase 1k for the
-  exact commands. Neither change is behaviorally risky (one removes dead code,
-  the other tightens an existing input validation), but both require a real
-  package upgrade transaction, not just a code commit.
+- [x] **Live on-chain.** Published as upgrade transaction `JCA8daJ9mSByY6x51ZhEc6Ubfrv1LEbf3nsVccEFtJZK`,
+  signed by the deployer's cold `UpgradeCap` key (Section 8, key #1). New
+  package: `0x98e712692f22f308bb6d097d2d8a2743ed0c01058135d71436b4abcd34264f26`
+  (version 2). Original package ID `0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe`
+  remains the type-defining ID for existing `BookingEscrow` objects — that
+  never changes on upgrade, only the module bytecode does. **Manual step
+  remaining:** update `ESCROW_PACKAGE_ID` in Railway to the new package ID
+  (see Environment Variables below) so new `create_escrow` calls actually get
+  the 30-day expiry cap; existing claim/dispute/auto-release calls on
+  already-created escrows are unaffected either way.
+- First upgrade attempt failed: Sui's "compatible" upgrade policy (the
+  default, and the most permissive available) forbids removing any public
+  function from an already-deployed package — `status_resolved()` had to be
+  restored (now hardcoded to return `4` instead of referencing the removed
+  constant) before the upgrade would succeed.
 
 **Pre-mainnet gate**
 - [x] P0a complete (June 12, 2026 — JSON-RPC migration, ahead of Jul 31 deadline)
@@ -249,6 +261,7 @@ escrow creation:
 - [x] P1a complete (arbitrator key separated, wired, on-chain)
 - [x] P1b complete (June 17, 2026 — deployer/backend-signer separated; new key needs Railway/faucet setup, see P1 section above)
 - [x] P2 complete (June 17, 2026 — auto-release cron, production host lookup, claim/dispute routes; `ARIA_ARBITRATOR_KEY`/`ARIA_ARBITRATOR_ADDRESS` set in Railway, see P2 section above)
+- [x] P3 complete (June 17, 2026 — contract upgrade published on-chain, package v2 at `0x98e712...4264f26`; `ESCROW_PACKAGE_ID` in Railway still needs updating to this new package ID, see P3 section above)
 - [ ] Independent Move audit (OtterSec, Zellic, or similar)
 - [ ] Burn UpgradeCap after audit
 
@@ -363,9 +376,9 @@ SEAL_PACKAGE_ID = 0x<from deployment>
 ⬜ Phase 1h.5: Fee collection/routing mechanism (Stripe + SuiUSD paths — needs design)
 ✅ Phase 1i: P2 — Production host address lookup (done June 17, 2026)
 ✅ Phase 1j: P2 — Claim/dispute backend routes (done June 17, 2026)
-🟡 Phase 1k: P3 — STATUS_RESOLVED removed + expiry bound added in code (June 17,
-   2026); on-chain upgrade still pending (cold UpgradeCap key, manual `sui` CLI
-   step — see P3 section above for exact commands)
+✅ Phase 1k: P3 — STATUS_RESOLVED removed + 30-day expiry bound added, upgrade
+   published on-chain (June 17, 2026, package v2 at 0x98e712...4264f26);
+   Railway ESCROW_PACKAGE_ID still needs updating — see P3 section above
 
 ⬜ Phase 2a: pii_access.move (Seal allowlist contract)
 ⬜ Phase 2b: Deploy allowlist, get SEAL_PACKAGE_ID
@@ -447,7 +460,11 @@ Follow-up: one-time authorization code exchange.
 ```
 DATABASE_URL, GOOGLE_CLIENT_ID, GOOGLE_CALLBACK_URL, FRONTEND_URL
 HOST_ADDRESSES, SESSION_SECRET, XAI_API_KEY, RESEND_API_KEY, STRIPE_SECRET_KEY
-ESCROW_PACKAGE_ID       = 0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe
+ESCROW_PACKAGE_ID       = 0x98e712692f22f308bb6d097d2d8a2743ed0c01058135d71436b4abcd34264f26
+                           (UPDATED June 17, 2026 — P3 upgrade, package version 2.
+                           Original package 0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe
+                           remains the type-defining ID for existing BookingEscrow
+                           objects. Manual step: update this value in Railway.)
 ESCROW_MODULE_NAME      = escrow
 ARIA_AUTO_RELEASE_KEY   = <suiprivkey1... bech32 format — Railway only, never committed.
                            P1b: scoped to auto_release only, zero special on-chain
@@ -495,6 +512,22 @@ NEXT_PUBLIC_API_URL = https://aria-demo-production-e590.up.railway.app
 
 ---
 
+*ARIA Roadmap v2.14 — June 17, 2026*
+*Changes from v2.13: P3 upgrade published successfully on-chain — transaction
+`JCA8daJ9mSByY6x51ZhEc6Ubfrv1LEbf3nsVccEFtJZK`, new package
+`0x98e712692f22f308bb6d097d2d8a2743ed0c01058135d71436b4abcd34264f26` (v2).
+Marked P3 complete in the pre-mainnet gate and build order. One manual step
+remains: update `ESCROW_PACKAGE_ID` in Railway to the new package ID.*
+*ARIA Roadmap v2.13 — June 17, 2026*
+*Changes from v2.12: the first upgrade attempt failed —
+`sui client upgrade` rejected the package with "missing public declaration:
+public function 'status_resolved' is missing." Sui's package upgrade rules
+forbid removing a public function from an already-deployed package under any
+upgrade policy, including the default "compatible" one. Restored
+`status_resolved()` with the same signature, now returning a hardcoded `4`
+instead of referencing the removed `STATUS_RESOLVED` constant. Updated the P3
+section to reflect this; the constant removal still stands, the accessor does
+not. Re-run `sui move test` (still 25/25 passing) before retrying the upgrade.*
 *ARIA Roadmap v2.12 — June 17, 2026*
 *Changes from v2.11: P3 contract cleanup in `escrow.move` — removed dead
 `STATUS_RESOLVED` constant/accessor; added `MAX_EXPIRY_MS` (30-day) upper

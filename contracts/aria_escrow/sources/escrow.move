@@ -324,4 +324,12 @@ module aria_escrow::escrow {
     public fun status_released(): u8  { STATUS_RELEASED }
     public fun status_claimed():  u8  { STATUS_CLAIMED  }
     public fun status_disputed(): u8  { STATUS_DISPUTED }
+
+    /// Kept only for upgrade compatibility — Sui's "compatible" upgrade policy
+    /// (the default, and the most permissive one available) forbids removing a
+    /// public function from an already-deployed package, even though the
+    /// STATUS_RESOLVED status value it once returned is no longer used anywhere
+    /// (resolve_dispute deletes the object instead of setting a status). Value
+    /// is now a literal since the backing constant was removed.
+    public fun status_resolved(): u8  { 4 }
 }

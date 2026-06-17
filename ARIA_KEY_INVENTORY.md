@@ -17,6 +17,7 @@ load) in Railway environment variables.
 | Signs | Nothing currently. Originally deployed `escrow.move` and (before P0b, June 16, 2026) signed `create_escrow` directly. |
 | Why it's powerful | Owns the `UpgradeCap` (`0x41f043cf28d0bb77ef6031c5208b611bdd673992afa9e27763b41033e4a327eb`) — can upgrade the deployed package. This is the highest-privilege key in the system. |
 | When you'd need it | Only to upgrade the Move contract, or to formally burn the UpgradeCap (planned pre-mainnet step, once an independent audit passes). |
+| Recent use | Signed the P3 upgrade (June 17, 2026, tx `JCA8daJ9mSByY6x51ZhEc6Ubfrv1LEbf3nsVccEFtJZK`), publishing package v2 at `0x98e712692f22f308bb6d097d2d8a2743ed0c01058135d71436b4abcd34264f26`. The original package ID above stays the type-defining ID for existing `BookingEscrow` objects regardless of how many upgrades happen. |
 
 ## 2. Auto-release key (`ARIA_AUTO_RELEASE_KEY` / `autoReleaseKeypair`)
 
