@@ -1,5 +1,5 @@
 # ARIA — Technical Handoff Document
-**Version:** 4.10 | **Updated:** June 17, 2026
+**Version:** 4.11 | **Updated:** June 17, 2026
 
 Deeper technical details for developers or AI assistants continuing work on ARIA.
 Reconciled against the code actually deployed to production as of June 17, 2026.
@@ -269,11 +269,61 @@ Remaining manual steps (Railway env var swap, faucet funding of the new
 address, confirming the old key's removal from Railway) are operator actions,
 not code changes — see `ARIA_ROADMAP.md` for the address.
 
-#### P2 — Fix before launch with real users
+#### P2 — Fix before launch with real users — ✅ COMPLETE (June 17, 2026)
 
-- Auto-release cron job missing
-- Production host address lookup (`payout_sui_address` from `host_profiles`)
-- Claim/dispute backend routes not wired
+- **Auto-release cron job**: ✅ done. `runAutoReleaseSweep()` in `server.mjs`
+  queries `bookings` for escrows past expiry that are still `pending`/`held`,
+  calls `autoReleaseEscrow` (signed by `autoReleaseKeypair`) for each, and
+  updates `deposit_status`. Wired via `setInterval(AUTO_RELEASE_SWEEP_INTERVAL_MS)`
+  (default 1 hour) plus a 30-second startup `setTimeout` so it also runs once
+  shortly after boot rather than waiting a full interval.
+- **Production host address lookup**: ✅ done. `getPropertyHostAddress()` in
+  `bookings.mjs` resolves the real payout address instead of falling back to
+  the auto-release key: it reads the property's configured host address, then
+  looks up `payout_sui_address` from `host_profiles` for that address, falling
+  back to the configured address if no `host_profiles` row exists or the query
+  fails. Only falls back to `autoReleaseKeypair.toSuiAddress()` if a property
+  has no configured host address at all.
+- **Claim/dispute backend routes**: ✅ done. Five new routes added to
+  `server.mjs`, all following the same non-custodial build-unsigned/
+  client-signs/backend-verifies pattern as `create_escrow`:
+  - `/booking/claim-damage` (host builds unsigned `claim_damage` PTB)
+  - `/booking/claim-damage/confirm` (verifies via `verifyClaimDamageTransaction`,
+    checks sender == host and that the escrow object was mutated, writes
+    `claim_amount`/`claim_reason`/`claimed_at`)
+  - `/booking/dispute-claim` (guest builds unsigned `dispute_claim` PTB)
+  - `/booking/dispute-claim/confirm` (verifies via `verifyDisputeClaimTransaction`,
+    checks sender == guest, writes `dispute_reason`/`disputed_at`)
+  - `/booking/resolve-dispute` (arbitrator-signed `resolve_dispute`, calls
+    `resolveDisputeEscrow`, writes `resolved_guest_amount`/`resolved_host_amount`/
+    `resolved_at`)
+  Backed by 9 new `bookings` columns (`host_sui_address`, `claim_amount`,
+  `claim_reason`, `claimed_at`, `dispute_reason`, `disputed_at`,
+  `resolved_guest_amount`, `resolved_host_amount`, `resolved_at`), 5 new `zod`
+  schemas in `validation.mjs`, and a `['claimed','disputed','forfeited']` guard
+  added to `/booking/release-deposit` so a disputed/claimed escrow can no
+  longer be silently auto-released out from under the claim. Covered by 18 new
+  unit tests in `escrow.test.mjs` (`isObjectMutated`: 8, `verifyClaimDamageTransaction`:
+  4, `verifyDisputeClaimTransaction`: 3, plus the route logic exercised via the
+  new helper functions) — 33 tests total, all passing.
+
+**New for P2 — `resolve_dispute` needs its own operational signer.** The
+P1a arbitrator key (`0x0069868f93f9127b3e8b51bf95bc529925ca382e6305da0bb01f693826b983f8`)
+was deliberately generated as cold-KeePass-only, manual-signing-only — it was
+never meant to be loaded by the backend. But an automated `/booking/resolve-dispute`
+route needs a signer the backend can actually call. So a **new, separate,
+narrowly-scoped operational arbitrator keypair** was generated this session
+(`ARIA_ARBITRATOR_KEY` / `arbitratorKeypair`, loaded in `escrow.mjs`, used only
+to sign `resolve_dispute` — the contract asserts `tx_context::sender ==
+escrow.arbitrator`, so this key carries no privilege beyond that one call).
+Its public address is `0xf46527e18f2fd7d3093c9591ded66e3a8711a18de63cd0bede2d88692e6f6a65`,
+funded with testnet SUI gas via the faucet. This **supersedes** the P1a address
+for any escrow created going forward — `ARIA_ARBITRATOR_ADDRESS` in Railway
+needs to be updated to the new address (pending manual step, see Environment
+Variables below). Any escrow already created on-chain before that Railway
+update still has the old P1a address baked into its `arbitrator` field on-chain
+and can only be resolved by that original cold key — this is immutable per-object
+state in Move, not something a config change retroactively fixes.
 
 #### P3 — Clean up, not blocking
 
@@ -286,9 +336,9 @@ not code changes — see `ARIA_ROADMAP.md` for the address.
 - [x] **P0b**: Guest wallet signs and funds `create_escrow` (done June 16, 2026, live-tested)
 - [x] **P1a**: Arbitrator key separated (done June 12, 2026)
 - [x] **P1b**: Separate deployer/UpgradeCap from backend signer (code done June 17, 2026 — Railway/faucet setup for the new key is a pending manual step, see P1b above)
-- [ ] **P2**: Auto-release cron job built and running
-- [ ] **P2**: Production host address lookup from `host_profiles`
-- [ ] **P2**: Claim/dispute backend routes wired
+- [x] **P2**: Auto-release cron job built and running (done June 17, 2026)
+- [x] **P2**: Production host address lookup from `host_profiles` (done June 17, 2026)
+- [x] **P2**: Claim/dispute backend routes wired (done June 17, 2026 — `ARIA_ARBITRATOR_KEY` Railway env var setup still pending, see P2 above)
 - [ ] **P3**: `STATUS_RESOLVED` dead code resolved
 - [ ] **P3**: Optional 30-day expiry upper bound
 - [ ] Independent Move audit (OtterSec, Zellic, or similar)
@@ -344,7 +394,7 @@ Railway runs **Node 22** (`nixpacks.toml`: `nodejs_22`). Required by
 | File | Purpose | Notes |
 |---|---|---|
 | `server.mjs` | Main Fastify server | Routes, RBAC, escrow helpers |
-| `escrow.test.mjs` | Unit tests for `extractCreatedObjectId` | 15 tests, no network needed. Imports the real function from `escrow.mjs` (no longer a hand-copied duplicate). Run: `node escrow.test.mjs` |
+| `escrow.test.mjs` | Unit tests for escrow helpers | 33 tests, no network needed: `extractCreatedObjectId` (15), `verifyEscrowTransaction` (3), `isObjectMutated` (8), `verifyClaimDamageTransaction` (4), `verifyDisputeClaimTransaction` (3). Imports the real functions from `escrow.mjs` (no hand-copied duplicates). Run: `node escrow.test.mjs` |
 | `catalog.mjs` | Prices + tax rates | Single source of truth |
 | `db.mjs` | Pool + `initDB()` | 10 tables + indexes on `bookings.wallet_address`/`bookings.property_id`/`messages.booking_ref`, `escrow_object_id` column, idempotent |
 | `auth.mjs` | OAuth + sessions | JWT verification, CSPRNG IDs |
@@ -395,7 +445,16 @@ ESCROW_PACKAGE_ID       = 0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d3
 ESCROW_MODULE_NAME      = escrow
 ARIA_AUTO_RELEASE_KEY   = <suiprivkey1... bech32 format — in Railway, never commit.
                            P1b: scoped to auto_release only, zero special privilege.>
-ARIA_ARBITRATOR_ADDRESS = 0x0069868f93f9127b3e8b51bf95bc529925ca382e6305da0bb01f693826b983f8
+ARIA_ARBITRATOR_KEY     = <suiprivkey1... bech32 format — in Railway, never commit.
+                           NEW (P2, June 17, 2026): scoped to resolve_dispute only.
+                           Not yet set in Railway — pending manual step. Delivered
+                           to the user via chat text only, never written to a file.>
+ARIA_ARBITRATOR_ADDRESS = 0xf46527e18f2fd7d3093c9591ded66e3a8711a18de63cd0bede2d88692e6f6a65
+                           (NEW June 17, 2026 — supersedes the P1a cold-storage
+                           address 0x0069868f93f9127b3e8b51bf95bc529925ca382e6305da0bb01f693826b983f8
+                           for any escrow created going forward. Pre-existing
+                           escrows still need the original P1a key to resolve.)
+AUTO_RELEASE_SWEEP_INTERVAL_MS = <optional, default 3600000 (1 hour)>
 ```
 
 **Vercel:**
@@ -420,14 +479,23 @@ NEXT_PUBLIC_API_URL = https://aria-demo-production-e590.up.railway.app
 
 ---
 
-*Technical Handoff v4.10 — June 17, 2026*
-*Changes from v4.9: Marked P1b (deployer/backend-signer key separation) complete.
-Renamed `ARIA_DEPLOYER_KEY`/`deployerKeypair` to `ARIA_AUTO_RELEASE_KEY`/
-`autoReleaseKeypair` throughout `escrow.mjs`/`bookings.mjs`/`server.mjs`.
-Corrected an inaccurate comment (and this doc's matching code example) that had
-claimed `auto_release` required arbitrator-level authority — verified against
-`escrow.move` that it's actually permissionless, so the new key needs no special
-on-chain privilege. Also fixed several stale `server.mjs` file attributions for
-code that was already living in `escrow.mjs` since the Phase 2b extraction
-(`buildEscrowTransaction`, `extractCreatedObjectId`, `autoReleaseEscrow`).
-Updated pre-mainnet checklist and P1 audit section accordingly.*
+*Technical Handoff v4.11 — June 17, 2026*
+*Changes from v4.10: Marked P2 complete — auto-release cron job
+(`runAutoReleaseSweep()`, interval + 30s startup sweep), production host
+address lookup (`getPropertyHostAddress()` now reads `host_profiles.payout_sui_address`
+instead of defaulting to the auto-release key), and the five claim/dispute
+routes (`/booking/claim-damage`, `/booking/claim-damage/confirm`,
+`/booking/dispute-claim`, `/booking/dispute-claim/confirm`,
+`/booking/resolve-dispute`), backed by 9 new `bookings` columns and 5 new
+`validation.mjs` schemas. Added a `['claimed','disputed','forfeited']` guard
+to `/booking/release-deposit` so auto-release can't run out from under an
+active claim/dispute. Generated a new operational `ARIA_ARBITRATOR_KEY` /
+`arbitratorKeypair` scoped to `resolve_dispute` only, since the P1a arbitrator
+key was cold-storage/manual-signing-only and can't be loaded by the backend;
+documented that this new address supersedes the P1a address for new escrows
+while pre-existing escrows still need the original P1a key. Added 18 new unit
+tests to `escrow.test.mjs` (`isObjectMutated`, `verifyClaimDamageTransaction`,
+`verifyDisputeClaimTransaction`) — 33 tests total, all passing. Updated
+pre-mainnet checklist, P2 audit section, Important Files table, and
+Environment Variables accordingly. Remaining manual step: set
+`ARIA_ARBITRATOR_KEY` and the updated `ARIA_ARBITRATOR_ADDRESS` in Railway.*

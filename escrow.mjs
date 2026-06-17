@@ -43,6 +43,34 @@ try {
   console.warn('ARIA_AUTO_RELEASE_KEY invalid or missing — auto_release transactions disabled:', err.message);
 }
 
+// P2 / Phase 1j: resolve_dispute asserts tx_context::sender == escrow.arbitrator
+// on-chain (unlike auto_release, which is permissionless — see the long
+// comment above autoReleaseEscrow below). That means SOME key has to actually
+// be the arbitrator for ARIA to fulfil the roadmap's "ARIA calls
+// resolve_dispute on contract with the final split" design. Following the
+// same P1b narrow-scoping principle as ARIA_AUTO_RELEASE_KEY: this key's only
+// job is signing resolve_dispute calls after a human (ARIA admin) has already
+// decided the split via the /booking/resolve-dispute route's HOST_ADDRESSES
+// gate — it never touches a guest- or host-owned coin directly, the Move
+// contract itself enforces guest_amount + host_amount == escrow.amount.
+//
+// For resolve_dispute to actually succeed on a given escrow, that escrow's
+// `arbitrator` field (set once, at create_escrow time, from
+// ARIA_ARBITRATOR_ADDRESS) must equal this keypair's address. Set
+// ARIA_ARBITRATOR_ADDRESS to this key's public address so new bookings pick
+// it up — escrows created before that env var was set still have the old
+// fallback (hostAddr) baked in immutably and cannot be resolved by this key.
+export let arbitratorKeypair = null;
+try {
+  if (process.env.ARIA_ARBITRATOR_KEY) {
+    const { secretKey } = decodeSuiPrivateKey(process.env.ARIA_ARBITRATOR_KEY);
+    arbitratorKeypair = Ed25519Keypair.fromSecretKey(secretKey);
+    console.log('Sui arbitrator keypair loaded:', arbitratorKeypair.toSuiAddress());
+  }
+} catch (err) {
+  console.warn('ARIA_ARBITRATOR_KEY invalid or missing — resolve_dispute transactions disabled:', err.message);
+}
+
 // Extracts the ID of the last "Created" object from a PTB's changedObjects array.
 // When a transaction splits a coin AND creates a shared object, both appear as
 // "Created" entries. PTB execution order guarantees the ephemeral split-coin
@@ -56,6 +84,24 @@ export function extractCreatedObjectId(changedObjects) {
   });
   const chosen = createdEntries[createdEntries.length - 1];
   return chosen?.objectId ?? chosen?.id ?? chosen?.object_id ?? null;
+}
+
+// P2 / Phase 1j: claim_damage and dispute_claim take `&mut BookingEscrow<T>`
+// rather than consuming it — the shared object keeps its existing ID and
+// shows up in a PTB's effects as a "Mutated" changedObjects entry, not
+// "Created". This checks that the specific escrow object id we expect to see
+// mutated actually appears with a mutated-type operation, so a digest that
+// happened to touch some unrelated object can't be mistaken for a real
+// claim/dispute confirmation.
+export function isObjectMutated(changedObjects, expectedObjectId) {
+  if (!expectedObjectId) return false;
+  return (changedObjects || []).some(c => {
+    const id = c.objectId ?? c.id ?? c.object_id;
+    if (id !== expectedObjectId) return false;
+    let op = c.idOperation ?? c.operation ?? c.id_operation ?? c.$kind;
+    if (op && typeof op === 'object') op = op.$kind;
+    return typeof op === 'string' && /mutated/i.test(op);
+  });
 }
 
 // Builds (but does NOT sign or execute) the PTB that creates a BookingEscrow
@@ -159,6 +205,101 @@ export async function verifyEscrowTransaction(digest, expectedSender) {
   return { ok: true, escrowId, sender: actualSender };
 }
 
+// ── P2 / Phase 1j: claim_damage / dispute_claim ─────────────────────────────
+// Both functions assert a specific sender on-chain (escrow.host for
+// claim_damage, escrow.guest for dispute_claim) that the ARIA backend does
+// not hold a key for — these follow the exact same non-custodial pattern as
+// buildEscrowTransaction: the backend only assembles unsigned tx bytes, the
+// host/guest signs and submits from their own browser (zkLogin), and the
+// backend re-verifies the resulting digest on-chain before writing anything
+// to Postgres (see verifyClaimDamageTransaction / verifyDisputeClaimTransaction
+// below, used by the /booking/claim-damage/confirm and
+// /booking/dispute-claim/confirm routes).
+//
+// claimAmount arrives in dollars (same unit as bookings.deposit_amount) and
+// is converted to mist the same way buildEscrowTransaction converts
+// depositAmount, so a claim of "the full deposit" round-trips exactly.
+export async function buildClaimDamageTransaction(escrowObjectId, hostAddr, claimAmount, logger = console) {
+  if (!escrowObjectId || !hostAddr || !process.env.ESCROW_PACKAGE_ID) return null;
+  try {
+    const claimMist = BigInt(Math.max(1, claimAmount)) * 1000n;
+    const tx = new Transaction();
+    tx.setSender(hostAddr);
+    tx.moveCall({
+      target: `${process.env.ESCROW_PACKAGE_ID}::${process.env.ESCROW_MODULE_NAME || 'escrow'}::claim_damage`,
+      typeArguments: ['0x2::sui::SUI'],
+      arguments: [
+        tx.object(escrowObjectId),
+        tx.pure.u64(claimMist),
+        tx.object('0x6'),
+      ],
+    });
+    const txBytes = await tx.build({ client: suiClient });
+    return { txBytes: toBase64(txBytes) };
+  } catch (err) {
+    logger?.error?.({ message: err.message, name: err.name }, 'buildClaimDamageTransaction error');
+    return null;
+  }
+}
+
+export async function buildDisputeClaimTransaction(escrowObjectId, guestAddr, logger = console) {
+  if (!escrowObjectId || !guestAddr || !process.env.ESCROW_PACKAGE_ID) return null;
+  try {
+    const tx = new Transaction();
+    tx.setSender(guestAddr);
+    tx.moveCall({
+      target: `${process.env.ESCROW_PACKAGE_ID}::${process.env.ESCROW_MODULE_NAME || 'escrow'}::dispute_claim`,
+      typeArguments: ['0x2::sui::SUI'],
+      arguments: [
+        tx.object(escrowObjectId),
+      ],
+    });
+    const txBytes = await tx.build({ client: suiClient });
+    return { txBytes: toBase64(txBytes) };
+  } catch (err) {
+    logger?.error?.({ message: err.message, name: err.name }, 'buildDisputeClaimTransaction error');
+    return null;
+  }
+}
+
+// Shared verification core for claim_damage/dispute_claim digests — same
+// discriminated-union unwrapping as verifyEscrowTransaction (see that
+// function's comment for why result.$kind must be checked rather than
+// reading result.status/.transaction/.effects directly), but checks for a
+// Mutated entry matching the known escrow object id instead of a Created one,
+// since these calls take `&mut BookingEscrow<T>` rather than consuming it.
+async function verifyEscrowMutation(digest, expectedSender, expectedEscrowId, label) {
+  const result = await suiClient.core.getTransaction({
+    digest,
+    include: { transaction: true, effects: true, objectTypes: true },
+  });
+
+  if (result?.$kind !== 'Transaction') {
+    const errMsg = result?.FailedTransaction?.status?.error?.message;
+    return { ok: false, reason: errMsg || `${label} transaction did not succeed on-chain` };
+  }
+
+  const txn = result.Transaction;
+  const actualSender = txn?.transaction?.sender;
+  if (expectedSender && actualSender && actualSender !== expectedSender) {
+    return { ok: false, reason: 'Transaction sender does not match the expected signer' };
+  }
+
+  if (!isObjectMutated(txn?.effects?.changedObjects, expectedEscrowId)) {
+    return { ok: false, reason: `Transaction did not mutate the expected escrow object (${expectedEscrowId})` };
+  }
+
+  return { ok: true, sender: actualSender };
+}
+
+export async function verifyClaimDamageTransaction(digest, expectedHost, escrowObjectId) {
+  return verifyEscrowMutation(digest, expectedHost, escrowObjectId, 'claim_damage');
+}
+
+export async function verifyDisputeClaimTransaction(digest, expectedGuest, escrowObjectId) {
+  return verifyEscrowMutation(digest, expectedGuest, escrowObjectId, 'dispute_claim');
+}
+
 // ── P1b (key separation, corrects an earlier inaccurate comment here): who
 // needs to sign auto_release, and why a minimally-scoped key is sufficient.
 //
@@ -219,6 +360,50 @@ export async function autoReleaseEscrow(escrowObjectId) {
     return true;
   } catch (err) {
     console.warn('autoReleaseEscrow failed:', err.message);
+    return false;
+  }
+}
+
+// P2 / Phase 1j: unlike claim_damage/dispute_claim, resolve_dispute IS
+// backend-signed — per the roadmap's Phase 3 design, ARIA itself decides and
+// submits the final split after reviewing a dispute, rather than the guest or
+// host signing it. arbitratorKeypair is the narrowly-scoped key for exactly
+// this one call (see comment above its declaration). guestAmount/hostAmount
+// arrive in dollars and are converted to mist the same way the deposit itself
+// was; the Move contract asserts they sum to escrow.amount exactly, so a
+// mismatched split fails on-chain rather than silently misallocating funds.
+export async function resolveDisputeEscrow(escrowObjectId, guestAmount, hostAmount) {
+  if (!arbitratorKeypair || !escrowObjectId || !process.env.ESCROW_PACKAGE_ID) return false;
+  const sender = arbitratorKeypair.toSuiAddress();
+  try {
+    const guestMist = BigInt(Math.max(0, guestAmount)) * 1000n;
+    const hostMist  = BigInt(Math.max(0, hostAmount)) * 1000n;
+
+    const tx = new Transaction();
+    tx.setSender(sender);
+    tx.moveCall({
+      target: `${process.env.ESCROW_PACKAGE_ID}::${process.env.ESCROW_MODULE_NAME || 'escrow'}::resolve_dispute`,
+      typeArguments: ['0x2::sui::SUI'],
+      arguments: [
+        tx.object(escrowObjectId),
+        tx.pure.u64(guestMist),
+        tx.pure.u64(hostMist),
+      ],
+    });
+
+    const result = await arbitratorKeypair.signAndExecuteTransaction({
+      transaction: tx,
+      client: suiClient,
+      include: { effects: true },
+    });
+
+    if (result?.$kind === 'FailedTransaction') {
+      console.warn('resolveDispute failed on-chain:', result.FailedTransaction?.status?.error?.message);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn('resolveDisputeEscrow failed:', err.message);
     return false;
   }
 }

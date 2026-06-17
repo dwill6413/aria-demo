@@ -21,6 +21,34 @@ import { Resend } from 'resend';
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
+// ── P2 / Phase 1i: production host address lookup ──────────────────────────
+// Replaces the old "stand in with the backend signer's own address" testnet
+// placeholder. Looks up the real host for a property from catalog.mjs's
+// hostAddress field (see catalog.mjs comment), then prefers that host's
+// host_profiles.payout_sui_address (where they actually want deposit-release
+// funds to land) over their login sui_address, since the two can differ. If
+// no hostAddress is configured for the property yet (still true for all 6
+// demo properties until a real host is approved and wired in), falls back to
+// the auto-release key's address — the exact same placeholder behavior as
+// before this function existed, just now centralized in one place instead of
+// inlined in createBooking.
+export async function getPropertyHostAddress(propertyId, logger = console) {
+  const configuredHost = PROPERTIES[Number(propertyId)]?.hostAddress;
+  if (!configuredHost) {
+    return autoReleaseKeypair ? autoReleaseKeypair.toSuiAddress() : null;
+  }
+  try {
+    const result = await pool.query(
+      'SELECT payout_sui_address FROM host_profiles WHERE sui_address = $1',
+      [configuredHost]
+    );
+    return result.rows[0]?.payout_sui_address || configuredHost;
+  } catch (err) {
+    logger?.warn?.({ err, propertyId }, 'host_profiles payout address lookup failed — using configured hostAddress directly');
+    return configuredHost;
+  }
+}
+
 // Pushes a JSON receipt to Walrus testnet and returns the resulting blobId,
 // or null if the push fails (non-blocking — a booking is still valid without
 // a Walrus receipt, it just loses the permanent off-chain audit copy).
@@ -174,18 +202,25 @@ export async function createBooking({ propertyId, checkIn, checkOut, session, lo
   // and escrow_object_id stays null until the guest reports a signed digest
   // to /booking/:bookingRef/escrow/confirm, which re-verifies on-chain.
   //
-  // Testnet placeholder: stand in with the backend signer's own address as
-  // host since HOST_ADDRESSES contains emails not Sui addresses (P2, still
-  // unbuilt). This has no bearing on P1b — any address works as this
-  // placeholder, it's unrelated to the auto-release key's actual job.
-  // Production: look up from host_profiles.sui_address based on property_id.
+  // P2 / Phase 1i: real host lookup (see getPropertyHostAddress above) — no
+  // longer the backend signer's own address standing in for every property.
+  // Still falls back to that same placeholder when a demo property has no
+  // configured host, so testnet behavior is unchanged until real hosts are
+  // wired into catalog.mjs.
   let escrowTxBytes = null;
   try {
-    const hostAddr = autoReleaseKeypair ? autoReleaseKeypair.toSuiAddress() : null;
+    const hostAddr = await getPropertyHostAddress(propertyId, logger);
     if (hostAddr) {
       const built = await buildEscrowTransaction(bookingRef, session.suiAddress, hostAddr, depositAmount, logger);
       if (built?.txBytes) {
         escrowTxBytes = built.txBytes;
+        // Recorded so /booking/claim-damage can verify the caller is really
+        // this booking's host without re-deriving the lookup (and so the
+        // record reflects the address actually baked into the on-chain
+        // escrow object, even if catalog.mjs's mapping changes later).
+        try {
+          await pool.query('UPDATE bookings SET host_sui_address = $1 WHERE booking_ref = $2', [hostAddr, bookingRef]);
+        } catch (err) { logger?.warn?.({ err, bookingRef }, 'Failed to persist host_sui_address'); }
       } else {
         logger?.warn?.({ bookingRef }, 'buildEscrowTransaction returned null');
       }

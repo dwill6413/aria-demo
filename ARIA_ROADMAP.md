@@ -1,5 +1,5 @@
 # ARIA — Product Roadmap & AI Handoff Document
-**Version:** 2.10 | **Updated:** June 17, 2026
+**Version:** 2.11 | **Updated:** June 17, 2026
 **Purpose:** Complete handoff for an AI assistant continuing ARIA development.
 Read this entire document before writing any code.
 
@@ -168,21 +168,63 @@ Scope decisions (locked):
 3. **Cohort arbitrators**: `arbitrator` is per-escrow, so different cohorts can use
    different addresses with zero migration of existing escrows.
 
-**P2 — Auto-release cron job**
-No scheduled job triggers `auto_release` after expiry. Build a job that queries
-bookings where `checkout_date + 5 days < NOW()` and `deposit_status = 'held'`
-and `escrow_object_id IS NOT NULL`, then calls `auto_release` on each.
+**P2 — Auto-release cron job — ✅ DONE (June 17, 2026)**
+`runAutoReleaseSweep()` in `server.mjs` queries bookings where
+`check_out + INTERVAL '5 days' < NOW()` and `deposit_status = 'held'` and
+`escrow_object_id IS NOT NULL`, then calls `autoReleaseEscrow()` on each and
+flips `deposit_status` to `released` on success. Wired via `setInterval`
+(default hourly, `AUTO_RELEASE_SWEEP_INTERVAL_MS` env override) plus a
+30-second startup `setTimeout` so it also runs once shortly after boot.
 
-**P2 — Production host address lookup**
-`createEscrowOnChain` currently passes the deployer address as the host.
-Replace with: `SELECT payout_sui_address FROM host_profiles WHERE ...`
-queried by `property_id` at booking time.
+**P2 — Production host address lookup — ✅ DONE (June 17, 2026)**
+Added `getPropertyHostAddress(propertyId, logger)` in `bookings.mjs`. Looks up
+`PROPERTIES[propertyId].hostAddress` (new field in `catalog.mjs`, since the
+`properties` table is empty/unused — see tech debt backlog), then prefers
+`host_profiles.payout_sui_address` for that host if set, falling back to the
+configured address, falling back further to `autoReleaseKeypair.toSuiAddress()`
+if no host is configured yet for that property (current state for all 6 demo
+properties). `createBooking` now calls this and persists the resolved address
+to the new `bookings.host_sui_address` column.
 
-**P2 — Claim/dispute backend routes**
-Contract functions `claim_damage`, `dispute_claim`, `resolve_dispute` are
-implemented and tested but no backend routes call them.
-Build: `/booking/claim-damage`, `/booking/dispute-claim`, arbitrator endpoint.
-See Phase 3 below.
+**P2 — Claim/dispute backend routes — ✅ DONE (June 17, 2026)**
+Contract functions `claim_damage`, `dispute_claim`, `resolve_dispute` are now
+wired end-to-end using the same non-custodial build/sign/verify pattern as
+escrow creation:
+- `/booking/claim-damage` (host) + `/booking/claim-damage/confirm` — builds an
+  unsigned `claim_damage` PTB for the host to sign, then verifies the resulting
+  digest mutated the expected escrow before setting `deposit_status='claimed'`.
+- `/booking/dispute-claim` (guest) + `/booking/dispute-claim/confirm` — same
+  pattern for `dispute_claim`, sets `deposit_status='disputed'`.
+- `/booking/resolve-dispute` (superadmin/arbitrator-gated) — calls the new
+  `resolveDisputeEscrow()`, which signs with the dedicated `ARIA_ARBITRATOR_KEY`
+  (see P1a) and calls `resolve_dispute` with the validated guest/host split
+  (`guestAmount + hostAmount` must equal the deposit). Sets `deposit_status` to
+  `forfeited` (guestAmount === 0) or `released` otherwise.
+- `escrow.mjs` gained `buildClaimDamageTransaction`, `buildDisputeClaimTransaction`,
+  `isObjectMutated`, the shared `verifyEscrowMutation` helper, and public
+  wrappers `verifyClaimDamageTransaction`/`verifyDisputeClaimTransaction`.
+- `db.mjs` added 9 new `bookings` columns: `host_sui_address`, `claim_amount`,
+  `claim_reason`, `claimed_at`, `dispute_reason`, `disputed_at`,
+  `resolved_guest_amount`, `resolved_host_amount`, `resolved_at`.
+- `validation.mjs` added 5 new zod schemas for the routes above.
+- `/booking/release-deposit` now guards against `['claimed','disputed','forfeited']`
+  status so it can't double-release a deposit that's mid-claim-flow.
+- 18 new unit tests added to `escrow.test.mjs` covering `isObjectMutated`,
+  `verifyClaimDamageTransaction`, `verifyDisputeClaimTransaction` (33 total,
+  all passing).
+- Automating `resolve_dispute` requires a key the backend can actually load
+  and sign with — the P1a arbitrator address was documented as cold-KeePass,
+  manual-signing-only, so a new operational `ARIA_ARBITRATOR_KEY` was
+  generated and funded with testnet SUI via the faucet this session. This
+  effectively brings forward step 2 of the "arbitration scaling path" in the
+  P1 section above. **Manual step required:** set `ARIA_ARBITRATOR_KEY`
+  (private, bech32 `suiprivkey1...`) and update `ARIA_ARBITRATOR_ADDRESS` to
+  match (new public address in Section 8) in Railway — the private key was
+  delivered to the operator via chat only, never committed to any file, per
+  this doc's own rule (Section 7). Any escrow created before this Railway
+  update used the old P1a address as `arbitrator` on-chain and can only be
+  resolved with that original cold key; this is a non-issue for fresh testnet
+  bookings going forward.
 
 **P3 — Minor contract cleanup**
 - `STATUS_RESOLVED` constant is dead code (resolve_dispute deletes the object)
@@ -194,7 +236,7 @@ See Phase 3 below.
 - [x] P0b complete (June 16, 2026 — guest-funded escrow, live-tested end-to-end)
 - [x] P1a complete (arbitrator key separated, wired, on-chain)
 - [x] P1b complete (June 17, 2026 — deployer/backend-signer separated; new key needs Railway/faucet setup, see P1 section above)
-- [ ] P2 complete
+- [x] P2 complete (June 17, 2026 — auto-release cron, production host lookup, claim/dispute routes; new `ARIA_ARBITRATOR_KEY` needs Railway setup, see P2 section above)
 - [ ] Independent Move audit (OtterSec, Zellic, or similar)
 - [ ] Burn UpgradeCap after audit
 
@@ -270,33 +312,25 @@ SEAL_PACKAGE_ID = 0x<from deployment>
 
 ---
 
-### PHASE 3 — 5-Day Inspection Window Business Logic
-**Priority: Medium. Extends Phase 1 with real-world timing and claim flows.**
+### ✅ PHASE 3 — 5-Day Inspection Window Business Logic
+**Status: COMPLETE (June 17, 2026) — delivered as part of P2 above.**
 
-#### What to build
+1. **Timing gate** — ✅ `/booking/release-deposit` rejects release before `check_out`.
 
-1. **Timing gate** — `/booking/release-deposit` only callable after `check_out` date.
+2. **Auto-release job** — ✅ `runAutoReleaseSweep()` in `server.mjs`.
 
-2. **Auto-release job** — query bookings where `checkout + 5 days < NOW()` and
-   `deposit_status = 'held'` and `escrow_object_id IS NOT NULL`. Call `auto_release`.
-   Update Postgres. (Same as Phase 1 P2 item.)
+3. **Claim route — `/booking/claim-damage`** — ✅ host-only, validates ownership +
+   checkout-passed + claim ≤ deposit, builds unsigned `claim_damage` PTB,
+   `/confirm` route verifies on-chain mutation before setting
+   `deposit_status = 'claimed'`, emails guest.
 
-3. **Claim route — `/booking/claim-damage`**
-   - Host calls with `{ bookingRef, claimAmount, reason }`
-   - Validates: host owns property, booking checked out, within 5-day window
-   - Calls `claim_damage` on contract
-   - Updates `deposit_status = 'claimed'`
-   - Emails guest with claim details and dispute option
+4. **Dispute route — `/booking/dispute-claim`** — ✅ guest-only, builds unsigned
+   `dispute_claim` PTB, `/confirm` verifies on-chain mutation before setting
+   `deposit_status = 'disputed'`, notifies ARIA admin. `/booking/resolve-dispute`
+   (superadmin-gated) signs with `ARIA_ARBITRATOR_KEY` and calls `resolve_dispute`
+   with the validated split.
 
-4. **Dispute route — `/booking/dispute-claim`**
-   - Guest calls with `{ bookingRef, reason }`
-   - Updates `deposit_status = 'disputed'`
-   - Notifies ARIA admin
-   - ARIA calls `resolve_dispute` on contract with final split
-
-5. **Extend `deposit_status`**
-   Currently: `held` | `released`
-   Add: `claimed` | `disputed` | `forfeited`
+5. **Extend `deposit_status`** — ✅ `held` | `released` | `claimed` | `disputed` | `forfeited`
 
 ---
 
@@ -313,10 +347,10 @@ SEAL_PACKAGE_ID = 0x<from deployment>
 ✅ Phase 1f1.6: Wallet address full visibility + copy button (done June 15, 2026)
 ✅ Phase 1f2: P0b — Guest wallet funds escrow (done June 16, 2026)
 ✅ Phase 1g2: P1b — Deployer/backend-signer separation (done June 17, 2026)
-⬜ Phase 1h: P2 — Auto-release cron job
+✅ Phase 1h: P2 — Auto-release cron job (done June 17, 2026)
 ⬜ Phase 1h.5: Fee collection/routing mechanism (Stripe + SuiUSD paths — needs design)
-⬜ Phase 1i: P2 — Production host address lookup
-⬜ Phase 1j: P2 — Claim/dispute backend routes
+✅ Phase 1i: P2 — Production host address lookup (done June 17, 2026)
+✅ Phase 1j: P2 — Claim/dispute backend routes (done June 17, 2026)
 ⬜ Phase 1k: P3 — STATUS_RESOLVED + optional expiry bound
 
 ⬜ Phase 2a: pii_access.move (Seal allowlist contract)
@@ -338,15 +372,15 @@ SEAL_PACKAGE_ID = 0x<from deployment>
 
 | Item | Priority | Notes |
 |---|---|---|
-| Key separation | **P1** | Same hot key for deployer + backend signer — must fix for mainnet. P0b is done, so backend signer's role is now scoped to `auto_release`; unblocked, next session. |
+| Key separation | **Done** | P1a/P1b/P2 all complete — deployer, auto-release, and arbitrator keys are now three separate, appropriately-scoped keypairs. |
 | Fee collection/routing mechanism | High | Currently zero implementation. ARIA's revenue (booking fee) is separate from the escrow (guest security deposit) — no mechanism exists to collect or route ARIA's cut. Two paths to design: Stripe Connect-style split (fiat), and a SuiUSD on-chain split (PTB splits rental payment between host and ARIA in one tx, similar to resolve_dispute's split logic). Needs design before/alongside P0b. |
-| Auto-release job | P2 | Phase 1h |
-| Production host address | P2 | Phase 1i |
-| Claim/dispute routes | P2 | Phase 1j / Phase 3 |
-| Properties frontend-hardcoded | Medium | `properties` table empty |
+| Auto-release job | **Done** | Phase 1h — `runAutoReleaseSweep()` in `server.mjs`, hourly + 30s-after-boot |
+| Production host address | **Done** | Phase 1i — `getPropertyHostAddress()` in `bookings.mjs`; `catalog.mjs` still needs real per-property `hostAddress` values set once hosts are onboarded |
+| Claim/dispute routes | **Done** | Phase 1j — `/booking/claim-damage`, `/booking/dispute-claim`, `/booking/resolve-dispute` |
+| Properties frontend-hardcoded | Medium | `properties` table empty; `catalog.mjs` now also carries `hostAddress` per property, still hand-maintained |
 | Frontend tax/price duplication | Low | `catalog.mjs` centralizes backend |
 | Stripe webhooks | Medium | Create-intent only |
-| No automated tests | Medium | Backend unit tests started (`escrow.test.mjs`). No frontend tests. |
+| No automated tests | Medium | Backend unit tests in `escrow.test.mjs` — 33 passing (15 `extractCreatedObjectId`, 3 `verifyEscrowTransaction`, 8 `isObjectMutated`, 4 `verifyClaimDamageTransaction`, 3 `verifyDisputeClaimTransaction`). No frontend tests. |
 | `zod` unused | Low | Already a dep; use for validation |
 | Legacy `hosts` table | Low | Unused; drop it |
 | `@anthropic-ai/sdk` unused | Low | Remove |
@@ -388,6 +422,8 @@ Follow-up: one-time authorization code exchange.
 | Arbitrator key custody | Cold (KeePass), separate from deployer & backend signer | Bounded blast radius enables safe future scaling |
 | Private keys in documentation | **Never** — public addresses only | Roadmap/handoff docs are pushed to public GitHub |
 | extractCreatedObjectId | Named function in `server.mjs`, tested in `escrow.test.mjs` | Reuse for Phase 2 pii_access; do not inline |
+| Claim/dispute verification | Same build-unsigned/client-signs/backend-verifies-on-chain pattern as escrow creation | Consistency; backend never custodies host/guest signing authority for claim_damage/dispute_claim |
+| Arbitration automation | Brought forward from "future scaling" to now — dedicated `ARIA_ARBITRATOR_KEY` signs `resolve_dispute` directly from the backend | Manual KeePass signing doesn't scale to a working `/booking/resolve-dispute` route; blast radius still bounded per-escrow by the contract |
 
 ---
 
@@ -403,7 +439,17 @@ ARIA_AUTO_RELEASE_KEY   = <suiprivkey1... bech32 format — Railway only, never 
                            P1b: scoped to auto_release only, zero special on-chain
                            privilege (see escrow.mjs). The original deployer/UpgradeCap
                            key has been retired from Railway to cold KeePass-only storage.>
-ARIA_ARBITRATOR_ADDRESS = 0x0069868f93f9127b3e8b51bf95bc529925ca382e6305da0bb01f693826b983f8
+ARIA_ARBITRATOR_KEY     = <suiprivkey1... bech32 format — Railway only, never committed.
+                           P2: scoped to resolve_dispute only. Generated and funded
+                           with testnet SUI June 17, 2026; delivered to the operator
+                           via chat only, per Section 7's rule. NOT yet set in Railway
+                           as of this writing — manual step.>
+ARIA_ARBITRATOR_ADDRESS = 0xf46527e18f2fd7d3093c9591ded66e3a8711a18de63cd0bede2d88692e6f6a65
+                          (P2, June 17, 2026 — supersedes the P1a placeholder address
+                          0x0069868f93f9127b3e8b51bf95bc529925ca382e6305da0bb01f693826b983f8
+                          for new bookings going forward; see P2 section above)
+AUTO_RELEASE_SWEEP_INTERVAL_MS = <optional, default 3600000 (1 hour) — sweep cadence
+                           for runAutoReleaseSweep()>
 ```
 
 **To add for Phase 2:**
@@ -434,12 +480,20 @@ NEXT_PUBLIC_API_URL = https://aria-demo-production-e590.up.railway.app
 
 ---
 
-*ARIA Roadmap v2.10 — June 17, 2026*
-*Changes from v2.9: Marked P1b (deployer/backend-signer key separation) complete.
-`escrow.mjs`/`bookings.mjs`/`server.mjs` renamed `ARIA_DEPLOYER_KEY`/`deployerKeypair`
-to `ARIA_AUTO_RELEASE_KEY`/`autoReleaseKeypair`; corrected an inaccurate code comment
-that had claimed `auto_release` required arbitrator-level on-chain authority (it's
-actually permissionless — confirmed against escrow.move — so the new key carries no
-special privilege). A fresh narrowly-scoped key was generated for this one remaining
-backend-signed action; the original deployer/UpgradeCap key is being retired to cold
-KeePass-only storage. Updated pre-mainnet gate and build order accordingly.*
+*ARIA Roadmap v2.11 — June 17, 2026*
+*Changes from v2.10: Marked P2 (auto-release cron job, production host address
+lookup, claim/dispute backend routes) and Phase 3 (5-day inspection window
+business logic) complete. Added `runAutoReleaseSweep()` to `server.mjs`;
+`getPropertyHostAddress()` to `bookings.mjs` with `catalog.mjs` gaining a
+per-property `hostAddress` field; `buildClaimDamageTransaction`,
+`buildDisputeClaimTransaction`, `isObjectMutated`, `verifyClaimDamageTransaction`,
+`verifyDisputeClaimTransaction` to `escrow.mjs`; 5 new routes
+(`/booking/claim-damage[/confirm]`, `/booking/dispute-claim[/confirm]`,
+`/booking/resolve-dispute`) and 5 new zod schemas to `validation.mjs`; 9 new
+`bookings` columns to `db.mjs`. `deposit_status` extended to
+`held|released|claimed|disputed|forfeited`. Generated and funded a new
+operational `ARIA_ARBITRATOR_KEY`/`ARIA_ARBITRATOR_ADDRESS` so the backend can
+actually sign `resolve_dispute` (the P1a address was cold-only); this
+supersedes the P1a address for new bookings — manual Railway step still
+pending. 18 new unit tests added to `escrow.test.mjs` (33 total, all passing).
+Updated pre-mainnet gate, build order, and tech debt backlog accordingly.*

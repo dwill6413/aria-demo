@@ -6,13 +6,25 @@
 
 // Authoritative nightly prices. These match the values shown in the frontend,
 // so legitimate booking totals are unchanged; only tampered prices are rejected.
+//
+// hostAddress (P2 / Phase 1i): the Sui address that owns each of these 6 demo
+// properties. This is the missing link the "Testnet placeholder" comment in
+// bookings.mjs referred to — the `properties` DB table was scaffolded for a
+// future "hosts add their own listings" feature but is still empty (see
+// ARIA_ROADMAP.md tech debt backlog), so for these fixed demo properties the
+// host mapping lives here instead of a DB join. null means "no real host
+// configured yet for this demo property" — bookings.mjs's
+// getPropertyHostAddress() falls back to the auto-release key's address in
+// that case, same placeholder behavior as before this field existed. Once a
+// real host applies via /host/apply and is approved, set their sui_address
+// here so createBooking looks up their host_profiles.payout_sui_address.
 export const PROPERTIES = {
-  1: { title: 'Oceanfront Villa',    price: 285 },
-  2: { title: 'Downtown Loft',       price: 145 },
-  3: { title: 'Mountain Cabin',      price: 195 },
-  4: { title: 'Desert Retreat',      price: 225 },
-  5: { title: 'Lake House',          price: 320 },
-  6: { title: 'Historic Brownstone', price: 175 },
+  1: { title: 'Oceanfront Villa',    price: 285, hostAddress: null },
+  2: { title: 'Downtown Loft',       price: 145, hostAddress: null },
+  3: { title: 'Mountain Cabin',      price: 195, hostAddress: null },
+  4: { title: 'Desert Retreat',      price: 225, hostAddress: null },
+  5: { title: 'Lake House',          price: 320, hostAddress: null },
+  6: { title: 'Historic Brownstone', price: 175, hostAddress: null },
 };
 
 export const JURISDICTION_TAX_RATES = {

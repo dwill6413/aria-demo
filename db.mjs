@@ -131,6 +131,22 @@ export async function initDB() {
   // Idempotent column additions for existing deployments
   await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS escrow_object_id TEXT`);
 
+  // P2 / Phase 1i + 1j: host address actually baked into this booking's
+  // on-chain escrow (see bookings.mjs getPropertyHostAddress), and the
+  // claim/dispute/resolution lifecycle fields. deposit_status is plain TEXT
+  // (no CHECK constraint, matching payment_status elsewhere in this schema)
+  // and now takes on 'claimed' | 'disputed' | 'forfeited' in addition to the
+  // existing 'pending' | 'held' | 'released'.
+  await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS host_sui_address TEXT`);
+  await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS claim_amount INTEGER`);
+  await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS claim_reason TEXT`);
+  await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS dispute_reason TEXT`);
+  await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS disputed_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS resolved_guest_amount INTEGER`);
+  await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS resolved_host_amount INTEGER`);
+  await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ`);
+
   // ── Indexes (Phase 3 / Finding #13) ───────────────────────────────────────
   // bookings.booking_ref already has an implicit unique index from its UNIQUE
   // NOT NULL column constraint above — no separate index needed there.

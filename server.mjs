@@ -12,9 +12,17 @@ import { registerAIRoute } from './ai_route.mjs';
 import { handleZkLoginCallback, getSession } from './auth.mjs';
 import { initDB, pool } from './db.mjs';
 import { PROPERTIES, JURISDICTION_TAX_RATES } from './catalog.mjs';
-import { verifyEscrowTransaction, autoReleaseEscrow } from './escrow.mjs';
+import {
+  verifyEscrowTransaction, autoReleaseEscrow,
+  buildClaimDamageTransaction, buildDisputeClaimTransaction,
+  verifyClaimDamageTransaction, verifyDisputeClaimTransaction,
+  resolveDisputeEscrow
+} from './escrow.mjs';
 import { createBooking } from './bookings.mjs';
-import { bookingCreateSchema, paymentCreateIntentSchema, hostApplySchema, validateBody } from './validation.mjs';
+import {
+  bookingCreateSchema, paymentCreateIntentSchema, hostApplySchema, validateBody,
+  claimDamageSchema, claimDamageConfirmSchema, disputeClaimSchema, disputeClaimConfirmSchema, resolveDisputeSchema
+} from './validation.mjs';
 
 dotenvConfig();
 
@@ -65,6 +73,21 @@ async function canManageProperty(session, propertyId) {
     );
     return r.rows.length > 0;
   } catch { return false; }
+}
+
+// P2 / Phase 1j: claim_damage asserts on-chain that the signer IS escrow.host
+// — not just "manages the property" in the loose canManageProperty sense —
+// so the booking's own host_sui_address (the address actually baked into its
+// on-chain escrow object, recorded by createBooking) is the authoritative
+// check. Superadmins (HOST_ADDRESSES) and canManageProperty are kept as
+// fallbacks for forward-compatibility once the `properties` table is
+// populated, but neither bypasses the on-chain assertion itself — if the
+// caller isn't really escrow.host, the signed transaction simply fails
+// on-chain with ENotHost when they try to submit it.
+async function canClaimAsHost(session, booking) {
+  if (HOST_ADDRESSES.includes((session?.email || '').toLowerCase())) return true;
+  if (booking.host_sui_address && session?.suiAddress === booking.host_sui_address) return true;
+  return canManageProperty(session, booking.property_id);
 }
 
 const resend = new Resend(process.env.RESEND_API_KEY);
@@ -375,6 +398,14 @@ fastify.post('/booking/release-deposit', {
     if (!(await canManageProperty(session, booking.property_id)))
       return reply.code(403).send({ error: 'You do not manage this property' });
     if (booking.deposit_status === 'released') return reply.code(400).send({ error: 'Deposit already released' });
+    if (['claimed', 'disputed', 'forfeited'].includes(booking.deposit_status))
+      return reply.code(400).send({ error: `Deposit is in the claim/dispute flow (status: ${booking.deposit_status}) — use /booking/resolve-dispute instead` });
+
+    // P3 (Phase 3 item 1): only callable after checkout — releasing early would
+    // skip the host's 5-day inspection window entirely.
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    if (today < new Date(booking.check_out))
+      return reply.code(400).send({ error: 'Deposit cannot be released before checkout' });
 
     // ── On-chain escrow release (non-blocking) ───────────────────────────────
     let escrowReleased = false;
@@ -394,6 +425,251 @@ fastify.post('/booking/release-deposit', {
     return { success: true, bookingRef, depositReleaseWalrusBlobId, message: `Deposit of $${booking.deposit_amount} released to guest.` };
   } catch (err) {
     return reply.code(500).send({ error: 'Failed to release deposit' });
+  }
+});
+
+// ── P2 / Phase 1j: Claim / Dispute / Resolution routes ─────────────────────
+// Non-custodial build+confirm pairs for claim-damage (host-signed) and
+// dispute-claim (guest-signed), mirroring /booking/create + escrow/confirm.
+// resolve-dispute is the one exception — ARIA itself signs that call with the
+// narrowly-scoped arbitrator key (see escrow.mjs's resolveDisputeEscrow
+// comment), so it has no separate confirm step; it executes immediately like
+// /booking/release-deposit does.
+
+// Claim Damage (build) — HOST ONLY. Returns unsigned tx bytes for the host to
+// sign client-side; nothing is written to Postgres until the host reports the
+// digest to /booking/claim-damage/confirm below.
+fastify.post('/booking/claim-damage', {
+  config: {
+    rateLimit: { max: 10, timeWindow: '1 hour', errorResponseBuilder: () => ({ error: 'Too many claim attempts.' }) }
+  }
+}, async (request, reply) => {
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+  const session = await getSession(sessionId);
+  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  if (validateBody(claimDamageSchema, request, reply)) return;
+
+  const { bookingRef, reason } = request.body;
+  const claimAmount = Number(request.body.claimAmount);
+  if (!bookingRef.startsWith('ARIA-')) return reply.code(400).send({ error: 'A valid bookingRef is required' });
+  if (!Number.isFinite(claimAmount) || claimAmount <= 0) return reply.code(400).send({ error: 'claimAmount must be a positive number' });
+
+  try {
+    const result = await pool.query('SELECT * FROM bookings WHERE booking_ref = $1', [bookingRef]);
+    if (result.rows.length === 0) return reply.code(404).send({ error: 'Booking not found' });
+    const booking = result.rows[0];
+
+    if (!(await canClaimAsHost(session, booking))) return reply.code(403).send({ error: 'You do not manage this property' });
+    if (!booking.escrow_object_id) return reply.code(400).send({ error: 'No on-chain escrow exists for this booking yet' });
+    if (booking.deposit_status !== 'held') return reply.code(400).send({ error: `Deposit is not in a claimable state (status: ${booking.deposit_status})` });
+
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    if (today < new Date(booking.check_out)) return reply.code(400).send({ error: 'Cannot file a claim before checkout' });
+    if (claimAmount > booking.deposit_amount) return reply.code(400).send({ error: 'claimAmount cannot exceed the deposit amount' });
+
+    const built = await buildClaimDamageTransaction(booking.escrow_object_id, session.suiAddress, claimAmount, fastify.log);
+    if (!built?.txBytes) return reply.code(502).send({ error: 'Could not build the claim transaction — escrow may not be configured correctly' });
+
+    return { success: true, claimTxBytes: built.txBytes, claimAmount, reason,
+      message: 'Sign this transaction in your wallet, then report the digest to /booking/claim-damage/confirm' };
+  } catch (err) {
+    fastify.log.error({ err, bookingRef }, '/booking/claim-damage failed');
+    return reply.code(500).send({ error: 'Failed to build claim transaction' });
+  }
+});
+
+// Claim Damage (confirm) — re-verifies the signed tx on-chain before writing
+// claim_amount/claim_reason and flipping deposit_status='claimed', same
+// trust model as /booking/:bookingRef/escrow/confirm.
+fastify.post('/booking/claim-damage/confirm', {
+  config: {
+    rateLimit: { max: 10, timeWindow: '1 hour', errorResponseBuilder: () => ({ error: 'Too many claim confirmation attempts.' }) }
+  }
+}, async (request, reply) => {
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+  const session = await getSession(sessionId);
+  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  if (validateBody(claimDamageConfirmSchema, request, reply)) return;
+
+  const { bookingRef, digest } = request.body;
+  if (!isValidTransactionDigest(digest)) return reply.code(400).send({ error: 'A valid transaction digest is required' });
+
+  try {
+    const result = await pool.query('SELECT * FROM bookings WHERE booking_ref = $1', [bookingRef]);
+    if (result.rows.length === 0) return reply.code(404).send({ error: 'Booking not found' });
+    const booking = result.rows[0];
+    if (!(await canClaimAsHost(session, booking))) return reply.code(403).send({ error: 'You do not manage this property' });
+    if (booking.deposit_status === 'claimed') return reply.code(200).send({ success: true, alreadyConfirmed: true });
+
+    const verification = await verifyClaimDamageTransaction(digest, session.suiAddress, booking.escrow_object_id);
+    if (!verification.ok) return reply.code(400).send({ error: verification.reason || 'Claim transaction could not be verified' });
+
+    const claimAmount = Number(request.body.claimAmount ?? booking.claim_amount ?? 0);
+    const reason = request.body.reason ?? null;
+    await pool.query(
+      `UPDATE bookings SET deposit_status='claimed', claim_amount=$1, claim_reason=$2, claimed_at=NOW() WHERE booking_ref=$3`,
+      [claimAmount || null, reason, bookingRef]
+    );
+
+    try {
+      await resend.emails.send({
+        from: 'ARIA <onboarding@resend.dev>', to: booking.guest_email,
+        subject: `Damage Claim Filed — ${booking.property_title} | Ref: ${bookingRef}`,
+        html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px"><h1 style="color:#ffaa00;font-size:24px;margin:0 0 8px">⚠️ Damage Claim Filed</h1><p style="color:#888;margin:0 0 24px">${booking.guest_name}, the host has filed a damage claim against your security deposit.</p><div style="background:#111;border:1px solid #222;border-radius:8px;padding:20px;margin-bottom:20px"><h2 style="margin:0 0 16px;font-size:18px">${booking.property_title}</h2><p style="color:#888;font-size:13px;margin:0 0 6px">Claim amount: <span style="color:#ffaa00">$${claimAmount}</span> of your $${booking.deposit_amount} deposit</p>${reason ? `<p style="color:#888;font-size:13px;margin:0">Reason: ${reason}</p>` : ''}</div><p style="color:#555;font-size:12px;line-height:1.6">If you disagree with this claim, you can dispute it from your bookings page and ARIA will review and resolve the split.</p><p style="color:#555;font-size:12px;text-align:center;margin:24px 0 0">Powered by ARIA — Built on Sui</p></div>`
+      });
+    } catch (err) { fastify.log.warn({ err }, 'Claim notification email failed'); }
+
+    return { success: true, bookingRef, claimAmount };
+  } catch (err) {
+    fastify.log.error({ err, bookingRef }, '/booking/claim-damage/confirm failed');
+    return reply.code(500).send({ error: 'Failed to confirm claim' });
+  }
+});
+
+// Dispute Claim (build) — GUEST ONLY. Returns unsigned tx bytes for the guest
+// to sign client-side.
+fastify.post('/booking/dispute-claim', {
+  config: {
+    rateLimit: { max: 10, timeWindow: '1 hour', errorResponseBuilder: () => ({ error: 'Too many dispute attempts.' }) }
+  }
+}, async (request, reply) => {
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+  const session = await getSession(sessionId);
+  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  if (validateBody(disputeClaimSchema, request, reply)) return;
+
+  const { bookingRef, reason } = request.body;
+  if (!bookingRef.startsWith('ARIA-')) return reply.code(400).send({ error: 'A valid bookingRef is required' });
+
+  try {
+    const result = await pool.query('SELECT * FROM bookings WHERE booking_ref = $1', [bookingRef]);
+    if (result.rows.length === 0) return reply.code(404).send({ error: 'Booking not found' });
+    const booking = result.rows[0];
+    if (booking.wallet_address !== session.suiAddress) return reply.code(403).send({ error: 'Not your booking' });
+    if (booking.deposit_status !== 'claimed') return reply.code(400).send({ error: `Nothing to dispute (status: ${booking.deposit_status})` });
+
+    const built = await buildDisputeClaimTransaction(booking.escrow_object_id, session.suiAddress, fastify.log);
+    if (!built?.txBytes) return reply.code(502).send({ error: 'Could not build the dispute transaction' });
+
+    return { success: true, disputeTxBytes: built.txBytes, reason,
+      message: 'Sign this transaction in your wallet, then report the digest to /booking/dispute-claim/confirm' };
+  } catch (err) {
+    fastify.log.error({ err, bookingRef }, '/booking/dispute-claim failed');
+    return reply.code(500).send({ error: 'Failed to build dispute transaction' });
+  }
+});
+
+// Dispute Claim (confirm) — re-verifies on-chain, flips deposit_status to
+// 'disputed', and notifies ARIA admin (HOST_ADDRESSES[0]) to resolve it via
+// /booking/resolve-dispute.
+fastify.post('/booking/dispute-claim/confirm', {
+  config: {
+    rateLimit: { max: 10, timeWindow: '1 hour', errorResponseBuilder: () => ({ error: 'Too many dispute confirmation attempts.' }) }
+  }
+}, async (request, reply) => {
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+  const session = await getSession(sessionId);
+  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  if (validateBody(disputeClaimConfirmSchema, request, reply)) return;
+
+  const { bookingRef, digest } = request.body;
+  if (!isValidTransactionDigest(digest)) return reply.code(400).send({ error: 'A valid transaction digest is required' });
+
+  try {
+    const result = await pool.query('SELECT * FROM bookings WHERE booking_ref = $1', [bookingRef]);
+    if (result.rows.length === 0) return reply.code(404).send({ error: 'Booking not found' });
+    const booking = result.rows[0];
+    if (booking.wallet_address !== session.suiAddress) return reply.code(403).send({ error: 'Not your booking' });
+    if (booking.deposit_status === 'disputed') return reply.code(200).send({ success: true, alreadyConfirmed: true });
+
+    const verification = await verifyDisputeClaimTransaction(digest, session.suiAddress, booking.escrow_object_id);
+    if (!verification.ok) return reply.code(400).send({ error: verification.reason || 'Dispute transaction could not be verified' });
+
+    const reason = request.body.reason ?? null;
+    await pool.query(
+      `UPDATE bookings SET deposit_status='disputed', dispute_reason=$1, disputed_at=NOW() WHERE booking_ref=$2`,
+      [reason, bookingRef]
+    );
+
+    try {
+      await resend.emails.send({
+        from: 'ARIA <onboarding@resend.dev>', to: HOST_ADDRESSES[0] || 'cwilliams36092@gmail.com',
+        subject: `Deposit Dispute Filed — ${booking.property_title} | Ref: ${bookingRef}`,
+        html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px"><h1 style="color:#ff4444;font-size:24px;margin:0 0 8px">🚩 Dispute Filed</h1><p style="color:#888;margin:0 0 24px">A guest has disputed a damage claim — review needed.</p><div style="background:#111;border:1px solid #222;border-radius:8px;padding:20px"><p style="color:#888;font-size:13px;margin:0 0 6px">Booking: ${bookingRef} — ${booking.property_title}</p><p style="color:#888;font-size:13px;margin:0 0 6px">Claim amount: $${booking.claim_amount} of $${booking.deposit_amount}</p>${reason ? `<p style="color:#888;font-size:13px;margin:0">Guest's reason: ${reason}</p>` : ''}</div></div>`
+      });
+    } catch (err) { fastify.log.warn({ err }, 'Dispute admin notification email failed'); }
+
+    return { success: true, bookingRef };
+  } catch (err) {
+    fastify.log.error({ err, bookingRef }, '/booking/dispute-claim/confirm failed');
+    return reply.code(500).send({ error: 'Failed to confirm dispute' });
+  }
+});
+
+// Resolve Dispute — SUPERADMIN ONLY (HOST_ADDRESSES). This is the one
+// claim/dispute action ARIA's backend signs directly (see escrow.mjs's
+// resolveDisputeEscrow) rather than building an unsigned tx for someone else
+// to sign — the contract requires the caller to BE escrow.arbitrator, and
+// ARIA itself is meant to fill that role per the roadmap's dispute design.
+// Gated to HOST_ADDRESSES (not isHost/canManageProperty) since this is ARIA's
+// own arbitration decision, not a per-property host action.
+fastify.post('/booking/resolve-dispute', {
+  config: {
+    rateLimit: { max: 20, timeWindow: '1 hour', errorResponseBuilder: () => ({ error: 'Too many resolution attempts.' }) }
+  }
+}, async (request, reply) => {
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+  const session = await getSession(sessionId);
+  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  if (!HOST_ADDRESSES.includes((session.email || '').toLowerCase()))
+    return reply.code(403).send({ error: 'Superadmin access required' });
+  if (validateBody(resolveDisputeSchema, request, reply)) return;
+
+  const { bookingRef } = request.body;
+  const guestAmount = Number(request.body.guestAmount);
+  const hostAmount = Number(request.body.hostAmount);
+  if (!Number.isFinite(guestAmount) || guestAmount < 0 || !Number.isFinite(hostAmount) || hostAmount < 0)
+    return reply.code(400).send({ error: 'guestAmount and hostAmount must be non-negative numbers' });
+
+  try {
+    const result = await pool.query('SELECT * FROM bookings WHERE booking_ref = $1', [bookingRef]);
+    if (result.rows.length === 0) return reply.code(404).send({ error: 'Booking not found' });
+    const booking = result.rows[0];
+    if (booking.deposit_status !== 'disputed') return reply.code(400).send({ error: `Booking is not disputed (status: ${booking.deposit_status})` });
+    if (guestAmount + hostAmount !== booking.deposit_amount)
+      return reply.code(400).send({ error: `guestAmount + hostAmount must equal the deposit ($${booking.deposit_amount})` });
+
+    const resolved = await resolveDisputeEscrow(booking.escrow_object_id, guestAmount, hostAmount);
+    if (!resolved) return reply.code(502).send({ error: 'On-chain resolution failed — escrow.arbitrator may not match ARIA_ARBITRATOR_KEY for this booking' });
+
+    // Full forfeiture to host vs. any return to the guest are both
+    // meaningfully different outcomes worth distinguishing in deposit_status
+    // (see ARIA_ROADMAP.md's deposit_status enum extension); exact dollar
+    // amounts are recorded in resolved_guest_amount/resolved_host_amount
+    // regardless of which bucket this falls into.
+    const finalStatus = guestAmount === 0 ? 'forfeited' : 'released';
+    await pool.query(
+      `UPDATE bookings SET deposit_status=$1, resolved_guest_amount=$2, resolved_host_amount=$3, resolved_at=NOW() WHERE booking_ref=$4`,
+      [finalStatus, guestAmount, hostAmount, bookingRef]
+    );
+
+    try {
+      await resend.emails.send({
+        from: 'ARIA <onboarding@resend.dev>', to: booking.guest_email,
+        subject: `Dispute Resolved — ${booking.property_title} | Ref: ${bookingRef}`,
+        html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px"><h1 style="color:#00ff44;font-size:24px;margin:0 0 8px">✅ Dispute Resolved</h1><p style="color:#888;margin:0 0 24px">${booking.guest_name}, ARIA has reviewed your dispute.</p><div style="background:#111;border:1px solid #222;border-radius:8px;padding:20px"><p style="color:#888;font-size:13px;margin:0 0 6px">Returned to you: <span style="color:#00ff44">$${guestAmount}</span></p><p style="color:#888;font-size:13px;margin:0">Kept by host: $${hostAmount}</p></div></div>`
+      });
+    } catch (err) { fastify.log.warn({ err }, 'Resolution email failed'); }
+
+    return { success: true, bookingRef, guestAmount, hostAmount, depositStatus: finalStatus };
+  } catch (err) {
+    fastify.log.error({ err, bookingRef }, '/booking/resolve-dispute failed');
+    return reply.code(500).send({ error: 'Failed to resolve dispute' });
   }
 });
 
@@ -867,6 +1143,55 @@ fastify.get('/host/applications', async (request, reply) => {
     return reply.code(500).send({ error: 'Failed to fetch applications' });
   }
 });
+
+// ─── P2 / Phase 1h: Auto-Release Cron Job ──────────────────────────────────
+// Sui has no native cron (see escrow.mjs's autoReleaseEscrow comment) — some
+// off-chain keeper has to actually watch the clock and submit auto_release
+// once the 5-day inspection window closes, or expired escrows would sit
+// forever unless a guest/host manually triggers /booking/release-deposit.
+// Railway runs this service as a single always-on process, so an in-process
+// interval is the simplest keeper — no separate cron service/infra needed.
+// Booking eligibility mirrors the roadmap's spec exactly: checkout + 5 days
+// has passed, deposit is still 'held', and an escrow actually exists. The
+// Move contract's own expiry_ms assertion is the real authority on whether
+// auto_release succeeds on-chain (on testnet that's 5 minutes from creation,
+// not 5 days — see buildEscrowTransaction) — this query is just an
+// optimization so the sweep doesn't bother calling on bookings nowhere near
+// checkout yet. A booking that fails to release (e.g. RPC hiccup) simply
+// stays 'held' and is retried on the next sweep.
+async function runAutoReleaseSweep() {
+  let bookings;
+  try {
+    const result = await pool.query(
+      `SELECT booking_ref, escrow_object_id, deposit_amount FROM bookings
+       WHERE deposit_status = 'held' AND escrow_object_id IS NOT NULL
+       AND check_out + INTERVAL '5 days' < NOW()`
+    );
+    bookings = result.rows;
+  } catch (err) {
+    fastify.log.error({ err }, 'Auto-release sweep query failed');
+    return;
+  }
+
+  for (const booking of bookings) {
+    try {
+      const released = await autoReleaseEscrow(booking.escrow_object_id);
+      if (released) {
+        await pool.query('UPDATE bookings SET deposit_status=$1 WHERE booking_ref=$2', ['released', booking.booking_ref]);
+        fastify.log.info({ bookingRef: booking.booking_ref }, 'Auto-release sweep: deposit released');
+      } else {
+        fastify.log.warn({ bookingRef: booking.booking_ref }, 'Auto-release sweep: on-chain release failed, will retry next sweep');
+      }
+    } catch (err) {
+      fastify.log.error({ err, bookingRef: booking.booking_ref }, 'Auto-release sweep: error releasing booking');
+    }
+  }
+}
+
+const AUTO_RELEASE_SWEEP_INTERVAL_MS = Number(process.env.AUTO_RELEASE_SWEEP_INTERVAL_MS || 60 * 60 * 1000); // hourly by default
+setInterval(() => { runAutoReleaseSweep().catch(err => fastify.log.error({ err }, 'Auto-release sweep crashed')); }, AUTO_RELEASE_SWEEP_INTERVAL_MS);
+// Run once shortly after boot too, rather than waiting a full interval for the first sweep.
+setTimeout(() => { runAutoReleaseSweep().catch(err => fastify.log.error({ err }, 'Auto-release sweep crashed')); }, 30_000);
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 const port = parseInt(process.env.PORT || '3001');

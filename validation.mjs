@@ -44,6 +44,36 @@ export const hostApplySchema = z.object({
   complianceConfirmed: z.boolean()
 });
 
+// P2 / Phase 1j: claim/dispute/resolution request bodies. bookingRef format
+// (ARIA-<property>-...) is still checked in the route itself, matching the
+// existing pattern for /booking/cancel and /booking/release-deposit.
+export const claimDamageSchema = z.object({
+  bookingRef: z.string().min(1, 'bookingRef is required'),
+  claimAmount: z.union([z.string(), z.number()]),
+  reason: z.string().min(1, 'reason is required')
+});
+
+export const claimDamageConfirmSchema = z.object({
+  bookingRef: z.string().min(1, 'bookingRef is required'),
+  digest: z.string().min(1, 'digest is required')
+});
+
+export const disputeClaimSchema = z.object({
+  bookingRef: z.string().min(1, 'bookingRef is required'),
+  reason: z.string().min(1, 'reason is required')
+});
+
+export const disputeClaimConfirmSchema = z.object({
+  bookingRef: z.string().min(1, 'bookingRef is required'),
+  digest: z.string().min(1, 'digest is required')
+});
+
+export const resolveDisputeSchema = z.object({
+  bookingRef: z.string().min(1, 'bookingRef is required'),
+  guestAmount: z.union([z.string(), z.number()]),
+  hostAmount: z.union([z.string(), z.number()])
+});
+
 // Runs a zod schema against request.body and sends a 400 with a readable
 // message if it fails. Returns true if validation failed (caller should
 // `return` immediately after calling this), false if the body is valid.

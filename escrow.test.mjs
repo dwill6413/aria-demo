@@ -8,7 +8,10 @@
 // defeat the purpose of the tests. Now imports the real (Phase 2b-relocated)
 // implementation from escrow.mjs directly.
 
-import { extractCreatedObjectId, verifyEscrowTransaction, suiClient } from './escrow.mjs';
+import {
+  extractCreatedObjectId, verifyEscrowTransaction, suiClient,
+  isObjectMutated, verifyClaimDamageTransaction, verifyDisputeClaimTransaction
+} from './escrow.mjs';
 
 // ─── Test runner ──────────────────────────────────────────────────────────────
 
@@ -196,6 +199,149 @@ await test('sender mismatch on a successful transaction — returns ok:false', a
   const result = await verifyEscrowTransaction('0xdigest', '0xguest');
   assertEqual(result.ok, false, 'expected ok:false');
   assertEqual(result.reason, 'Transaction sender does not match the booking guest');
+});
+
+console.log('\nisObjectMutated\n');
+
+await test('expectedObjectId mutated — returns true', () => {
+  const changedObjects = [
+    { objectId: 'gas-coin-id', idOperation: 'Mutated' },
+    { objectId: 'escrow-id',   idOperation: 'Mutated' },
+  ];
+  assertEqual(isObjectMutated(changedObjects, 'escrow-id'), true);
+});
+
+await test('expectedObjectId present but Created, not Mutated — returns false', () => {
+  const changedObjects = [
+    { objectId: 'escrow-id', idOperation: 'Created' },
+  ];
+  assertEqual(isObjectMutated(changedObjects, 'escrow-id'), false);
+});
+
+await test('expectedObjectId absent from changedObjects — returns false', () => {
+  const changedObjects = [
+    { objectId: 'some-other-id', idOperation: 'Mutated' },
+  ];
+  assertEqual(isObjectMutated(changedObjects, 'escrow-id'), false);
+});
+
+await test('no expectedObjectId passed — returns false', () => {
+  const changedObjects = [
+    { objectId: 'escrow-id', idOperation: 'Mutated' },
+  ];
+  assertEqual(isObjectMutated(changedObjects, null), false);
+});
+
+await test('empty changedObjects — returns false', () => {
+  assertEqual(isObjectMutated([], 'escrow-id'), false);
+});
+
+await test('null changedObjects — returns false', () => {
+  assertEqual(isObjectMutated(null, 'escrow-id'), false);
+});
+
+await test('case-insensitive "mutated" lowercase matches', () => {
+  const changedObjects = [{ objectId: 'escrow-id', idOperation: 'mutated' }];
+  assertEqual(isObjectMutated(changedObjects, 'escrow-id'), true);
+});
+
+await test('fallback field .id used when .objectId absent', () => {
+  const changedObjects = [{ id: 'escrow-id', idOperation: 'Mutated' }];
+  assertEqual(isObjectMutated(changedObjects, 'escrow-id'), true);
+});
+
+console.log('\nverifyClaimDamageTransaction\n');
+
+await test('successful claim_damage tx, correct host sender, escrow mutated — returns ok:true', async () => {
+  suiClient.core.getTransaction = async () => ({
+    $kind: 'Transaction',
+    Transaction: {
+      status: { success: true, error: null },
+      transaction: { sender: '0xhost' },
+      effects: { changedObjects: [{ objectId: 'escrow-id', idOperation: 'Mutated' }] },
+    },
+  });
+  const result = await verifyClaimDamageTransaction('0xdigest', '0xhost', 'escrow-id');
+  assertEqual(result.ok, true, 'expected ok:true');
+  assertEqual(result.sender, '0xhost');
+});
+
+await test('claim_damage tx with wrong sender — returns ok:false', async () => {
+  suiClient.core.getTransaction = async () => ({
+    $kind: 'Transaction',
+    Transaction: {
+      status: { success: true, error: null },
+      transaction: { sender: '0xnothost' },
+      effects: { changedObjects: [{ objectId: 'escrow-id', idOperation: 'Mutated' }] },
+    },
+  });
+  const result = await verifyClaimDamageTransaction('0xdigest', '0xhost', 'escrow-id');
+  assertEqual(result.ok, false, 'expected ok:false');
+  assertEqual(result.reason, 'Transaction sender does not match the expected signer');
+});
+
+await test('claim_damage tx that did not mutate the expected escrow — returns ok:false', async () => {
+  suiClient.core.getTransaction = async () => ({
+    $kind: 'Transaction',
+    Transaction: {
+      status: { success: true, error: null },
+      transaction: { sender: '0xhost' },
+      effects: { changedObjects: [{ objectId: 'some-other-id', idOperation: 'Mutated' }] },
+    },
+  });
+  const result = await verifyClaimDamageTransaction('0xdigest', '0xhost', 'escrow-id');
+  assertEqual(result.ok, false, 'expected ok:false');
+  assertEqual(result.reason, 'Transaction did not mutate the expected escrow object (escrow-id)');
+});
+
+await test('failed claim_damage transaction ($kind: FailedTransaction) — returns ok:false', async () => {
+  suiClient.core.getTransaction = async () => ({
+    $kind: 'FailedTransaction',
+    FailedTransaction: { status: { success: false, error: { message: 'ENotHost' } } },
+  });
+  const result = await verifyClaimDamageTransaction('0xdigest', '0xhost', 'escrow-id');
+  assertEqual(result.ok, false, 'expected ok:false');
+  assertEqual(result.reason, 'ENotHost');
+});
+
+console.log('\nverifyDisputeClaimTransaction\n');
+
+await test('successful dispute_claim tx, correct guest sender, escrow mutated — returns ok:true', async () => {
+  suiClient.core.getTransaction = async () => ({
+    $kind: 'Transaction',
+    Transaction: {
+      status: { success: true, error: null },
+      transaction: { sender: '0xguest' },
+      effects: { changedObjects: [{ objectId: 'escrow-id', idOperation: 'Mutated' }] },
+    },
+  });
+  const result = await verifyDisputeClaimTransaction('0xdigest', '0xguest', 'escrow-id');
+  assertEqual(result.ok, true, 'expected ok:true');
+  assertEqual(result.sender, '0xguest');
+});
+
+await test('dispute_claim tx with wrong sender — returns ok:false', async () => {
+  suiClient.core.getTransaction = async () => ({
+    $kind: 'Transaction',
+    Transaction: {
+      status: { success: true, error: null },
+      transaction: { sender: '0xnotguest' },
+      effects: { changedObjects: [{ objectId: 'escrow-id', idOperation: 'Mutated' }] },
+    },
+  });
+  const result = await verifyDisputeClaimTransaction('0xdigest', '0xguest', 'escrow-id');
+  assertEqual(result.ok, false, 'expected ok:false');
+  assertEqual(result.reason, 'Transaction sender does not match the expected signer');
+});
+
+await test('failed dispute_claim transaction ($kind: FailedTransaction) — returns ok:false', async () => {
+  suiClient.core.getTransaction = async () => ({
+    $kind: 'FailedTransaction',
+    FailedTransaction: { status: { success: false, error: { message: 'ENotGuest' } } },
+  });
+  const result = await verifyDisputeClaimTransaction('0xdigest', '0xguest', 'escrow-id');
+  assertEqual(result.ok, false, 'expected ok:false');
+  assertEqual(result.reason, 'ENotGuest');
 });
 
 // ─── Summary ──────────────────────────────────────────────────────────────────
