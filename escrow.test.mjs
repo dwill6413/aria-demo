@@ -254,7 +254,7 @@ await test('escrow booking_ref does not match — returns ok:false', async () =>
   assertEqual(result.reason, 'Escrow booking_ref does not match this booking');
 });
 
-await test('created object cannot be read as a BookingEscrow — returns ok:false', async () => {
+await test('created object unreadable (RPC/indexing lag) — soft-accepts on tx+sender, does NOT strand the deposit', async () => {
   suiClient.core.getTransaction = async () => ({
     $kind: 'Transaction',
     Transaction: {
@@ -263,10 +263,13 @@ await test('created object cannot be read as a BookingEscrow — returns ok:fals
       effects: { changedObjects: [{ objectId: 'real-escrow-id', idOperation: 'Created' }] },
     },
   });
+  // getObjects keeps returning an error (object not yet queryable) — after
+  // retries, verify must fall back to ok:true rather than reject a confirmed,
+  // guest-signed deposit. Override readEscrowObject's retry timing for speed.
   suiClient.core.getObjects = async () => ({ objects: [new Error('not found')] });
-  const result = await verifyEscrowTransaction('0xdigest', { sender: GUEST, depositAmount: 661 });
-  assertEqual(result.ok, false, 'expected ok:false');
-  assertEqual(result.reason, 'Created object is not a readable BookingEscrow');
+  const result = await verifyEscrowTransaction('0xdigest', { sender: GUEST, depositAmount: 661 }, { attempts: 1, delayMs: 0 });
+  assertEqual(result.ok, true, 'expected ok:true (soft accept)');
+  assertEqual(result.escrowId, 'real-escrow-id');
 });
 
 console.log('\ndepositToMist\n');

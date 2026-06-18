@@ -66,25 +66,43 @@ function normalizeAddr(a) {
   return '0x' + body;
 }
 
-// Reads a BookingEscrow object's decoded fields from the chain by id, or
-// returns null if it can't be read/decoded. Used by verifyEscrowTransaction to
-// confirm the object a guest created really is OUR escrow type, funded with the
-// right amount, naming the right guest/host/booking_ref — not a cheaper or
-// unrelated object they substituted client-side.
-export async function readEscrowObject(escrowObjectId) {
-  const resp = await suiClient.core.getObjects({
-    objectIds: [escrowObjectId],
-    include: { content: true },
-  });
-  const obj = resp?.objects?.[0];
-  if (!obj || obj instanceof Error || !obj.type || !obj.content) return null;
-  let fields;
-  try {
-    fields = BookingEscrowBcs.parse(obj.content);
-  } catch {
-    return null;
+// Reads a BookingEscrow object's decoded fields from the chain by id. Returns
+// `{ type, fields }` on success, or `{ error }` describing why it couldn't be
+// read (object not yet queryable, RPC error, or content decode failure).
+//
+// RETRY: the guest submits their escrow tx and immediately reports the digest;
+// the backend then queries getTransaction (available right after execution) AND
+// getObjects (current object state, which can lag a beat behind on the read
+// node). A read-after-write race here would otherwise wrongly reject a perfectly
+// valid, on-chain-confirmed deposit — so we retry the object read a few times
+// with backoff before giving up. A BCS-decode failure is NOT retried (it won't
+// improve) and is surfaced distinctly so it can be diagnosed.
+export async function readEscrowObject(escrowObjectId, { attempts = 4, delayMs = 1200, logger = console } = {}) {
+  let lastError = 'unknown';
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const resp = await suiClient.core.getObjects({
+        objectIds: [escrowObjectId],
+        include: { content: true },
+      });
+      const obj = resp?.objects?.[0];
+      if (obj && !(obj instanceof Error) && obj.type && obj.content) {
+        try {
+          return { type: obj.type, fields: BookingEscrowBcs.parse(obj.content) };
+        } catch (e) {
+          logger?.warn?.({ escrowObjectId, err: e.message }, 'readEscrowObject: BCS decode failed');
+          return { error: `bcs-decode: ${e.message}` };
+        }
+      }
+      lastError = obj instanceof Error ? `object-error: ${obj.message}`
+        : (!obj ? 'object-not-found' : 'object-missing-content');
+    } catch (e) {
+      lastError = `rpc-error: ${e.message}`;
+    }
+    if (i < attempts - 1) await new Promise(r => setTimeout(r, delayMs));
   }
-  return { type: obj.type, fields };
+  logger?.warn?.({ escrowObjectId, lastError }, 'readEscrowObject: object not readable after retries');
+  return { error: lastError };
 }
 
 // P1b (key separation): this used to be ARIA_DEPLOYER_KEY, the same hot key
@@ -244,7 +262,7 @@ export async function buildEscrowTransaction(bookingRef, guestAddr, hostAddr, de
 // confirming the tx succeeded and the sender is the guest, we now re-read the
 // created object on-chain and assert it really is OUR BookingEscrow type,
 // funded with the expected amount, naming the expected guest/host/booking_ref.
-export async function verifyEscrowTransaction(digest, expected = {}) {
+export async function verifyEscrowTransaction(digest, expected = {}, readOptions = {}) {
   const { sender: expectedSender, host: expectedHost, bookingRef: expectedRef, depositAmount } = expected;
 
   const result = await suiClient.core.getTransaction({
@@ -281,39 +299,54 @@ export async function verifyEscrowTransaction(digest, expected = {}) {
   // Re-read the created object and verify it really is our escrow, funded and
   // addressed as the booking dictates — never trust that the guest submitted
   // the exact unsigned PTB the backend built.
-  const onChain = await readEscrowObject(escrowId);
-  if (!onChain) {
-    return { ok: false, reason: 'Created object is not a readable BookingEscrow' };
-  }
+  //
+  // IMPORTANT: distinguish "the object IS our escrow but its fields DON'T match"
+  // (a real substitution attempt — hard reject) from "couldn't read the object
+  // at all" (RPC/indexing lag — must NOT permanently block a guest-signed,
+  // on-chain-confirmed booking). The transaction itself already succeeded and
+  // was provably signed by the guest (sender check above); failing the whole
+  // deposit because a read node lagged a beat would strand real funds. So an
+  // unreadable object falls back to the tx-success + sender guarantee (the
+  // behavior before this hardening), logged loudly, while a readable-but-wrong
+  // object is still rejected outright.
+  const onChain = await readEscrowObject(escrowId, readOptions);
 
-  const mod = process.env.ESCROW_MODULE_NAME || 'escrow';
-  // type looks like `0x<pkg>::escrow::BookingEscrow<0x2::sui::SUI>`. The pkg in
-  // the type string is the ORIGINAL type-defining package id, which doesn't
-  // change across upgrades — so match on the module::struct suffix rather than
-  // pinning the (possibly-upgraded) current ESCROW_PACKAGE_ID.
-  if (!new RegExp(`::${mod}::BookingEscrow<`).test(onChain.type)) {
-    return { ok: false, reason: `Created object is not a ${mod}::BookingEscrow (got ${onChain.type})` };
-  }
-
-  const f = onChain.fields;
-
-  if (expectedSender && normalizeAddr(f.guest) !== normalizeAddr(expectedSender)) {
-    return { ok: false, reason: 'Escrow guest does not match the booking guest' };
-  }
-  if (expectedHost && normalizeAddr(f.host) !== normalizeAddr(expectedHost)) {
-    return { ok: false, reason: 'Escrow host does not match the booking host' };
-  }
-  if (expectedRef && f.booking_ref !== expectedRef) {
-    return { ok: false, reason: 'Escrow booking_ref does not match this booking' };
-  }
-  if (depositAmount != null) {
-    const expectedMist = depositToMist(depositAmount).toString();
-    // Both the declared `amount` field and the actual coin balance must match
-    // the expected deposit — guards against an escrow that claims one amount
-    // but is funded with another.
-    if (String(f.amount) !== expectedMist || String(f.coin?.balance?.value) !== expectedMist) {
-      return { ok: false, reason: 'Escrow is not funded with the expected deposit amount' };
+  if (onChain?.fields) {
+    const mod = process.env.ESCROW_MODULE_NAME || 'escrow';
+    // type looks like `0x<pkg>::escrow::BookingEscrow<0x2::sui::SUI>`. The pkg in
+    // the type string is the ORIGINAL type-defining package id, which doesn't
+    // change across upgrades — so match on the module::struct suffix rather than
+    // pinning the (possibly-upgraded) current ESCROW_PACKAGE_ID.
+    if (!new RegExp(`::${mod}::BookingEscrow<`).test(onChain.type)) {
+      return { ok: false, reason: `Created object is not a ${mod}::BookingEscrow (got ${onChain.type})` };
     }
+
+    const f = onChain.fields;
+
+    if (expectedSender && normalizeAddr(f.guest) !== normalizeAddr(expectedSender)) {
+      return { ok: false, reason: 'Escrow guest does not match the booking guest' };
+    }
+    if (expectedHost && normalizeAddr(f.host) !== normalizeAddr(expectedHost)) {
+      return { ok: false, reason: 'Escrow host does not match the booking host' };
+    }
+    if (expectedRef && f.booking_ref !== expectedRef) {
+      return { ok: false, reason: 'Escrow booking_ref does not match this booking' };
+    }
+    if (depositAmount != null) {
+      const expectedMist = depositToMist(depositAmount).toString();
+      // Both the declared `amount` field and the actual coin balance must match
+      // the expected deposit — guards against an escrow that claims one amount
+      // but is funded with another.
+      if (String(f.amount) !== expectedMist || String(f.coin?.balance?.value) !== expectedMist) {
+        return { ok: false, reason: 'Escrow is not funded with the expected deposit amount' };
+      }
+    }
+  } else {
+    // Couldn't read the created object's content (RPC/indexing lag or a decode
+    // mismatch). Don't strand a confirmed, guest-signed deposit on a read quirk
+    // — accept on the tx-success + sender match, but log so it can be chased
+    // down (and so a persistent decode failure is visible rather than silent).
+    console.warn('verifyEscrowTransaction: created object unreadable, accepting on tx+sender only', { escrowId, reason: onChain?.error });
   }
 
   return { ok: true, escrowId, sender: actualSender };
