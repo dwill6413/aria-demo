@@ -77,7 +77,16 @@ function normalizeAddr(a) {
 // valid, on-chain-confirmed deposit — so we retry the object read a few times
 // with backoff before giving up. A BCS-decode failure is NOT retried (it won't
 // improve) and is surfaced distinctly so it can be diagnosed.
-export async function readEscrowObject(escrowObjectId, { attempts = 4, delayMs = 1200, logger = console } = {}) {
+export async function readEscrowObject(escrowObjectId, {
+  attempts = Number(process.env.ESCROW_READ_ATTEMPTS || 10),
+  delayMs = Number(process.env.ESCROW_READ_DELAY_MS || 2000),
+  logger = console,
+} = {}) {
+  // Public testnet fullnodes serve getTransaction instantly but lag on
+  // getObjects for a just-created object (often >5s, varying by replica). The
+  // window below (~18s by default) is sized so the strict object validation
+  // actually completes rather than falling through to the retryable path on
+  // every booking. Tune via ESCROW_READ_ATTEMPTS / ESCROW_READ_DELAY_MS.
   let lastError = 'unknown';
   for (let i = 0; i < attempts; i++) {
     try {
