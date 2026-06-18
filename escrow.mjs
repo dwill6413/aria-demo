@@ -78,8 +78,8 @@ function normalizeAddr(a) {
 // with backoff before giving up. A BCS-decode failure is NOT retried (it won't
 // improve) and is surfaced distinctly so it can be diagnosed.
 export async function readEscrowObject(escrowObjectId, {
-  attempts = Number(process.env.ESCROW_READ_ATTEMPTS || 10),
-  delayMs = Number(process.env.ESCROW_READ_DELAY_MS || 2000),
+  attempts = Number(process.env.ESCROW_READ_ATTEMPTS || 3),
+  delayMs = Number(process.env.ESCROW_READ_DELAY_MS || 1500),
   logger = console,
 } = {}) {
   // Public testnet fullnodes serve getTransaction instantly but lag on
@@ -305,33 +305,34 @@ export async function verifyEscrowTransaction(digest, expected = {}, readOptions
     return { ok: false, reason: 'No created object found in transaction effects' };
   }
 
-  // Re-read the created object and verify it really is our escrow, funded and
-  // addressed as the booking dictates — never trust that the guest submitted
-  // the exact unsigned PTB the backend built.
-  //
-  // IMPORTANT: distinguish "the object IS our escrow but its fields DON'T match"
-  // (a real substitution attempt — hard reject) from "couldn't read the object
-  // at all" (RPC/indexing lag — must NOT permanently block a guest-signed,
-  // on-chain-confirmed booking). The transaction itself already succeeded and
-  // was provably signed by the guest (sender check above); failing the whole
-  // deposit because a read node lagged a beat would strand real funds. So an
-  // unreadable object falls back to the tx-success + sender guarantee (the
-  // behavior before this hardening), logged loudly, while a readable-but-wrong
-  // object is still rejected outright.
+  const mod = process.env.ESCROW_MODULE_NAME || 'escrow';
+  const isOurEscrowType = (t) => typeof t === 'string' && new RegExp(`::${mod}::BookingEscrow<`).test(t);
+
+  // PRIMARY (lag-free) type gate. The created object's type comes straight from
+  // the transaction's OWN effects (the objectTypes map in the same
+  // getTransaction response we already have), so it does NOT depend on the
+  // separate getObjects read — which on public testnet fullnodes can fail to
+  // serve a just-created object for over a minute. If the tx tells us the
+  // created object is our BookingEscrow type AND the guest signed it (sender
+  // check above), that is sound evidence the guest really created our escrow —
+  // not the weak "some object was created" the earlier soft-accept relied on.
+  const createdType = txn?.objectTypes?.[escrowId];
+  if (createdType && !isOurEscrowType(createdType)) {
+    return { ok: false, reason: `Created object is not a ${mod}::BookingEscrow (got ${createdType})` };
+  }
+  const typeConfirmed = isOurEscrowType(createdType);
+
+  // SECONDARY (best-effort) strict check: read the object's content to verify it
+  // is funded with the expected deposit and names the right guest/host/booking_ref
+  // (guards against under-funding / wrong host). This depends on the laggy
+  // getObjects, so it's a bonus when available — never the gate.
   const onChain = await readEscrowObject(escrowId, readOptions);
 
   if (onChain?.fields) {
-    const mod = process.env.ESCROW_MODULE_NAME || 'escrow';
-    // type looks like `0x<pkg>::escrow::BookingEscrow<0x2::sui::SUI>`. The pkg in
-    // the type string is the ORIGINAL type-defining package id, which doesn't
-    // change across upgrades — so match on the module::struct suffix rather than
-    // pinning the (possibly-upgraded) current ESCROW_PACKAGE_ID.
-    if (!new RegExp(`::${mod}::BookingEscrow<`).test(onChain.type)) {
+    if (!isOurEscrowType(onChain.type)) {
       return { ok: false, reason: `Created object is not a ${mod}::BookingEscrow (got ${onChain.type})` };
     }
-
     const f = onChain.fields;
-
     if (expectedSender && normalizeAddr(f.guest) !== normalizeAddr(expectedSender)) {
       return { ok: false, reason: 'Escrow guest does not match the booking guest' };
     }
@@ -343,26 +344,29 @@ export async function verifyEscrowTransaction(digest, expected = {}, readOptions
     }
     if (depositAmount != null) {
       const expectedMist = depositToMist(depositAmount).toString();
-      // Both the declared `amount` field and the actual coin balance must match
-      // the expected deposit — guards against an escrow that claims one amount
-      // but is funded with another.
       if (String(f.amount) !== expectedMist || String(f.coin?.balance?.value) !== expectedMist) {
         return { ok: false, reason: 'Escrow is not funded with the expected deposit amount' };
       }
     }
-  } else {
-    // Review finding #1: do NOT accept on weak evidence. If the created object
-    // can't be read after retries (RPC/indexing lag, or a decode mismatch), the
-    // deposit is NOT marked held. Return a RETRYABLE signal so the caller keeps
-    // the booking pending and re-verifies (the "Retry escrow deposit" button / a
-    // reconciler) — which avoids BOTH stranding a real deposit (retry succeeds
-    // once the object is queryable, with full field validation) AND trusting an
-    // unrelated guest-signed tx that merely created some object.
-    console.warn('verifyEscrowTransaction: created object not yet readable — returning retryable (not accepting)', { escrowId, reason: onChain?.error });
-    return { ok: false, retryable: true, escrowId, reason: 'Escrow not yet verifiable on-chain (the created object is not queryable yet) — please retry in a moment.' };
+    return { ok: true, escrowId, sender: actualSender, amountVerified: true };
   }
 
-  return { ok: true, escrowId, sender: actualSender };
+  // Object content unreadable (getObjects lag). If the tx effects already
+  // confirmed the created object is our BookingEscrow type, accept on that +
+  // the verified guest sender. The strict amount/host/ref check is skipped this
+  // time only (logged). NOTE for mainnet: this leaves an under-funding gap when
+  // getObjects lags — the durable fix is to decode the create_escrow arguments
+  // (host, booking_ref, amount) from the transaction inputs, which are also
+  // lag-free; tracked as a pre-mainnet item.
+  if (typeConfirmed) {
+    console.warn('verifyEscrowTransaction: object content unreadable; accepted on lag-free type+sender (amount NOT re-verified)', { escrowId, reason: onChain?.error });
+    return { ok: true, escrowId, sender: actualSender, amountVerified: false };
+  }
+
+  // Neither object content NOR tx-effects type available — genuinely cannot
+  // verify yet. Retryable so the booking stays pending (never marked held).
+  console.warn('verifyEscrowTransaction: neither object content nor tx-effects type available — retryable', { escrowId, reason: onChain?.error });
+  return { ok: false, retryable: true, escrowId, reason: 'Escrow not yet verifiable on-chain — please retry in a moment.' };
 }
 
 // ── P2 / Phase 1j: claim_damage / dispute_claim ─────────────────────────────

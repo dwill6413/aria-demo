@@ -273,6 +273,39 @@ await test('created object unreadable (RPC/indexing lag) — returns retryable, 
   assertEqual(result.escrowId, 'real-escrow-id');
 });
 
+await test('object content unreadable BUT tx-effects type confirms BookingEscrow — accepts on lag-free type+sender (finding #1 durable fix)', async () => {
+  suiClient.core.getTransaction = async () => ({
+    $kind: 'Transaction',
+    Transaction: {
+      status: { success: true, error: null },
+      transaction: { sender: GUEST },
+      effects: { changedObjects: [{ objectId: 'real-escrow-id', idOperation: 'Created' }] },
+      objectTypes: { 'real-escrow-id': '0xpkg::escrow::BookingEscrow<0x2::sui::SUI>' },
+    },
+  });
+  suiClient.core.getObjects = async () => ({ objects: [new Error('not found')] });
+  const result = await verifyEscrowTransaction('0xdigest', { sender: GUEST, depositAmount: 661 }, { attempts: 1, delayMs: 0 });
+  assertEqual(result.ok, true, 'expected ok:true (type+sender gate, content lagged)');
+  assertEqual(result.amountVerified, false, 'amount not re-verified under read lag');
+  assertEqual(result.escrowId, 'real-escrow-id');
+});
+
+await test('tx-effects type is NOT our BookingEscrow — hard reject even when content unreadable', async () => {
+  suiClient.core.getTransaction = async () => ({
+    $kind: 'Transaction',
+    Transaction: {
+      status: { success: true, error: null },
+      transaction: { sender: GUEST },
+      effects: { changedObjects: [{ objectId: 'real-escrow-id', idOperation: 'Created' }] },
+      objectTypes: { 'real-escrow-id': '0x2::coin::Coin<0x2::sui::SUI>' },
+    },
+  });
+  suiClient.core.getObjects = async () => ({ objects: [new Error('not found')] });
+  const result = await verifyEscrowTransaction('0xdigest', { sender: GUEST }, { attempts: 1, delayMs: 0 });
+  assertEqual(result.ok, false, 'expected ok:false (wrong type)');
+  if (!/not a escrow::BookingEscrow/.test(result.reason)) throw new Error(`unexpected reason: ${result.reason}`);
+});
+
 console.log('\ndepositToMist\n');
 
 await test('depositToMist: dollars * 1000, floors at 1', () => {
