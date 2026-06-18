@@ -520,6 +520,8 @@ evaluated and acted on. Scorecard/rationale: see the evaluation response.
 | **R11** — integration tests + CI | booking→confirm, cancel→escrow, auth middleware; wire `escrow.test.mjs` + `sui move test` into CI. |
 | **R12 / R13** | Incremental TS on backend; frontend componentization — as features demand. |
 | **R1 (full split)** | Break `server.mjs` into `routes/*.mjs` plugins (middleware half already done). |
+| **M7 — secrets passed as Docker build ARG/ENV** | Railway/nixpacks injects all secrets (`ARIA_*_KEY`, `GOOGLE_CLIENT_SECRET`, `STRIPE_SECRET_KEY`, `SESSION_SECRET`, `XAI_API_KEY`, `SHINAMI_API_KEY`, …) as Docker `ARG`/`ENV` — flagged by `SecretsUsedInArgOrEnv` warnings in the build log (June 18, 2026). Secrets in build args can persist in image layers/history. Fine for demo; before mainnet, move to Railway **runtime** secrets or build-secret mounts so they aren't baked into the image. |
+| **M8 — audit `SHINAMI_API_KEY`** | Appears as a Railway env var / build arg but isn't referenced in the docs or (apparent) code. Confirm whether it's actually used (gas station / sponsored tx?) — if not, remove it from Railway like the retired `ANTHROPIC_API_KEY`. Also: `npm install` reports 3 moderate-severity advisories — run `npm audit` and triage before mainnet. |
 
 ---
 
