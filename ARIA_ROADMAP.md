@@ -525,6 +525,33 @@ evaluated and acted on. Scorecard/rationale: see the evaluation response.
 
 ---
 
+## 5c. Second External Review (ChatGPT, June 18, 2026) — Outcomes
+
+A second independent review was evaluated and the high/medium items fixed this
+session (commit pending). Verified each against live code before acting.
+
+**Fixed this session:**
+
+| Finding | Sev | Fix |
+|---|---|---|
+| iCal SSRF + missing authz | **HIGH** | `ical.mjs` `assertPublicHttpsUrl()` (https-only; rejects hosts resolving to private/loopback/link-local/CGNAT/metadata IPs); `fetchExternalBookings` re-validates, uses a 5s timeout, `redirect:'error'`, and a 2 MB cap. `/ical/import` now requires `isHost` + `canManageProperty` + URL validation. (NOTE: with the `properties` table empty, `canManageProperty` is superadmin-only for now — fail-closed.) |
+| Escrow weak-evidence accept | **HIGH** | `verifyEscrowTransaction` no longer soft-accepts when the created object can't be read — it returns `{ok:false, retryable:true}` and `/booking/:ref/escrow/confirm` responds 503, keeping the booking pending for retry (the "Retry escrow deposit" button) instead of marking the deposit held on tx+sender alone. |
+| Reviews not tied to caller's booking | MED | `/reviews/submit` now loads the booking, requires `wallet_address === session.suiAddress`, and derives `property_id` from the booking row (client-supplied `propertyId` ignored). |
+| Host emails unescaped | MED | `/host/apply` + `/host/approve` now `escapeHtml()` name/email/city/state/strPermit/host.name (closes the gap left by the earlier R14 pass). |
+
+**Deferred (LOW / quality):**
+
+| Item | Notes |
+|---|---|
+| Reviews SQL aggregation + index | `GET /reviews/:propertyId` pulls all rows and averages in Node; use SQL `AVG`/`COUNT` and add a `reviews(property_id)` index (db.mjs has no reviews index). |
+| Escrow-signing shared hook | Signing logic is duplicated in `pages/index.jsx` and `pages/ai.jsx`; extract a shared hook (pairs with R13). |
+| `/availability/:propertyId` is public + triggers outbound fetch | Now SSRF-guarded at the fetch layer; consider caching/rate-limiting the outbound iCal fetch to avoid DoS amplification. |
+| Optional escrow reconciler | Replace the manual "Retry escrow deposit" with a sweep that persists the reported digest and auto-re-verifies pending escrows (complements finding #1's retryable result). |
+| AI host-tool property scoping | Same as R6 — `get_all_bookings`/`get_revenue_summary`/`get_all_messages`/`get_reviews` are platform-wide; scope per-property for multi-tenant. |
+| `x-session-id` in `localStorage` | Accepted demo tradeoff (XSS-exposable); see Deliberately Deferred. |
+
+---
+
 ## 6. Deliberately Deferred
 
 ### zkLogin salt = `'0'`

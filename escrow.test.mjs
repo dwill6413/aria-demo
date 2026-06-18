@@ -254,7 +254,7 @@ await test('escrow booking_ref does not match — returns ok:false', async () =>
   assertEqual(result.reason, 'Escrow booking_ref does not match this booking');
 });
 
-await test('created object unreadable (RPC/indexing lag) — soft-accepts on tx+sender, does NOT strand the deposit', async () => {
+await test('created object unreadable (RPC/indexing lag) — returns retryable, does NOT mark held (finding #1)', async () => {
   suiClient.core.getTransaction = async () => ({
     $kind: 'Transaction',
     Transaction: {
@@ -268,7 +268,8 @@ await test('created object unreadable (RPC/indexing lag) — soft-accepts on tx+
   // guest-signed deposit. Override readEscrowObject's retry timing for speed.
   suiClient.core.getObjects = async () => ({ objects: [new Error('not found')] });
   const result = await verifyEscrowTransaction('0xdigest', { sender: GUEST, depositAmount: 661 }, { attempts: 1, delayMs: 0 });
-  assertEqual(result.ok, true, 'expected ok:true (soft accept)');
+  assertEqual(result.ok, false, 'expected ok:false (not accepted on weak evidence)');
+  assertEqual(result.retryable, true, 'expected retryable:true');
   assertEqual(result.escrowId, 'real-escrow-id');
 });
 

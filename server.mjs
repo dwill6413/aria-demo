@@ -6,7 +6,7 @@ import Stripe from 'stripe';
 import { isValidTransactionDigest } from '@mysten/sui/utils';
 import { dotenvConfig } from './config.mjs';
 import { getSuiUSDLiquidity, calculateHostPayout } from './deepbook.mjs';
-import { generateICal, saveExternalCalendar, checkAvailability } from './ical.mjs';
+import { generateICal, saveExternalCalendar, checkAvailability, assertPublicHttpsUrl } from './ical.mjs';
 import { Resend } from 'resend';
 import { registerAIRoute } from './ai_route.mjs';
 import { handleZkLoginCallback, getSession } from './auth.mjs';
@@ -322,8 +322,13 @@ fastify.post('/booking/:bookingRef/escrow/confirm', {
   }
 
   if (!verification.ok) {
-    fastify.log.warn({ bookingRef, digest, reason: verification.reason }, 'Escrow verification rejected');
-    return reply.code(400).send({ error: verification.reason || 'Escrow transaction could not be verified' });
+    fastify.log.warn({ bookingRef, digest, reason: verification.reason, retryable: !!verification.retryable }, 'Escrow verification rejected');
+    // Review finding #1: a retryable result means the created object isn't
+    // queryable yet (read-after-write lag) — return 503 so the client retries and
+    // the booking stays pending, rather than marking the deposit held on weak
+    // evidence (tx-success + sender only). Genuine mismatches stay a hard 400.
+    const code = verification.retryable ? 503 : 400;
+    return reply.code(code).send({ error: verification.reason || 'Escrow transaction could not be verified', retryable: !!verification.retryable });
   }
 
   try {
@@ -737,6 +742,16 @@ fastify.post('/ical/import', async (request, reply) => {
   if (!session) return;
   const { propertyId, platform, icalUrl } = request.body;
   if (!propertyId || !platform || !icalUrl) return reply.code(400).send({ error: 'propertyId, platform and icalUrl required' });
+  // Review finding #2 (SSRF + authz): only a host who manages this property may
+  // register a feed URL the server will later fetch, and the URL must be a public
+  // https endpoint (assertPublicHttpsUrl blocks internal/metadata addresses).
+  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
+  if (!(await canManageProperty(session, propertyId))) return reply.code(403).send({ error: 'You do not manage this property' });
+  try {
+    await assertPublicHttpsUrl(icalUrl);
+  } catch (err) {
+    return reply.code(400).send({ error: `Invalid iCal URL: ${err.message}` });
+  }
   const saved = await saveExternalCalendar(propertyId, platform, icalUrl);
   return { success: true, message: `${platform} calendar synced for property ${propertyId}`, calendars: saved };
 });
@@ -812,15 +827,21 @@ fastify.get('/messages/:bookingRef/count', async (request, reply) => {
 fastify.post('/reviews/submit', async (request, reply) => {
   const session = await getAuthedSession(request, reply);
   if (!session) return;
-  const { propertyId, bookingRef, rating, review } = request.body;
-  if (!propertyId || !bookingRef || !rating || !review) return reply.code(400).send({ error: 'All fields required' });
+  const { bookingRef, rating, review } = request.body;
+  if (!bookingRef || !rating || !review) return reply.code(400).send({ error: 'bookingRef, rating and review are required' });
   if (rating < 1 || rating > 5) return reply.code(400).send({ error: 'Rating must be 1-5' });
   try {
+    // Review finding #3: the review must be for the CALLER'S OWN booking, and the
+    // property is derived from the booking row — never a client-supplied value.
+    const bk = await pool.query('SELECT property_id, wallet_address FROM bookings WHERE booking_ref = $1', [bookingRef]);
+    const booking = bk.rows[0];
+    if (!booking) return reply.code(404).send({ error: 'Booking not found' });
+    if (booking.wallet_address !== session.suiAddress) return reply.code(403).send({ error: 'You can only review your own bookings' });
     const existing = await pool.query('SELECT id FROM reviews WHERE booking_ref = $1', [bookingRef]);
     if (existing.rows.length > 0) return reply.code(400).send({ error: 'Already reviewed' });
     await pool.query(
       'INSERT INTO reviews (property_id, booking_ref, guest_name, guest_email, rating, review) VALUES ($1,$2,$3,$4,$5,$6)',
-      [propertyId, bookingRef, session.name, session.email, rating, review]
+      [booking.property_id, bookingRef, session.name, session.email, rating, review]
     );
     return { success: true, message: 'Review submitted.' };
   } catch (err) { return reply.code(500).send({ error: 'Failed to submit review' }); }
@@ -1001,7 +1022,7 @@ fastify.post('/host/apply', {
         from: 'ARIA <onboarding@resend.dev>',
         to: HOST_ADDRESSES[0] || 'cwilliams36092@gmail.com',
         subject: `New Host Application — ${name}`,
-        html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px"><h1 style="color:#ffaa00;font-size:22px;margin:0 0 8px">🏡 New Host Application</h1><p style="color:#888;margin:0 0 20px">Someone wants to become an ARIA host.</p><div style="background:#111;border:1px solid #222;border-radius:8px;padding:16px;margin-bottom:20px;font-size:13px"><table style="width:100%;border-collapse:collapse"><tr><td style="color:#888;padding:5px 0">Name</td><td style="text-align:right">${name}</td></tr><tr><td style="color:#888;padding:5px 0">Email</td><td style="text-align:right">${email}</td></tr><tr><td style="color:#888;padding:5px 0">Sui Address</td><td style="text-align:right;font-family:monospace;font-size:11px">${session.suiAddress}</td></tr>${city ? `<tr><td style="color:#888;padding:5px 0">Location</td><td style="text-align:right">${city}${state ? ', ' + state : ''}</td></tr>` : ''}${strPermit ? `<tr><td style="color:#888;padding:5px 0">STR Permit</td><td style="text-align:right">${strPermit}</td></tr>` : ''}</table></div><p style="color:#888;font-size:12px;margin:0">To approve, use the ARIA admin API with their Sui address.</p></div>`
+        html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px"><h1 style="color:#ffaa00;font-size:22px;margin:0 0 8px">🏡 New Host Application</h1><p style="color:#888;margin:0 0 20px">Someone wants to become an ARIA host.</p><div style="background:#111;border:1px solid #222;border-radius:8px;padding:16px;margin-bottom:20px;font-size:13px"><table style="width:100%;border-collapse:collapse"><tr><td style="color:#888;padding:5px 0">Name</td><td style="text-align:right">${escapeHtml(name)}</td></tr><tr><td style="color:#888;padding:5px 0">Email</td><td style="text-align:right">${escapeHtml(email)}</td></tr><tr><td style="color:#888;padding:5px 0">Sui Address</td><td style="text-align:right;font-family:monospace;font-size:11px">${session.suiAddress}</td></tr>${city ? `<tr><td style="color:#888;padding:5px 0">Location</td><td style="text-align:right">${escapeHtml(city)}${state ? ', ' + escapeHtml(state) : ''}</td></tr>` : ''}${strPermit ? `<tr><td style="color:#888;padding:5px 0">STR Permit</td><td style="text-align:right">${escapeHtml(strPermit)}</td></tr>` : ''}</table></div><p style="color:#888;font-size:12px;margin:0">To approve, use the ARIA admin API with their Sui address.</p></div>`
       });
     } catch (err) { fastify.log.warn({ err }, 'Admin notification email failed'); }
 
@@ -1010,7 +1031,7 @@ fastify.post('/host/apply', {
         from: 'ARIA <onboarding@resend.dev>',
         to: email,
         subject: 'ARIA Host Application Received',
-        html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px"><h1 style="color:#00ff44;font-size:24px;margin:0 0 8px">🏠 Host Application Received</h1><p style="color:#888;margin:0 0 24px">Thanks for applying to host on ARIA, ${name}.</p><div style="background:#111;border:1px solid #222;border-radius:8px;padding:20px;margin-bottom:20px"><p style="margin:0 0 12px;font-size:14px;color:#ccc">Your application is under review. Here's what happens next:</p><ul style="color:#888;font-size:13px;line-height:1.8;padding-left:16px"><li>We'll review your application within 1–2 business days</li><li>You'll receive an email when your account is approved</li><li>Once approved, you can list properties and receive bookings</li></ul></div><p style="color:#555;font-size:12px;text-align:center;margin:0">Powered by ARIA — Built on Sui</p></div>`
+        html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px"><h1 style="color:#00ff44;font-size:24px;margin:0 0 8px">🏠 Host Application Received</h1><p style="color:#888;margin:0 0 24px">Thanks for applying to host on ARIA, ${escapeHtml(name)}.</p><div style="background:#111;border:1px solid #222;border-radius:8px;padding:20px;margin-bottom:20px"><p style="margin:0 0 12px;font-size:14px;color:#ccc">Your application is under review. Here's what happens next:</p><ul style="color:#888;font-size:13px;line-height:1.8;padding-left:16px"><li>We'll review your application within 1–2 business days</li><li>You'll receive an email when your account is approved</li><li>Once approved, you can list properties and receive bookings</li></ul></div><p style="color:#555;font-size:12px;text-align:center;margin:0">Powered by ARIA — Built on Sui</p></div>`
       });
     } catch (err) { fastify.log.warn({ err }, 'Host application email failed'); }
 
@@ -1043,7 +1064,7 @@ fastify.post('/host/approve', async (request, reply) => {
         from: 'ARIA <onboarding@resend.dev>',
         to: host.email,
         subject: '🎉 Your ARIA Host Account is Approved!',
-        html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px"><h1 style="color:#00ff44;font-size:24px;margin:0 0 8px">🎉 You're an ARIA Host!</h1><p style="color:#888;margin:0 0 24px">Congratulations ${host.name} — your host account has been approved.</p><div style="background:#0a1a0a;border:1px solid #1a3a1a;border-radius:8px;padding:20px;margin-bottom:20px"><p style="color:#00ff44;font-size:14px;font-weight:600;margin:0 0 8px">You can now:</p><ul style="color:#888;font-size:13px;line-height:1.8;padding-left:16px"><li>Access your Host Dashboard</li><li>Receive bookings from guests</li><li>Manage deposits and payouts</li><li>Track occupancy tax compliance</li></ul></div><a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}" style="display:block;background:#00ff44;color:#000;text-align:center;padding:14px;border-radius:8px;font-weight:700;font-size:15px;text-decoration:none;margin-bottom:20px">Go to ARIA →</a><p style="color:#555;font-size:12px;text-align:center;margin:0">Powered by ARIA — Built on Sui</p></div>`
+        html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px"><h1 style="color:#00ff44;font-size:24px;margin:0 0 8px">🎉 You're an ARIA Host!</h1><p style="color:#888;margin:0 0 24px">Congratulations ${escapeHtml(host.name)} — your host account has been approved.</p><div style="background:#0a1a0a;border:1px solid #1a3a1a;border-radius:8px;padding:20px;margin-bottom:20px"><p style="color:#00ff44;font-size:14px;font-weight:600;margin:0 0 8px">You can now:</p><ul style="color:#888;font-size:13px;line-height:1.8;padding-left:16px"><li>Access your Host Dashboard</li><li>Receive bookings from guests</li><li>Manage deposits and payouts</li><li>Track occupancy tax compliance</li></ul></div><a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}" style="display:block;background:#00ff44;color:#000;text-align:center;padding:14px;border-radius:8px;font-weight:700;font-size:15px;text-decoration:none;margin-bottom:20px">Go to ARIA →</a><p style="color:#555;font-size:12px;text-align:center;margin:0">Powered by ARIA — Built on Sui</p></div>`
       });
     } catch (err) { fastify.log.warn({ err }, 'Host approval email failed'); }
 

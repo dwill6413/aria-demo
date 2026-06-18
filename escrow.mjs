@@ -342,11 +342,15 @@ export async function verifyEscrowTransaction(digest, expected = {}, readOptions
       }
     }
   } else {
-    // Couldn't read the created object's content (RPC/indexing lag or a decode
-    // mismatch). Don't strand a confirmed, guest-signed deposit on a read quirk
-    // — accept on the tx-success + sender match, but log so it can be chased
-    // down (and so a persistent decode failure is visible rather than silent).
-    console.warn('verifyEscrowTransaction: created object unreadable, accepting on tx+sender only', { escrowId, reason: onChain?.error });
+    // Review finding #1: do NOT accept on weak evidence. If the created object
+    // can't be read after retries (RPC/indexing lag, or a decode mismatch), the
+    // deposit is NOT marked held. Return a RETRYABLE signal so the caller keeps
+    // the booking pending and re-verifies (the "Retry escrow deposit" button / a
+    // reconciler) — which avoids BOTH stranding a real deposit (retry succeeds
+    // once the object is queryable, with full field validation) AND trusting an
+    // unrelated guest-signed tx that merely created some object.
+    console.warn('verifyEscrowTransaction: created object not yet readable — returning retryable (not accepting)', { escrowId, reason: onChain?.error });
+    return { ok: false, retryable: true, escrowId, reason: 'Escrow not yet verifiable on-chain (the created object is not queryable yet) — please retry in a moment.' };
   }
 
   return { ok: true, escrowId, sender: actualSender };
