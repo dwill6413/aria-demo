@@ -599,6 +599,31 @@ NEXT_PUBLIC_API_URL = https://aria-demo-production-e590.up.railway.app
 - For any PTB that creates a shared object, verify it on-chain by **re-reading
   the object's content** (`readEscrowObject`/BCS) and checking its fields against
   the expected values — never trust a client-reported digest at face value.
+
+### ⚠️ Pitfall — read-after-write race on freshly-created objects (June 18, 2026)
+
+`getTransaction(digest)` is queryable the instant a tx executes, but
+`getObjects()` for the **object that tx just created** can lag a beat behind on
+the read node. Code that creates an object and immediately reads it back, then
+**hard-fails** if it's not found, will intermittently reject valid,
+on-chain-confirmed operations. This exact bug broke S1's escrow verification in
+live testing — a real guest-signed, confirmed deposit was rejected as "not a
+readable BookingEscrow," leaving the booking confirmed but the deposit stuck.
+
+Rules for any on-chain-read verification (incl. Phase 2 `seal_approve` and any
+future PTB-creates-object flow):
+1. **Retry** object reads with backoff (`readEscrowObject` uses 4× ~1.2s). A
+   single not-found is not definitive.
+2. **Distinguish** "readable but fields mismatch" (real substitution → hard
+   reject) from "unreadable at all" (infra/timing lag → fall back to the weaker
+   sound guarantee you already hold — e.g. tx-success + verified sender — and
+   log; don't permanently fail a properly-signed op).
+3. **Log the distinct reason** (`object-not-found` / `rpc-error` / `bcs-decode`)
+   so a persistent problem (e.g. a wrong BCS layout silently skipping checks) is
+   visible, not silent.
+4. **Smoke-test live in a browser** — mocked unit tests can't catch read-after-
+   write timing or a BCS-layout mismatch against real chain bytes. The bug
+   shipped past 39 green unit tests; only live testing caught it.
 - Use the single `depositToMist()` helper for dollar→mist conversion everywhere.
 - Keep this doc, `ARIA_ROADMAP.md`, `ARIA_REMEDIATION.md`, and `ARIA_CODE_AUDIT.md` in sync.
 
