@@ -489,6 +489,40 @@ original package ID (`0x538262...7fdbe`); no separate contract deployment.
 
 ---
 
+## 5b. Code-Quality Evaluation (June 18, 2026) — Outcomes
+
+Independent code-quality review (`ARIA_EVALUATION_HANDOFF.md`, R1–R15) was
+evaluated and acted on. Scorecard/rationale: see the evaluation response.
+
+**Fixed this session (code-only, demo-ready):**
+
+| Rec | What shipped |
+|---|---|
+| **M1 + R2** | New `cancelBooking()` in `bookings.mjs` (REST + AI both delegate). **Fixes the stranded-deposit bug**: cancel now calls `autoReleaseEscrow` on-chain; if the escrow can't release yet (pre-expiry) it stays `held` for the sweep instead of being flipped to `released` and skipped. |
+| **R5** | `canAccessBookingThread()` gates `/messages/send`, `/messages/:bookingRef`, `/count` to the booking's guest + managing host + superadmin (was: any logged-in user). |
+| **R14** | `escapeHtml()` (`emails.mjs`) applied to user-supplied claim/dispute `reason` (and names) before HTML-email interpolation. |
+| **R1** | `getAuthedSession()` decorator replaces ~28 duplicated session-lookup blocks in `server.mjs` (middleware only; no route-module split). |
+| **R3** | Single `walrus.mjs` `pushToWalrus()`; the three duplicates removed. |
+| **R4** | AI prompts (`ai_route.mjs`) generated from `catalog.mjs` via `catalogPromptSections()` — no more hardcoded price/tax that can drift from what `createBooking()` charges. |
+| **R7 / R15** | `index.jsx` booking payload trimmed to `{propertyId,checkIn,checkOut}`; stale `catalog.mjs` header comment updated. |
+
+**Before mainnet (roadmap — needs a decision, infra, secret, or contract upgrade):**
+
+| Rec | Why deferred / what's needed |
+|---|---|
+| **`cancel_escrow` contract fn (v4)** | Proper instant pre-expiry refund on cancel. The current fix avoids stranding but a pre-check-in cancel's deposit isn't released on-chain until the sweep at expiry. Needs a Move upgrade (the next package version after v3). |
+| **R6** — scope `/bookings/all` to host's properties | Multi-tenant isolation; only matters once host-owned listings ship. |
+| **M3** — per-user zkLogin salt (+ migration) | salt `'0'` lets anyone derive a user's Sui address from their Google `sub`. Re-derives addresses → migration required. |
+| **M4** — DB TLS CA cert | `rejectUnauthorized:false` is a MITM risk; supply the Railway CA cert. |
+| **M6** — Stripe webhook / payment capture | Card path creates an intent but never confirms capture; bookings can be `confirmed` without paid card. |
+| **R10** — externalize rate-limit + single cron | In-process now; hard prerequisite before a 2nd Railway instance. |
+| **R8** — numbered SQL migrations | Replace chained `ALTER TABLE IF NOT EXISTS`; minimal runner, no heavy ORM. |
+| **R11** — integration tests + CI | booking→confirm, cancel→escrow, auth middleware; wire `escrow.test.mjs` + `sui move test` into CI. |
+| **R12 / R13** | Incremental TS on backend; frontend componentization — as features demand. |
+| **R1 (full split)** | Break `server.mjs` into `routes/*.mjs` plugins (middleware half already done). |
+
+---
+
 ## 6. Deliberately Deferred
 
 ### zkLogin salt = `'0'`

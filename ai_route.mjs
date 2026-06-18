@@ -11,8 +11,9 @@
 
 import { pool } from './db.mjs';
 import { getSession } from './auth.mjs';
-import { JURISDICTION_TAX_RATES } from './catalog.mjs';
-import { createBooking, releaseDepositForBooking } from './bookings.mjs';
+import { PROPERTIES, JURISDICTION_TAX_RATES } from './catalog.mjs';
+import { createBooking, releaseDepositForBooking, cancelBooking } from './bookings.mjs';
+import { pushToWalrus } from './walrus.mjs';
 
 const GROK_MODEL   = 'grok-3-latest';
 const XAI_BASE_URL = 'https://api.x.ai/v1/chat/completions';
@@ -201,11 +202,27 @@ const HOST_TOOLS = [
 
 // ─── System prompts ───────────────────────────────────────────────────────────
 
+// R4: property + tax prompt blocks generated from catalog.mjs so the AI never
+// quotes a price/tax that has drifted from what createBooking() actually charges.
+function catalogPromptSections() {
+  const props = Object.entries(PROPERTIES).map(([id, p]) => {
+    const j = JURISDICTION_TAX_RATES[Number(id)];
+    const loc = j?.name ? ` — ${j.name}` : '';
+    return `${id}. ${p.title} — $${p.price}/night${loc} (id:${id})`;
+  }).join('\n');
+  const taxes = Object.entries(JURISDICTION_TAX_RATES).map(([id, j]) =>
+    `${id}. ${PROPERTIES[Number(id)]?.title || 'Property ' + id} — ${(j.rate * 100).toFixed(2)}% (${j.breakdown})`
+  ).join('\n');
+  return { props, taxes };
+}
+
 function buildGuestSystemPrompt(session, bookings) {
   const active = (bookings || []).filter(b => b.payment_status !== 'cancelled');
   const bkSummary = active.length > 0
     ? active.map(b => `- ${b.property_title} (ref: ${b.booking_ref}, ${b.check_in} to ${b.check_out}, ${b.nights} nights, $${b.total_amount} SuiUSD)`).join('\n')
     : 'No active bookings yet.';
+
+  const { props, taxes } = catalogPromptSections();
 
   return `You are ARIA Assistant, an AI agent built into ARIA — a vacation rental platform on Sui blockchain. You can take real actions: book properties, cancel bookings, fetch booking history, read and send messages.
 
@@ -226,12 +243,7 @@ IMPORTANT RULES:
 - Be conversational and friendly
 
 JURISDICTION TAX RATES (use these for accurate tax calculations):
-1. Oceanfront Villa (Miami Beach, FL) — 13.00% (6% FL sales + 7% Miami-Dade tourist tax)
-2. Downtown Loft (Austin, TX) — 17.00% (6% TX state + 11% City of Austin HOT)
-3. Mountain Cabin (Asheville, NC) — 13.00% (6.75% NC sales + 6% Buncombe County occupancy)
-4. Desert Retreat (Scottsdale, AZ) — 8.05% (AZ state + city Transaction Privilege Tax)
-5. Lake House (Lake Tahoe, CA) — 10.00% (Placer County Transient Occupancy Tax)
-6. Historic Brownstone (Brooklyn, NY) — 14.75% (4% NY state + 4.5% local + 5.875% NYC hotel occupancy)
+${taxes}
 
 ABOUT ARIA: 3% fee vs 15% Airbnb. Instant Sui settlement. Walrus receipts. SuiUSD payments. Refundable damage deposits held in Sui escrow.
 
@@ -242,17 +254,13 @@ ACTIVE BOOKINGS:
 ${bkSummary}
 
 AVAILABLE PROPERTIES:
-1. Oceanfront Villa — Miami Beach, FL — $285/night (id:1)
-2. Downtown Loft — Austin, TX — $145/night (id:2)
-3. Mountain Cabin — Asheville, NC — $195/night (id:3)
-4. Desert Retreat — Scottsdale, AZ — $225/night (id:4)
-5. Lake House — Lake Tahoe, CA — $320/night (id:5)
-6. Historic Brownstone — Brooklyn, NY — $175/night (id:6)
+${props}
 
 CANCELLATION POLICY: Full refund 24+ hours before check-in. 50% within 24 hours. Security deposit auto-released on cancellation before check-in.`;
 }
 
 function buildHostSystemPrompt(session) {
+  const { props, taxes } = catalogPromptSections();
   return `You are ARIA Host Assistant — an AI agent for property hosts on ARIA, a vacation rental platform on Sui blockchain.
 
 You have FULL access to host operations. You can fetch all bookings, calculate revenue, read/reply to guest messages, release damage deposits, cancel bookings, and pull guest reviews.
@@ -264,12 +272,7 @@ IMPORTANT RULES:
 - Format numbers as USD. Be clear and concise. You are talking to the HOST.
 
 JURISDICTION TAX RATES for your properties:
-1. Oceanfront Villa (Miami Beach, FL) — 13.00%
-2. Downtown Loft (Austin, TX) — 17.00%
-3. Mountain Cabin (Asheville, NC) — 13.00%
-4. Desert Retreat (Scottsdale, AZ) — 8.05%
-5. Lake House (Lake Tahoe, CA) — 10.00%
-6. Historic Brownstone (Brooklyn, NY) — 14.75%
+${taxes}
 
 ABOUT ARIA: 3% fee vs 15% Airbnb. Instant Sui settlement. Walrus receipts. SuiUSD. Refundable damage deposits held in Sui escrow.
 
@@ -277,12 +280,7 @@ HOST USER: ${session.name} (${session.email})
 Wallet: ${session.suiAddress}
 
 YOUR 6 PROPERTIES:
-1. Oceanfront Villa — Miami Beach, FL — $285/night (id:1)
-2. Downtown Loft — Austin, TX — $145/night (id:2)
-3. Mountain Cabin — Asheville, NC — $195/night (id:3)
-4. Desert Retreat — Scottsdale, AZ — $225/night (id:4)
-5. Lake House — Lake Tahoe, CA — $320/night (id:5)
-6. Historic Brownstone — Brooklyn, NY — $175/night (id:6)`;
+${props}`;
 }
 
 // ─── Grok API call ────────────────────────────────────────────────────────────
@@ -312,21 +310,7 @@ async function callGrok(messages, tools) {
 }
 
 // ─── Walrus helper ────────────────────────────────────────────────────────────
-
-async function pushToWalrus(data) {
-  try {
-    const res = await fetch('https://publisher.walrus-testnet.walrus.space/v1/blobs?epochs=3', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/octet-stream' },
-      body: Buffer.from(JSON.stringify(data))
-    });
-    const json = await res.json();
-    return json?.newlyCreated?.blobObject?.blobId ?? json?.alreadyCertified?.blobId ?? null;
-  } catch (err) {
-    console.warn('Walrus push failed:', err.message);
-    return null;
-  }
-}
+// pushToWalrus now lives in walrus.mjs (R3) and is imported above.
 
 // ─── Tool executor ────────────────────────────────────────────────────────────
 // `isHost` is resolved server-side by the route handler and passed in. Every
@@ -366,72 +350,12 @@ async function executeTool(toolName, toolInput, session, isHost) {
     }
 
     // ── Cancel booking in Postgres ────────────────────────────────────────────
+    // ── Cancel booking — delegates to the shared cancelBooking() service ──────
+    // (R2 + M1) identical logic to REST /booking/cancel, including on-chain escrow
+    // release. Guest cancels their own; a host (isHost) may cancel any.
     if (toolName === 'cancel_booking') {
-      const result = await pool.query('SELECT * FROM bookings WHERE booking_ref = $1', [toolInput.bookingRef]);
-      if (result.rows.length === 0) return JSON.stringify({ error: 'Booking not found' });
-      const booking = result.rows[0];
-      // A guest may only cancel their own booking; a host may cancel any.
-      if (!isHost && booking.wallet_address !== session.suiAddress) return JSON.stringify({ error: 'Not your booking' });
-      if (booking.payment_status === 'cancelled') return JSON.stringify({ error: 'Already cancelled' });
-
-      const today = new Date(); today.setHours(0, 0, 0, 0);
-      const depositAutoReleased = today < new Date(booking.check_in);
-      const cancelledAt = new Date().toISOString();
-
-      await pool.query(
-        `UPDATE bookings SET payment_status='cancelled', cancelled_at=$1, deposit_status=$2 WHERE booking_ref=$3`,
-        [cancelledAt, depositAutoReleased ? 'released' : 'held', toolInput.bookingRef]
-      );
-
-      const cancellationWalrusBlobId = await pushToWalrus({
-        ...booking, walrusReceiptType: 'cancellation', cancellationTimestamp: cancelledAt
-      });
-      if (cancellationWalrusBlobId) {
-        await pool.query('UPDATE bookings SET cancellation_walrus_blob_id=$1 WHERE booking_ref=$2',
-          [cancellationWalrusBlobId, toolInput.bookingRef]);
-      }
-
-      try {
-        const { Resend } = await import('resend');
-        const resend = new Resend(process.env.RESEND_API_KEY);
-        const depositNote = depositAutoReleased
-          ? `<div style="background:#0a1a0a;border:1px solid #1a4a1a;border-radius:6px;padding:10px;margin-top:10px"><p style="color:#00ff44;font-size:12px;font-weight:600;margin:0 0 4px">🔓 Security deposit auto-released</p><p style="color:#888;font-size:12px;margin:0">Your $${booking.deposit_amount} deposit has been automatically returned since you cancelled before check-in.</p></div>`
-          : `<div style="background:#0a0a1a;border:1px solid #1a1a3a;border-radius:6px;padding:10px;margin-top:10px"><p style="color:#4a9eff;font-size:12px;font-weight:600;margin:0 0 4px">🔒 Security deposit pending release</p><p style="color:#888;font-size:12px;margin:0">Your deposit will be reviewed and released by the host.</p></div>`;
-        await resend.emails.send({
-          from: 'ARIA <onboarding@resend.dev>',
-          to: booking.guest_email,
-          subject: `Booking Cancelled — ${booking.property_title} | Ref: ${toolInput.bookingRef}`,
-          html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px">
-            <h1 style="color:#ff4444;font-size:24px;margin:0 0 8px">❌ Booking Cancelled</h1>
-            <p style="color:#888;margin:0 0 24px">Your cancellation confirmation — ${booking.guest_name}</p>
-            <div style="background:#111;border:1px solid #222;border-radius:8px;padding:20px;margin-bottom:20px">
-              <h2 style="margin:0 0 16px;font-size:18px">${booking.property_title}</h2>
-              <table style="width:100%;border-collapse:collapse">
-                <tr><td style="color:#888;padding:6px 0">Booking Ref</td><td style="text-align:right">${toolInput.bookingRef}</td></tr>
-                <tr><td style="color:#888;padding:6px 0">Check-in</td><td style="text-align:right">${booking.check_in}</td></tr>
-                <tr><td style="color:#888;padding:6px 0">Check-out</td><td style="text-align:right">${booking.check_out}</td></tr>
-                <tr><td style="color:#888;padding:6px 0">Nights</td><td style="text-align:right">${booking.nights}</td></tr>
-                <tr style="border-top:1px solid #333"><td style="padding:10px 0;font-weight:700">Refund Amount</td><td style="text-align:right;font-weight:700;color:#00ff44">$${booking.total_amount} SuiUSD</td></tr>
-              </table>
-              ${depositNote}
-            </div>
-            <div style="background:#1a0a0a;border:1px solid #3a1a1a;border-radius:8px;padding:16px;margin-bottom:20px">
-              <p style="color:#ff6666;font-size:13px;font-weight:600;margin:0 0 6px">Refund Policy</p>
-              <p style="color:#888;font-size:13px;margin:0;line-height:1.6">Full refund processed within 24 hours. Refund will be returned to your original SuiUSD wallet address.</p>
-            </div>
-            <p style="color:#555;font-size:12px;text-align:center;margin:0">Powered by ARIA — Built on Sui | The Airbnb killer</p>
-          </div>`
-        });
-      } catch (emailErr) {
-        console.warn('AI cancellation email failed:', emailErr.message);
-      }
-
-      return JSON.stringify({
-        success: true, bookingRef: toolInput.bookingRef, depositAutoReleased,
-        message: depositAutoReleased
-          ? 'Booking cancelled. Deposit auto-released.'
-          : 'Booking cancelled. Deposit pending host review.'
-      });
+      const result = await cancelBooking({ bookingRef: toolInput.bookingRef, session, isHost });
+      return JSON.stringify(result.error ? { error: result.error } : result);
     }
 
     // ── Host: get all bookings from Postgres ──────────────────────────────────

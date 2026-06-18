@@ -1,8 +1,11 @@
 // ─── ARIA shared catalog ──────────────────────────────────────────────────────
 // Single source of truth for property prices and jurisdiction tax rates.
 // Imported by server.mjs and ai_route.mjs so the server NEVER trusts a
-// client-supplied price. (The Next.js frontend keeps its own display copy in
-// pages/index.jsx — keep these in sync, or have the frontend fetch them.)
+// client-supplied price. This is the single place prices/tax rates are defined:
+// the frontend fetches them at runtime via GET /properties, and the AI prompts
+// are generated from this module (see ai_route.mjs catalogPromptSections). The
+// pages/*.jsx files keep only cosmetic display fields (images/ratings/location)
+// as PROPERTY_DISPLAY fallbacks — no authoritative pricing lives there. (R15)
 
 // Authoritative nightly prices. These match the values shown in the frontend,
 // so legitimate booking totals are unchanged; only tampered prices are rejected.

@@ -201,7 +201,7 @@ export default function Home() {
     setEscrowError('');
     const res = await authFetch(`${API}/booking/create`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ propertyId: selected.id, propertyTitle: selected.title, pricePerNight: selected.price, nights, totalAmount: getBookingTotal(selected, nights), checkIn: checkIn.toISOString().split('T')[0], checkOut: checkOut.toISOString().split('T')[0] })
+      body: JSON.stringify({ propertyId: selected.id, checkIn: checkIn.toISOString().split('T')[0], checkOut: checkOut.toISOString().split('T')[0] }) // R7: server derives title/price/nights/total from catalog.mjs
     });
     const data = await res.json();
     if (data.error === 'Property not available for selected dates') { alert('Sorry — those dates are already booked. Please select different dates.'); setBookingLoading(false); return; }

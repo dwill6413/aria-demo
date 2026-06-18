@@ -18,6 +18,8 @@ import { PROPERTIES, JURISDICTION_TAX_RATES } from './catalog.mjs';
 import { calculateHostPayout } from './deepbook.mjs';
 import { buildEscrowTransaction, autoReleaseKeypair, autoReleaseEscrow } from './escrow.mjs';
 import { Resend } from 'resend';
+import { pushToWalrus } from './walrus.mjs';
+import { escapeHtml } from './emails.mjs';
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
@@ -105,21 +107,109 @@ export async function releaseDepositForBooking(booking, { logger = console } = {
   return { ok: true };
 }
 
-// Pushes a JSON receipt to Walrus testnet and returns the resulting blobId,
-// or null if the push fails (non-blocking — a booking is still valid without
-// a Walrus receipt, it just loses the permanent off-chain audit copy).
-async function pushBookingReceiptToWalrus(receipt, logger = console) {
-  try {
-    const walrusRes  = await fetch('https://publisher.walrus-testnet.walrus.space/v1/blobs?epochs=3', {
-      method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' },
-      body: Buffer.from(JSON.stringify(receipt))
-    });
-    const walrusData = await walrusRes.json();
-    return walrusData?.newlyCreated?.blobObject?.blobId ?? walrusData?.alreadyCertified?.blobId ?? null;
-  } catch (err) {
-    logger?.warn?.({ err }, 'Walrus storage failed');
-    return null;
+// ── Shared cancellation logic (R2 + M1) ────────────────────────────────────
+// One implementation of "cancel this booking," used by both server.mjs's REST
+// POST /booking/cancel and ai_route.mjs's cancel_booking tool — previously ~60
+// near-identical lines in each (Walrus push + DB update + Resend email) that had
+// already drifted on host-auth rules.
+//
+// M1 (escrow-on-cancel gap): the old paths set deposit_status in Postgres but
+// NEVER released the on-chain escrow. A pre-check-in cancel set status 'released'
+// while the auto-release sweep only processes 'held' — so the guest's coin was
+// stranded on-chain forever. This now attempts an on-chain release when an escrow
+// is actually held: if auto_release succeeds (escrow past its on-chain expiry) the
+// deposit is marked 'released'; if it can't release yet (pre-expiry — the contract
+// has no pre-expiry refund path; see ROADMAP cancel_escrow), the status stays
+// 'held' so the existing sweep releases it once expiry passes, rather than being
+// flipped to 'released' and skipped. Either way the coin is no longer stranded.
+//
+// Auth: a guest may cancel only their own booking; a host (isHost) may cancel any
+// (matches the prior AI-tool behavior / demo super-host model).
+export async function cancelBooking({ bookingRef, session, isHost = false, logger = console }) {
+  if (!bookingRef || typeof bookingRef !== 'string' || !bookingRef.startsWith('ARIA-')) {
+    return { error: 'A valid bookingRef is required', status: 400 };
   }
+  let booking;
+  try {
+    const r = await pool.query('SELECT * FROM bookings WHERE booking_ref = $1', [bookingRef]);
+    booking = r.rows[0];
+  } catch (err) {
+    logger?.error?.({ err, bookingRef }, 'cancelBooking: lookup failed');
+    return { error: 'Booking lookup failed', status: 500 };
+  }
+  if (!booking) return { error: 'Booking not found', status: 404 };
+  if (!isHost && booking.wallet_address !== session.suiAddress) {
+    return { error: 'Not your booking', status: 403 };
+  }
+  if (booking.payment_status === 'cancelled') return { error: 'Already cancelled', status: 400 };
+  if (['claimed', 'disputed', 'forfeited'].includes(booking.deposit_status)) {
+    return { error: `Deposit is in the claim/dispute flow (status: ${booking.deposit_status}) — resolve that before cancelling`, status: 400 };
+  }
+
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const beforeCheckIn = today < new Date(booking.check_in);
+  const cancelledAt = new Date().toISOString();
+
+  // M1: release the on-chain escrow if one is actually held.
+  let depositStatus = booking.deposit_status;
+  let escrowReleased = false;
+  if (booking.escrow_object_id && booking.deposit_status === 'held') {
+    escrowReleased = await autoReleaseEscrow(booking.escrow_object_id);
+    if (escrowReleased) {
+      depositStatus = 'released';
+      logger?.info?.({ bookingRef }, 'cancelBooking: escrow released on-chain');
+    } else {
+      // Keep 'held' (NOT 'released') so the auto-release sweep picks it up once
+      // the on-chain expiry passes — flipping to 'released' would make the sweep
+      // skip it and strand the coin (the bug this fixes).
+      logger?.warn?.({ bookingRef }, 'cancelBooking: on-chain release not yet possible (pre-expiry) — left held for the sweep');
+    }
+  } else if (!booking.escrow_object_id && beforeCheckIn) {
+    // No escrow was ever funded/confirmed — nothing is locked on-chain.
+    depositStatus = 'released';
+  }
+
+  try {
+    await pool.query(
+      `UPDATE bookings SET payment_status='cancelled', cancelled_at=$1, deposit_status=$2 WHERE booking_ref=$3`,
+      [cancelledAt, depositStatus, bookingRef]
+    );
+  } catch (err) {
+    logger?.error?.({ err, bookingRef }, 'cancelBooking: DB update failed');
+    return { error: 'Failed to cancel booking', status: 500 };
+  }
+
+  const cancellationWalrusBlobId = await pushToWalrus(
+    { ...booking, walrusReceiptType: 'cancellation', cancellationTimestamp: cancelledAt }, logger
+  );
+  if (cancellationWalrusBlobId) {
+    try {
+      await pool.query('UPDATE bookings SET cancellation_walrus_blob_id=$1 WHERE booking_ref=$2', [cancellationWalrusBlobId, bookingRef]);
+    } catch (err) { logger?.warn?.({ err, bookingRef }, 'cancelBooking: walrus blob id update failed'); }
+  }
+
+  const depositReleasedNow = depositStatus === 'released';
+  try {
+    const depositNote = depositReleasedNow
+      ? `<div style="background:#0a1a0a;border:1px solid #1a4a1a;border-radius:6px;padding:10px;margin-top:10px"><p style="color:#00ff44;font-size:12px;font-weight:600;margin:0 0 4px">🔓 Security deposit released</p><p style="color:#888;font-size:12px;margin:0">Your $${booking.deposit_amount} deposit has been returned.</p></div>`
+      : `<div style="background:#0a0a1a;border:1px solid #1a1a3a;border-radius:6px;padding:10px;margin-top:10px"><p style="color:#4a9eff;font-size:12px;font-weight:600;margin:0 0 4px">🔒 Security deposit pending release</p><p style="color:#888;font-size:12px;margin:0">Your $${booking.deposit_amount} deposit will be released after the inspection window.</p></div>`;
+    await resend.emails.send({
+      from: 'ARIA <onboarding@resend.dev>', to: booking.guest_email,
+      subject: `Booking Cancelled — ${booking.property_title} | Ref: ${bookingRef}`,
+      html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px"><h1 style="color:#ff4444;font-size:24px;margin:0 0 8px">❌ Booking Cancelled</h1><p style="color:#888;margin:0 0 24px">Your cancellation confirmation — ${escapeHtml(booking.guest_name)}</p><div style="background:#111;border:1px solid #222;border-radius:8px;padding:20px;margin-bottom:20px"><h2 style="margin:0 0 16px;font-size:18px">${escapeHtml(booking.property_title)}</h2><table style="width:100%;border-collapse:collapse"><tr><td style="color:#888;padding:6px 0">Booking Ref</td><td style="text-align:right">${escapeHtml(bookingRef)}</td></tr><tr><td style="color:#888;padding:6px 0">Check-in</td><td style="text-align:right">${booking.check_in}</td></tr><tr><td style="color:#888;padding:6px 0">Check-out</td><td style="text-align:right">${booking.check_out}</td></tr></table>${depositNote}</div><p style="color:#555;font-size:12px;text-align:center;margin:0">Powered by ARIA — Built on Sui</p></div>`
+    });
+  } catch (err) { logger?.warn?.({ err, bookingRef }, 'cancelBooking: email failed'); }
+
+  return {
+    success: true, bookingRef,
+    depositAutoReleased: depositReleasedNow,
+    escrowReleased,
+    depositStatus,
+    cancellationWalrusBlobId,
+    message: depositReleasedNow
+      ? 'Booking cancelled. Deposit released.'
+      : 'Booking cancelled. Deposit will be released after the inspection window.'
+  };
 }
 
 function buildConfirmationEmailHtml({ propertyTitle, bookingRef, checkIn, checkOut, nights, subtotal, ariaFee, taxes, taxPct, jurisdictionName, bookingTotal, depositAmount, walrusBlobId, guestName }) {
@@ -128,7 +218,7 @@ function buildConfirmationEmailHtml({ propertyTitle, bookingRef, checkIn, checkO
     : '';
   return `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px">
     <h1 style="color:#00ff44;font-size:24px;margin:0 0 8px">✅ Booking Confirmed</h1>
-    <p style="color:#888;margin:0 0 24px">Your ARIA booking receipt — ${guestName}</p>
+    <p style="color:#888;margin:0 0 24px">Your ARIA booking receipt — ${escapeHtml(guestName)}</p>
     <div style="background:#111;border:1px solid #222;border-radius:8px;padding:20px;margin-bottom:20px">
       <h2 style="margin:0 0 16px;font-size:18px">${propertyTitle}</h2>
       <table style="width:100%;border-collapse:collapse">
@@ -264,7 +354,7 @@ export async function createBooking({ propertyId, checkIn, checkOut, session, lo
     depositAmount, depositStatus: 'pending', chargeAmount,
     jurisdiction: jurisdiction.name, jurisdictionBreakdown: jurisdiction.breakdown
   };
-  const walrusBlobId = await pushBookingReceiptToWalrus(receipt, logger);
+  const walrusBlobId = await pushToWalrus(receipt, logger);
   if (walrusBlobId) {
     try {
       await pool.query('UPDATE bookings SET walrus_blob_id = $1 WHERE booking_ref = $2', [walrusBlobId, bookingRef]);

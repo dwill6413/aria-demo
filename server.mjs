@@ -18,7 +18,9 @@ import {
   verifyClaimDamageTransaction, verifyDisputeClaimTransaction,
   resolveDisputeEscrow, finalizeClaimEscrow
 } from './escrow.mjs';
-import { createBooking, releaseDepositForBooking } from './bookings.mjs';
+import { createBooking, releaseDepositForBooking, cancelBooking } from './bookings.mjs';
+import { pushToWalrus } from './walrus.mjs';
+import { escapeHtml } from './emails.mjs';
 import {
   bookingCreateSchema, paymentCreateIntentSchema, hostApplySchema, validateBody,
   claimDamageSchema, claimDamageConfirmSchema, disputeClaimSchema, disputeClaimConfirmSchema, resolveDisputeSchema
@@ -90,6 +92,28 @@ async function canClaimAsHost(session, booking) {
   return canManageProperty(session, booking.property_id);
 }
 
+// R1: single source of the session-lookup boilerplate that was copy-pasted into
+// ~28 routes. Returns the session, or sends the 401 and returns null (caller
+// does `if (!session) return;`).
+async function getAuthedSession(request, reply) {
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (!sessionId) { reply.code(401).send({ error: 'Not authenticated' }); return null; }
+  const session = await getSession(sessionId);
+  if (!session) { reply.code(401).send({ error: 'Session expired' }); return null; }
+  return session;
+}
+
+// R5: a booking's message thread is visible only to its participants — the guest
+// who booked, a host who manages the property, or a superadmin. Without this,
+// any logged-in user could read/post to an arbitrary thread by bookingRef.
+async function canAccessBookingThread(session, booking) {
+  if (!booking) return false;
+  if (booking.wallet_address === session?.suiAddress) return true;                 // guest
+  if (HOST_ADDRESSES.includes((session?.email || '').toLowerCase())) return true;  // superadmin
+  if (booking.host_sui_address && session?.suiAddress === booking.host_sui_address) return true; // demo host
+  return canManageProperty(session, booking.property_id);                          // DB-mapped host
+}
+
 const resend = new Resend(process.env.RESEND_API_KEY);
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const fastify = Fastify({ logger: true });
@@ -149,10 +173,8 @@ fastify.post('/auth/zklogin/callback', async (request, reply) => {
 });
 
 fastify.get('/auth/me', async (request, reply) => {
-  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
-  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = await getSession(sessionId);
-  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
 
   if (!HOST_ADDRESSES.includes(session.email.toLowerCase()) && !session.dbHostApproved) {
     session.dbHostApproved = await checkDbHost(session.email);
@@ -183,10 +205,8 @@ fastify.get('/auth/logout', async (request, reply) => {
 
 // Stripe
 fastify.post('/payment/create-intent', async (request, reply) => {
-  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
-  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = await getSession(sessionId);
-  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
   if (validateBody(paymentCreateIntentSchema, request, reply)) return;
 
   const { propertyId } = request.body;
@@ -224,10 +244,8 @@ fastify.post('/booking/create', {
     }
   }
 }, async (request, reply) => {
-  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
-  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = await getSession(sessionId);
-  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
   if (validateBody(bookingCreateSchema, request, reply)) return;
 
   // Only propertyId + dates are taken from the client. Any client-sent
@@ -262,10 +280,8 @@ fastify.post('/booking/:bookingRef/escrow/confirm', {
     }
   }
 }, async (request, reply) => {
-  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
-  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = await getSession(sessionId);
-  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
 
   const { bookingRef } = request.params;
   const { digest } = request.body || {};
@@ -324,7 +340,8 @@ fastify.post('/booking/:bookingRef/escrow/confirm', {
   return { success: true, escrowObjectId: verification.escrowId };
 });
 
-// Booking Cancel
+// Booking Cancel — delegates to the shared cancelBooking() service (R2 + M1:
+// releases the on-chain escrow on cancel; no more stranded deposits).
 fastify.post('/booking/cancel', {
   config: {
     rateLimit: {
@@ -333,52 +350,12 @@ fastify.post('/booking/cancel', {
     }
   }
 }, async (request, reply) => {
-  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
-  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = await getSession(sessionId);
-  if (!session) return reply.code(401).send({ error: 'Session expired' });
-
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
   const { bookingRef } = request.body;
-  if (!bookingRef || typeof bookingRef !== 'string' || !bookingRef.startsWith('ARIA-'))
-    return reply.code(400).send({ error: 'A valid bookingRef is required' });
-
-  try {
-    const result = await pool.query('SELECT * FROM bookings WHERE booking_ref = $1', [bookingRef]);
-    if (result.rows.length === 0) return reply.code(404).send({ error: 'Booking not found' });
-    const booking = result.rows[0];
-    if (booking.wallet_address !== session.suiAddress) return reply.code(403).send({ error: 'Not your booking' });
-    if (booking.payment_status === 'cancelled') return reply.code(400).send({ error: 'Already cancelled' });
-
-    const today = new Date(); today.setHours(0,0,0,0);
-    const depositAutoReleased = today < new Date(booking.check_in);
-    const cancelledAt = new Date().toISOString();
-
-    await pool.query(
-      `UPDATE bookings SET payment_status='cancelled', cancelled_at=$1, deposit_status=$2 WHERE booking_ref=$3`,
-      [cancelledAt, depositAutoReleased ? 'released' : 'held', bookingRef]
-    );
-
-    const cancellationWalrusBlobId = await pushToWalrus({ ...booking, walrusReceiptType: 'cancellation', cancellationTimestamp: cancelledAt });
-    if (cancellationWalrusBlobId) {
-      await pool.query('UPDATE bookings SET cancellation_walrus_blob_id=$1 WHERE booking_ref=$2', [cancellationWalrusBlobId, bookingRef]);
-    }
-
-    try {
-      const depositNote = depositAutoReleased
-        ? `<div style="background:#0a1a0a;border:1px solid #1a4a1a;border-radius:6px;padding:10px;margin-top:10px"><p style="color:#00ff44;font-size:12px;font-weight:600;margin:0 0 4px">🔓 Security deposit auto-released</p><p style="color:#888;font-size:12px;margin:0">Your $${booking.deposit_amount} deposit has been automatically returned since you cancelled before check-in.</p></div>`
-        : `<div style="background:#0a0a1a;border:1px solid #1a1a3a;border-radius:6px;padding:10px;margin-top:10px"><p style="color:#4a9eff;font-size:12px;font-weight:600;margin:0 0 4px">🔒 Security deposit pending release</p><p style="color:#888;font-size:12px;margin:0">Your $${booking.deposit_amount} deposit will be reviewed and released by the host.</p></div>`;
-      await resend.emails.send({
-        from: 'ARIA <onboarding@resend.dev>', to: booking.guest_email,
-        subject: `Booking Cancelled — ${booking.property_title} | Ref: ${bookingRef}`,
-        html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px"><h1 style="color:#ff4444;font-size:24px;margin:0 0 8px">❌ Booking Cancelled</h1><p style="color:#888;margin:0 0 24px">Your cancellation confirmation — ${booking.guest_name}</p><div style="background:#111;border:1px solid #222;border-radius:8px;padding:20px;margin-bottom:20px"><h2 style="margin:0 0 16px;font-size:18px">${booking.property_title}</h2>${depositNote}</div><p style="color:#555;font-size:12px;text-align:center;margin:0">Powered by ARIA — Built on Sui</p></div>`
-      });
-    } catch (err) { fastify.log.warn({ err }, 'Cancellation email failed'); }
-
-    return { success: true, bookingRef, depositAutoReleased, cancellationWalrusBlobId,
-      message: depositAutoReleased ? 'Booking cancelled. Deposit auto-released.' : 'Booking cancelled. Deposit pending host review.' };
-  } catch (err) {
-    return reply.code(500).send({ error: 'Failed to cancel booking' });
-  }
+  const result = await cancelBooking({ bookingRef, session, isHost: isHost(session), logger: fastify.log });
+  if (result.error) return reply.code(result.status || 400).send({ error: result.error });
+  return result;
 });
 
 // Release Deposit — HOST ONLY
@@ -390,10 +367,8 @@ fastify.post('/booking/release-deposit', {
     }
   }
 }, async (request, reply) => {
-  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
-  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = await getSession(sessionId);
-  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
   if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
 
   const { bookingRef } = request.body;
@@ -437,10 +412,8 @@ fastify.post('/booking/claim-damage', {
     rateLimit: { max: 10, timeWindow: '1 hour', errorResponseBuilder: () => ({ error: 'Too many claim attempts.' }) }
   }
 }, async (request, reply) => {
-  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
-  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = await getSession(sessionId);
-  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
   if (validateBody(claimDamageSchema, request, reply)) return;
 
   const { bookingRef, reason } = request.body;
@@ -480,10 +453,8 @@ fastify.post('/booking/claim-damage/confirm', {
     rateLimit: { max: 10, timeWindow: '1 hour', errorResponseBuilder: () => ({ error: 'Too many claim confirmation attempts.' }) }
   }
 }, async (request, reply) => {
-  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
-  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = await getSession(sessionId);
-  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
   if (validateBody(claimDamageConfirmSchema, request, reply)) return;
 
   const { bookingRef, digest } = request.body;
@@ -510,7 +481,7 @@ fastify.post('/booking/claim-damage/confirm', {
       await resend.emails.send({
         from: 'ARIA <onboarding@resend.dev>', to: booking.guest_email,
         subject: `Damage Claim Filed — ${booking.property_title} | Ref: ${bookingRef}`,
-        html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px"><h1 style="color:#ffaa00;font-size:24px;margin:0 0 8px">⚠️ Damage Claim Filed</h1><p style="color:#888;margin:0 0 24px">${booking.guest_name}, the host has filed a damage claim against your security deposit.</p><div style="background:#111;border:1px solid #222;border-radius:8px;padding:20px;margin-bottom:20px"><h2 style="margin:0 0 16px;font-size:18px">${booking.property_title}</h2><p style="color:#888;font-size:13px;margin:0 0 6px">Claim amount: <span style="color:#ffaa00">$${claimAmount}</span> of your $${booking.deposit_amount} deposit</p>${reason ? `<p style="color:#888;font-size:13px;margin:0">Reason: ${reason}</p>` : ''}</div><p style="color:#555;font-size:12px;line-height:1.6">If you disagree with this claim, you can dispute it from your bookings page and ARIA will review and resolve the split.</p><p style="color:#555;font-size:12px;text-align:center;margin:24px 0 0">Powered by ARIA — Built on Sui</p></div>`
+        html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px"><h1 style="color:#ffaa00;font-size:24px;margin:0 0 8px">⚠️ Damage Claim Filed</h1><p style="color:#888;margin:0 0 24px">${booking.guest_name}, the host has filed a damage claim against your security deposit.</p><div style="background:#111;border:1px solid #222;border-radius:8px;padding:20px;margin-bottom:20px"><h2 style="margin:0 0 16px;font-size:18px">${booking.property_title}</h2><p style="color:#888;font-size:13px;margin:0 0 6px">Claim amount: <span style="color:#ffaa00">$${claimAmount}</span> of your $${booking.deposit_amount} deposit</p>${reason ? `<p style="color:#888;font-size:13px;margin:0">Reason: ${escapeHtml(reason)}</p>` : ''}</div><p style="color:#555;font-size:12px;line-height:1.6">If you disagree with this claim, you can dispute it from your bookings page and ARIA will review and resolve the split.</p><p style="color:#555;font-size:12px;text-align:center;margin:24px 0 0">Powered by ARIA — Built on Sui</p></div>`
       });
     } catch (err) { fastify.log.warn({ err }, 'Claim notification email failed'); }
 
@@ -528,10 +499,8 @@ fastify.post('/booking/dispute-claim', {
     rateLimit: { max: 10, timeWindow: '1 hour', errorResponseBuilder: () => ({ error: 'Too many dispute attempts.' }) }
   }
 }, async (request, reply) => {
-  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
-  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = await getSession(sessionId);
-  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
   if (validateBody(disputeClaimSchema, request, reply)) return;
 
   const { bookingRef, reason } = request.body;
@@ -563,10 +532,8 @@ fastify.post('/booking/dispute-claim/confirm', {
     rateLimit: { max: 10, timeWindow: '1 hour', errorResponseBuilder: () => ({ error: 'Too many dispute confirmation attempts.' }) }
   }
 }, async (request, reply) => {
-  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
-  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = await getSession(sessionId);
-  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
   if (validateBody(disputeClaimConfirmSchema, request, reply)) return;
 
   const { bookingRef, digest } = request.body;
@@ -592,7 +559,7 @@ fastify.post('/booking/dispute-claim/confirm', {
       await resend.emails.send({
         from: 'ARIA <onboarding@resend.dev>', to: HOST_ADDRESSES[0] || 'cwilliams36092@gmail.com',
         subject: `Deposit Dispute Filed — ${booking.property_title} | Ref: ${bookingRef}`,
-        html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px"><h1 style="color:#ff4444;font-size:24px;margin:0 0 8px">🚩 Dispute Filed</h1><p style="color:#888;margin:0 0 24px">A guest has disputed a damage claim — review needed.</p><div style="background:#111;border:1px solid #222;border-radius:8px;padding:20px"><p style="color:#888;font-size:13px;margin:0 0 6px">Booking: ${bookingRef} — ${booking.property_title}</p><p style="color:#888;font-size:13px;margin:0 0 6px">Claim amount: $${booking.claim_amount} of $${booking.deposit_amount}</p>${reason ? `<p style="color:#888;font-size:13px;margin:0">Guest's reason: ${reason}</p>` : ''}</div></div>`
+        html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px"><h1 style="color:#ff4444;font-size:24px;margin:0 0 8px">🚩 Dispute Filed</h1><p style="color:#888;margin:0 0 24px">A guest has disputed a damage claim — review needed.</p><div style="background:#111;border:1px solid #222;border-radius:8px;padding:20px"><p style="color:#888;font-size:13px;margin:0 0 6px">Booking: ${bookingRef} — ${booking.property_title}</p><p style="color:#888;font-size:13px;margin:0 0 6px">Claim amount: $${booking.claim_amount} of $${booking.deposit_amount}</p>${reason ? `<p style="color:#888;font-size:13px;margin:0">Guest's reason: ${escapeHtml(reason)}</p>` : ''}</div></div>`
       });
     } catch (err) { fastify.log.warn({ err }, 'Dispute admin notification email failed'); }
 
@@ -615,10 +582,8 @@ fastify.post('/booking/resolve-dispute', {
     rateLimit: { max: 20, timeWindow: '1 hour', errorResponseBuilder: () => ({ error: 'Too many resolution attempts.' }) }
   }
 }, async (request, reply) => {
-  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
-  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = await getSession(sessionId);
-  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
   if (!HOST_ADDRESSES.includes((session.email || '').toLowerCase()))
     return reply.code(403).send({ error: 'Superadmin access required' });
   if (validateBody(resolveDisputeSchema, request, reply)) return;
@@ -666,24 +631,12 @@ fastify.post('/booking/resolve-dispute', {
   }
 });
 
-// Walrus helper
-async function pushToWalrus(data) {
-  try {
-    const res  = await fetch('https://publisher.walrus-testnet.walrus.space/v1/blobs?epochs=3', {
-      method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' },
-      body: Buffer.from(JSON.stringify(data))
-    });
-    const json = await res.json();
-    return json?.newlyCreated?.blobObject?.blobId ?? json?.alreadyCertified?.blobId ?? null;
-  } catch (err) { fastify.log.warn({ err }, 'Walrus push failed'); return null; }
-}
+// Walrus push helper now lives in walrus.mjs (R3) and is imported above.
 
 // Bookings History — guest (own bookings only)
 fastify.get('/bookings/history', async (request, reply) => {
-  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
-  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = await getSession(sessionId);
-  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
   try {
     const result = await pool.query(
       'SELECT * FROM bookings WHERE wallet_address = $1 ORDER BY created_at DESC',
@@ -721,10 +674,8 @@ fastify.get('/bookings/history', async (request, reply) => {
 
 // Bookings All — HOST ONLY
 fastify.get('/bookings/all', async (request, reply) => {
-  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
-  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = await getSession(sessionId);
-  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
   if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
   try {
     const result = await pool.query('SELECT * FROM bookings ORDER BY created_at DESC');
@@ -762,10 +713,8 @@ fastify.get('/bookings/all', async (request, reply) => {
 
 // DeepBook
 fastify.get('/deepbook/payout/:amount', async (request, reply) => {
-  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
-  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = await getSession(sessionId);
-  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
   const amount = parseFloat(request.params.amount);
   if (!amount || amount <= 0) return reply.code(400).send({ error: 'Invalid amount' });
   const liquidity = await getSuiUSDLiquidity(amount);
@@ -784,10 +733,8 @@ fastify.get('/ical/:propertyId', async (request, reply) => {
 });
 
 fastify.post('/ical/import', async (request, reply) => {
-  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
-  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = await getSession(sessionId);
-  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
   const { propertyId, platform, icalUrl } = request.body;
   if (!propertyId || !platform || !icalUrl) return reply.code(400).send({ error: 'propertyId, platform and icalUrl required' });
   const saved = await saveExternalCalendar(propertyId, platform, icalUrl);
@@ -802,14 +749,16 @@ fastify.get('/availability/:propertyId', async (request, reply) => {
   return { propertyId, checkIn, checkOut, ...availability };
 });
 
-// Messages
+// Messages — all thread routes are scoped to booking participants (R5).
 fastify.post('/messages/send', async (request, reply) => {
-  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
-  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = await getSession(sessionId);
-  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
   const { bookingRef, message } = request.body;
   if (!bookingRef || !message) return reply.code(400).send({ error: 'bookingRef and message required' });
+  const bk = await pool.query('SELECT * FROM bookings WHERE booking_ref = $1', [bookingRef]);
+  const booking = bk.rows[0];
+  if (!booking) return reply.code(404).send({ error: 'Booking not found' });
+  if (!(await canAccessBookingThread(session, booking))) return reply.code(403).send({ error: 'You are not a participant in this booking' });
   try {
     await pool.query(
       'INSERT INTO messages (booking_ref, from_name, from_email, message) VALUES ($1,$2,$3,$4)',
@@ -820,11 +769,13 @@ fastify.post('/messages/send', async (request, reply) => {
 });
 
 fastify.get('/messages/:bookingRef', async (request, reply) => {
-  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
-  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = await getSession(sessionId);
-  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
   const { bookingRef } = request.params;
+  const bk = await pool.query('SELECT * FROM bookings WHERE booking_ref = $1', [bookingRef]);
+  const booking = bk.rows[0];
+  if (!booking) return reply.code(404).send({ error: 'Booking not found' });
+  if (!(await canAccessBookingThread(session, booking))) return reply.code(403).send({ error: 'You are not a participant in this booking' });
   try {
     const result = await pool.query(
       'SELECT * FROM messages WHERE booking_ref = $1 ORDER BY created_at ASC',
@@ -835,19 +786,19 @@ fastify.get('/messages/:bookingRef', async (request, reply) => {
 });
 
 fastify.post('/messages/:bookingRef/read', async (request, reply) => {
-  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
-  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = await getSession(sessionId);
-  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
   return { success: true };
 });
 
 fastify.get('/messages/:bookingRef/count', async (request, reply) => {
-  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
-  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = await getSession(sessionId);
-  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
   const { bookingRef } = request.params;
+  const bk = await pool.query('SELECT * FROM bookings WHERE booking_ref = $1', [bookingRef]);
+  const booking = bk.rows[0];
+  if (!booking) return reply.code(404).send({ error: 'Booking not found' });
+  if (!(await canAccessBookingThread(session, booking))) return reply.code(403).send({ error: 'You are not a participant in this booking' });
   try {
     const result = await pool.query(
       'SELECT COUNT(*) FROM messages WHERE booking_ref = $1 AND from_email != $2',
@@ -859,10 +810,8 @@ fastify.get('/messages/:bookingRef/count', async (request, reply) => {
 
 // Reviews
 fastify.post('/reviews/submit', async (request, reply) => {
-  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
-  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = await getSession(sessionId);
-  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
   const { propertyId, bookingRef, rating, review } = request.body;
   if (!propertyId || !bookingRef || !rating || !review) return reply.code(400).send({ error: 'All fields required' });
   if (rating < 1 || rating > 5) return reply.code(400).send({ error: 'Rating must be 1-5' });
@@ -891,10 +840,8 @@ fastify.get('/reviews/:propertyId', async (request, reply) => {
 });
 
 fastify.get('/reviews/all', async (request, reply) => {
-  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
-  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = await getSession(sessionId);
-  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
   if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
   try {
     const result = await pool.query('SELECT * FROM reviews ORDER BY created_at DESC');
@@ -905,10 +852,8 @@ fastify.get('/reviews/all', async (request, reply) => {
 // ─── Tax Routes — HOST ONLY ───────────────────────────────────────────────────
 
 fastify.get('/tax/summary', async (request, reply) => {
-  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
-  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = await getSession(sessionId);
-  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
   if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
   try {
     const result = await pool.query(`
@@ -950,10 +895,8 @@ fastify.get('/tax/summary', async (request, reply) => {
 });
 
 fastify.post('/tax/remit', async (request, reply) => {
-  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
-  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = await getSession(sessionId);
-  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
   if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
   const { bookingRef, jurisdiction, notes } = request.body;
   if (!bookingRef || typeof bookingRef !== 'string' || !bookingRef.startsWith('ARIA-'))
@@ -977,10 +920,8 @@ fastify.post('/tax/remit', async (request, reply) => {
 });
 
 fastify.post('/tax/unremit', async (request, reply) => {
-  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
-  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = await getSession(sessionId);
-  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
   if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
   const { bookingRef } = request.body;
   if (!bookingRef) return reply.code(400).send({ error: 'bookingRef is required' });
@@ -999,10 +940,8 @@ fastify.post('/tax/unremit', async (request, reply) => {
 // ─── Host Onboarding Routes ───────────────────────────────────────────────────
 
 fastify.get('/host/profile', async (request, reply) => {
-  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
-  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = await getSession(sessionId);
-  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
   try {
     const result = await pool.query('SELECT * FROM host_profiles WHERE sui_address = $1', [session.suiAddress]);
     if (result.rows.length === 0) return { profile: null };
@@ -1022,10 +961,8 @@ fastify.get('/host/profile', async (request, reply) => {
 fastify.post('/host/apply', {
   config: { rateLimit: { max: 3, timeWindow: '1 hour', errorResponseBuilder: () => ({ error: 'Too many applications. Please wait and try again.' }) } }
 }, async (request, reply) => {
-  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
-  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = await getSession(sessionId);
-  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
   if (validateBody(hostApplySchema, request, reply)) return;
 
   const { name, email, phone, propertyAddress, city, state, zip, country,
@@ -1085,10 +1022,8 @@ fastify.post('/host/apply', {
 });
 
 fastify.post('/host/approve', async (request, reply) => {
-  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
-  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = await getSession(sessionId);
-  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
   if (!HOST_ADDRESSES.includes(session.email.toLowerCase()))
     return reply.code(403).send({ error: 'Superadmin access required' });
 
@@ -1119,10 +1054,8 @@ fastify.post('/host/approve', async (request, reply) => {
 });
 
 fastify.get('/host/applications', async (request, reply) => {
-  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
-  if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
-  const session = await getSession(sessionId);
-  if (!session) return reply.code(401).send({ error: 'Session expired' });
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
   if (!HOST_ADDRESSES.includes(session.email.toLowerCase()))
     return reply.code(403).send({ error: 'Superadmin access required' });
 
