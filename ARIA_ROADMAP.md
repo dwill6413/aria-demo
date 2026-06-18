@@ -1,7 +1,14 @@
 # ARIA — Product Roadmap & AI Handoff Document
-**Version:** 2.16 | **Updated:** June 17, 2026
+**Version:** 2.17 | **Updated:** June 18, 2026
 **Purpose:** Complete handoff for an AI assistant continuing ARIA development.
 Read this entire document before writing any code.
+
+> **June 18, 2026:** Contract upgraded to **v3** (`0xec0d6bd4…644d8fa1`, adds
+> `finalize_claim`); a second independent code review fixed 8 findings (see
+> `ARIA_CODE_AUDIT.md` "Second Review"); ops cleanup done (addresses funded, old
+> `ARIA_DEPLOYER_KEY` + `ANTHROPIC_API_KEY` removed from Railway, `@anthropic-ai/sdk`
+> removed). **Top remaining build item: fee collection/routing.** Phase 2
+> (Seal/PII) remains the next feature phase.
 
 ---
 
@@ -263,8 +270,12 @@ escrow creation:
 - [x] P1b complete (June 17, 2026 — deployer/backend-signer separated; new key needs Railway/faucet setup, see P1 section above)
 - [x] P2 complete (June 17, 2026 — auto-release cron, production host lookup, claim/dispute routes; `ARIA_ARBITRATOR_KEY`/`ARIA_ARBITRATOR_ADDRESS` set in Railway, see P2 section above)
 - [x] P3 complete (June 17, 2026 — contract upgrade published on-chain and fully deployed, package v2 at `0x98e712...4264f26`; `ESCROW_PACKAGE_ID` in Railway updated and redeployed, see P3 section above)
+- [x] Second code review + fixes complete (June 18, 2026 — 8 findings, see `ARIA_CODE_AUDIT.md` "Second Review"; backend 39/39, Move 28/28)
+- [x] Contract **v3** published (June 18, 2026 — `finalize_claim` deadlock fix, `0xec0d6bd4…644d8fa1`; Railway `ESCROW_PACKAGE_ID` updated + redeployed clean)
 - [ ] Independent Move audit (OtterSec, Zellic, or similar)
 - [ ] Burn UpgradeCap after audit
+- [ ] **Fee collection/routing** — zero implementation (top remaining build item; see Tech Debt)
+- [ ] In-browser smoke test of the migrated gRPC submit path (`lib/zklogin.js`)
 - [ ] Add ARIA-side audit logging for Seal PII decrypt requests before any
   real (non-demo) guest PII flows through Phase 2 — see Seal compliance note
   in Phase 2 above
@@ -287,7 +298,8 @@ corrected design below.
 
 **No separate Move module needed.** Add a single new function directly to the
 existing, already-deployed `escrow.move`, via a normal package upgrade (this
-will be v3):
+will be **v4** — v3 was consumed June 18, 2026 by the `finalize_claim`
+deadlock fix; the current on-chain package is `0xec0d6bd4…644d8fa1`):
 ```move
 /// Called by Seal key servers (via dry-run, never an actual transaction) to
 /// authorize decrypting a guest's PII blob. id's bytes must encode the
@@ -427,8 +439,19 @@ original package ID (`0x538262...7fdbe`); no separate contract deployment.
 ✅ Phase 1k: P3 — STATUS_RESOLVED removed + 30-day expiry bound added, upgrade
    published on-chain and fully deployed (June 17, 2026, package v2 at
    0x98e712...4264f26); Railway ESCROW_PACKAGE_ID updated and redeployed
+✅ Phase 1L: Second code review + fixes (June 18, 2026 — 8 findings, see
+   ARIA_CODE_AUDIT.md "Second Review"): hardened verifyEscrowTransaction (re-reads
+   object type/amount/host/ref), frontend lib/zklogin.js migrated off JSON-RPC to
+   gRPC, atomic booking insert (silent-confirmed + double-booking race),
+   unified releaseDepositForBooking() across REST + AI, DEMO_HOST_ADDRESS config.
+   Backend 39/39, Move 28/28.
+✅ Phase 1m: Contract v3 — finalize_claim (CLAIMED-deadlock fix) published on-chain
+   (June 18, 2026, package v3 at 0xec0d6bd4...644d8fa1); Railway ESCROW_PACKAGE_ID
+   updated to v3 and redeployed clean. NOTE: this consumed the "v3" upgrade slot —
+   Phase 2a's seal_approve will be the NEXT upgrade (package v4).
+⬜ Phase 1h.5: Fee collection/routing mechanism — TOP remaining build item
 
-⬜ Phase 2a: Add seal_approve() to escrow.move, publish upgrade (package v3)
+⬜ Phase 2a: Add seal_approve() to escrow.move, publish upgrade (now package **v4**)
 ⬜ Phase 2b: Pick testnet key servers + threshold (no contract deploy — see Phase 2 above)
 ⬜ Phase 2c: guest_verifications table in db.mjs (no pii_object_id column)
 ⬜ Phase 2d: /guest/profile + /host/guest-identity routes (latter returns escrow_object_id too)
@@ -457,10 +480,12 @@ original package ID (`0x538262...7fdbe`); no separate contract deployment.
 | Properties frontend-hardcoded | Medium | `properties` table empty; `catalog.mjs` now also carries `hostAddress` per property, still hand-maintained |
 | Frontend tax/price duplication | Low | `catalog.mjs` centralizes backend |
 | Stripe webhooks | Medium | Create-intent only |
-| No automated tests | Medium | Backend unit tests in `escrow.test.mjs` — 33 passing (15 `extractCreatedObjectId`, 3 `verifyEscrowTransaction`, 8 `isObjectMutated`, 4 `verifyClaimDamageTransaction`, 3 `verifyDisputeClaimTransaction`). No frontend tests. |
-| `zod` unused | Low | Already a dep; use for validation |
+| No automated tests | Medium | Backend unit tests in `escrow.test.mjs` — **39 passing** (15 `extractCreatedObjectId`, 8 `verifyEscrowTransaction` incl. object type/amount/host/ref checks, 1 `depositToMist`, 8 `isObjectMutated`, 4 `verifyClaimDamageTransaction`, 3 `verifyDisputeClaimTransaction`). Move suite 28 tests. No frontend tests. |
+| `zod` | **Done** | Adopted in `validation.mjs` |
 | Legacy `hosts` table | Low | Unused; drop it |
-| `@anthropic-ai/sdk` unused | Low | Remove |
+| `@anthropic-ai/sdk` | **Done (removed)** | June 18, 2026 — removed from package.json/lockfile; `ANTHROPIC_API_KEY` deleted from Railway and `.env`. Was never imported. |
+| Frontend gRPC migration | **Done** | June 18, 2026 — `lib/zklogin.js` epoch + submit now via `SuiGrpcClient` (off JSON-RPC, July 31 sunset). Needs in-browser smoke test. |
+| Claim/dispute exercisable on demo properties | Medium | All `catalog.mjs` `hostAddress` are `null` → escrow host = `DEMO_HOST_ADDRESS` (if set) else auto-release key. Set `DEMO_HOST_ADDRESS` in Railway to test the flow end-to-end. |
 
 ---
 
@@ -510,35 +535,41 @@ Follow-up: one-time authorization code exchange.
 ```
 DATABASE_URL, GOOGLE_CLIENT_ID, GOOGLE_CALLBACK_URL, FRONTEND_URL
 HOST_ADDRESSES, SESSION_SECRET, XAI_API_KEY, RESEND_API_KEY, STRIPE_SECRET_KEY
-ESCROW_PACKAGE_ID       = 0x98e712692f22f308bb6d097d2d8a2743ed0c01058135d71436b4abcd34264f26
-                           (LIVE in Railway since June 17, 2026, 3:05 PM CDT — P3
-                           upgrade, package version 2, confirmed via deploy logs.
-                           Original package 0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe
-                           remains the type-defining ID for existing BookingEscrow
-                           objects.)
+ESCROW_PACKAGE_ID       = 0xec0d6bd45d6bbf3aad04778ace4aacef33c071a30d79090532ba1697644d8fa1
+                           (LIVE in Railway since June 18, 2026 — v3 upgrade adding
+                           finalize_claim; redeploy confirmed clean (deploy db4f1425).
+                           Prior v2: 0x98e712692f22f308bb6d097d2d8a2743ed0c01058135d71436b4abcd34264f26.
+                           Original/type-defining (unchanged across upgrades):
+                           0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe)
 ESCROW_MODULE_NAME      = escrow
 ARIA_AUTO_RELEASE_KEY   = <suiprivkey1... bech32 format — Railway only, never committed.
-                           P1b: scoped to auto_release only, zero special on-chain
-                           privilege (see escrow.mjs). The original deployer/UpgradeCap
-                           key has been retired from Railway to cold KeePass-only storage.
+                           P1b: scoped to auto_release + finalize_claim (both
+                           permissionless on-chain), zero special privilege. Funded;
+                           confirmed loaded in Railway deploy logs June 18, 2026.
                            Public address: 0xc0b4e8b46731329fa83a8a5d93b1600b415fe0b050be986bb3f7cffda22e0ff9>
 ARIA_ARBITRATOR_KEY     = <suiprivkey1... bech32 format — Railway only, never committed.
-                           P2: scoped to resolve_dispute only. Generated and funded
-                           with testnet SUI June 17, 2026; delivered to the operator
-                           via chat only, per Section 7's rule. NOT yet set in Railway
-                           as of this writing — manual step.>
+                           P2: scoped to resolve_dispute only. Funded; SET in Railway
+                           (confirmed loaded in deploy logs June 18, 2026).>
 ARIA_ARBITRATOR_ADDRESS = 0xf46527e18f2fd7d3093c9591ded66e3a8711a18de63cd0bede2d88692e6f6a65
                           (P2, June 17, 2026 — supersedes the P1a placeholder address
                           0x0069868f93f9127b3e8b51bf95bc529925ca382e6305da0bb01f693826b983f8
                           for new bookings going forward; see P2 section above)
+DEMO_HOST_ADDRESS       = <optional, June 18, 2026 — a real Sui address to act as host
+                          for the 6 demo properties (catalog.mjs hostAddress is null),
+                          so claim/dispute can be exercised end-to-end. Falls back to
+                          ARIA_AUTO_RELEASE_KEY's address if unset. NOT yet set in Railway.>
+
+REMOVED June 18, 2026: ARIA_DEPLOYER_KEY (P1b ops complete — old deployer/UpgradeCap
+key is cold KeePass-only, never loaded by the backend) and ANTHROPIC_API_KEY
+(@anthropic-ai/sdk removed from the codebase; old sk-ant-... key should be revoked).
 AUTO_RELEASE_SWEEP_INTERVAL_MS = <optional, default 3600000 (1 hour) — sweep cadence
                            for runAutoReleaseSweep()>
 ```
 
-**To add for Phase 2:**
-```
-SEAL_PACKAGE_ID = 0x<from pii_access.move deployment>
-```
+**To add for Phase 2:** *(none)* — the revised Seal design (above) adds
+`seal_approve` to the existing `escrow.move` and anchors Seal's identity
+namespace to the original package ID (`0x538262…7fdbe`), so there is **no**
+separate `SEAL_PACKAGE_ID`. A `guest_verifications` table is added in `db.mjs`.
 
 **In Vercel (frontend):**
 ```
@@ -563,6 +594,18 @@ NEXT_PUBLIC_API_URL = https://aria-demo-production-e590.up.railway.app
 
 ---
 
+*ARIA Roadmap v2.17 — June 18, 2026*
+*Changes from v2.16: (1) Contract upgraded to v3 (`0xec0d6bd4…644d8fa1`) adding
+permissionless `finalize_claim` (CLAIMED-deadlock fix); Railway `ESCROW_PACKAGE_ID`
+updated + redeployed clean. Phase 2a's `seal_approve` is therefore now the v4
+upgrade. (2) Logged a second independent code review (Phase 1L) — 8 findings
+fixed, see `ARIA_CODE_AUDIT.md` "Second Review" (hardened escrow object
+verification, frontend gRPC migration, atomic booking insert, unified deposit
+release, `DEMO_HOST_ADDRESS`); backend 39/39, Move 28/28. (3) Ops: addresses
+funded, old `ARIA_DEPLOYER_KEY` + `ANTHROPIC_API_KEY` removed from Railway,
+`@anthropic-ai/sdk` removed. Updated pre-mainnet gate, build order, tech-debt
+backlog, Section 8 env vars (added `DEMO_HOST_ADDRESS`), and the Phase 2 env note
+(no `SEAL_PACKAGE_ID`). Top remaining build item: fee collection/routing.*
 *ARIA Roadmap v2.16 — June 17, 2026*
 *Changes from v2.15: scoped Phase 2 (Seal/Walrus guest PII) against verified
 Seal SDK mechanics — researched actual `seal_approve*` requirements,

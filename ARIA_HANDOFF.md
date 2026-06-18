@@ -1,9 +1,19 @@
 # ARIA — Technical Handoff Document
-**Version:** 4.14 | **Updated:** June 17, 2026
+**Version:** 4.17 | **Updated:** June 18, 2026
 
 Deeper technical details for developers or AI assistants continuing work on ARIA.
-Reconciled against the code actually deployed to production as of June 17, 2026.
-For the security change log see `ARIA_REMEDIATION.md`. For the build roadmap see `ARIA_ROADMAP.md`.
+Reconciled against the code actually deployed to production as of June 18, 2026.
+For the security change log see `ARIA_REMEDIATION.md` and `ARIA_CODE_AUDIT.md`
+(the June 18 "Second Review" section). For the build roadmap see `ARIA_ROADMAP.md`.
+
+> **June 18, 2026 update summary** (details throughout this doc):
+> - Smart contract upgraded to **package v3** (`0xec0d6bd4…644d8fa1`) adding a
+>   permissionless `finalize_claim` — live on testnet, Railway pointed at it.
+> - Second independent code review (8 findings, all fixed): hardened on-chain
+>   escrow verification, frontend gRPC migration, atomic booking insert, unified
+>   deposit-release, configurable demo host. See `ARIA_CODE_AUDIT.md`.
+> - Ops: all operational addresses funded; old `ARIA_DEPLOYER_KEY` removed from
+>   Railway; unused `@anthropic-ai/sdk` dependency + `ANTHROPIC_API_KEY` removed.
 
 ---
 
@@ -39,7 +49,8 @@ a `BookingEscrow<SUI>` shared object that holds the deposit on-chain.
 
 | Item | Value |
 |---|---|
-| Package ID | `0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe` |
+| Package ID (current, **v3**) | `0xec0d6bd45d6bbf3aad04778ace4aacef33c071a30d79090532ba1697644d8fa1` |
+| Package ID (type-defining / original) | `0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe` |
 | Module | `escrow` |
 | Network | Sui testnet |
 | UpgradeCap | `0x41f043cf28d0bb77ef6031c5208b611bdd673992afa9e27763b41033e4a327eb` |
@@ -47,7 +58,28 @@ a `BookingEscrow<SUI>` shared object that holds the deposit on-chain.
 | Source | `contracts/aria_escrow/sources/escrow.move` |
 
 Contract functions: `create_escrow`, `auto_release`, `claim_damage`,
-`accept_claim`, `dispute_claim`, `resolve_dispute`. All 23 unit tests pass.
+`accept_claim`, `dispute_claim`, `resolve_dispute`, and (**v3, June 18 2026**)
+`finalize_claim`. All **28** unit tests pass (`sui move test`).
+
+**Package version history:**
+- **v3** (`0xec0d6bd4…644d8fa1`) — June 18, 2026. Adds `finalize_claim`
+  (CLAIMED-deadlock fix, see below). Upgrade tx `9wzX4hQkZzzyZTMh9siAU2kHqRLQmJJots3FjzgGMAQa`.
+  `ESCROW_PACKAGE_ID` in Railway points here (redeploy confirmed clean).
+- **v2** (`0x98e712…4264f26`) — June 17, 2026. P3 cleanup (30-day expiry cap,
+  removed dead `STATUS_RESOLVED`).
+- **v1** (`0x538262…7fdbe`) — original publish. Remains the **type-defining ID**
+  for all `BookingEscrow` objects (unchanged across upgrades) and the anchor for
+  Seal's identity namespace in Phase 2.
+
+**`finalize_claim` (v3) — CLAIMED-deadlock fix.** `claim_damage` moves an escrow
+to `STATUS_CLAIMED`; from there the only prior exits were guest-only
+(`accept_claim` / `dispute_claim`), so a silent guest could lock both parties'
+funds forever. `finalize_claim<T>(escrow, clock, ctx)` is permissionless (like
+`auto_release`) and callable once `expiry_ms` has passed while still
+`STATUS_CLAIMED`: it pays `claim_amount` to the host and the remainder to the
+guest — the same split `accept_claim` produces. The backend keeper
+(`finalizeClaimEscrow` in `escrow.mjs`, driven by a second pass in
+`runAutoReleaseSweep`) calls it automatically for timed-out claims.
 
 ### How transactions are signed and submitted
 
@@ -70,6 +102,30 @@ frontend then reports `{bookingRef, digest}` to
 (`verifyEscrowTransaction`) before trusting the result and writing
 `escrow_object_id`/`deposit_status` to Postgres. See "Pattern: guest-signed
 escrow creation" below for the actual code.
+
+**STATUS: frontend JSON-RPC migration COMPLETE (June 18, 2026).** P0a migrated
+the *backend* off JSON-RPC, but the browser signing path in `lib/zklogin.js`
+still used `suix_getLatestSuiSystemState` (epoch read) and
+`sui_executeTransactionBlock` (submit) — both JSON-RPC, sunset July 31, 2026.
+These now go through the gRPC `SuiGrpcClient` (`getCurrentSystemState` and
+`executeTransaction`), matching the backend. Function signatures are unchanged,
+so `pages/index.jsx` / `pages/ai.jsx` were untouched. **Still worth a real
+in-browser smoke test** — gRPC-web behaves slightly differently in-browser than
+the old `fetch`.
+
+**STATUS: escrow verification hardened (June 18, 2026 — `ARIA_CODE_AUDIT.md`
+finding S1).** `verifyEscrowTransaction` previously only checked tx success +
+sender == guest + that *some* object was created. Because the guest signs and
+submits in their own browser, they could substitute a `create_escrow` that funds
+a near-zero deposit (or names a different host, or creates an unrelated object)
+and report that digest — the backend would mark `deposit_status='held'` on a
+worthless escrow. It now **re-reads the created object on-chain** (gRPC
+`getObjects`, BCS-decoding `BookingEscrow` via the exported `BookingEscrowBcs`)
+and asserts: type is `::escrow::BookingEscrow<…>`, `guest`/`host`/`booking_ref`
+match the booking, and both the `amount` field **and** the actual coin balance
+equal `depositToMist(deposit_amount)`. The confirm route passes the booking's
+authoritative values. `depositToMist()` is the single source of the
+dollar→mist conversion shared by build + verify so they can't drift.
 
 **The working pattern for `auto_release`** (`@mysten/sui: "latest"`, Node 22):
 
@@ -372,8 +428,12 @@ struct type and function signatures didn't change.
 - [x] **P2**: Production host address lookup from `host_profiles` (done June 17, 2026)
 - [x] **P2**: Claim/dispute backend routes wired (done June 17, 2026 — `ARIA_ARBITRATOR_KEY`/`ARIA_ARBITRATOR_ADDRESS` set in Railway June 17, 2026)
 - [x] **P3**: `STATUS_RESOLVED` dead code removed, 30-day expiry upper bound added, upgrade published on-chain and fully deployed (June 17, 2026 — package v2 at `0x98e712...4264f26`; Railway `ESCROW_PACKAGE_ID` updated and redeployed, see P3 section above)
+- [x] **Second code review (June 18, 2026)**: 8 findings fixed (escrow object verification, frontend gRPC migration, atomic booking insert, unified deposit-release, `finalize_claim` deadlock fix, demo-host config). See `ARIA_CODE_AUDIT.md` "Second Review". Backend suite 39/39, Move 28/28.
+- [x] **v3 contract upgrade (June 18, 2026)**: `finalize_claim` published (`0xec0d6bd4…644d8fa1`); Railway `ESCROW_PACKAGE_ID` updated and redeployed clean.
 - [ ] Independent Move audit (OtterSec, Zellic, or similar)
 - [ ] Burn UpgradeCap after audit passes
+- [ ] In-browser smoke test of the migrated gRPC submit path (`lib/zklogin.js`)
+- [ ] Fee collection/routing mechanism — still zero implementation (see Tech Debt)
 
 ---
 
@@ -424,17 +484,19 @@ Railway runs **Node 22** (`nixpacks.toml`: `nodejs_22`). Required by
 
 | File | Purpose | Notes |
 |---|---|---|
-| `server.mjs` | Main Fastify server | Routes, RBAC, escrow helpers |
-| `escrow.test.mjs` | Unit tests for escrow helpers | 33 tests, no network needed: `extractCreatedObjectId` (15), `verifyEscrowTransaction` (3), `isObjectMutated` (8), `verifyClaimDamageTransaction` (4), `verifyDisputeClaimTransaction` (3). Imports the real functions from `escrow.mjs` (no hand-copied duplicates). Run: `node escrow.test.mjs` |
-| `catalog.mjs` | Prices + tax rates | Single source of truth |
-| `db.mjs` | Pool + `initDB()` | 10 tables + indexes on `bookings.wallet_address`/`bookings.property_id`/`messages.booking_ref`, `escrow_object_id` column, idempotent |
+| `server.mjs` | Main Fastify server | Routes, RBAC, escrow helpers, auto-release + claim-finalize sweeps |
+| `escrow.mjs` | Sui escrow helpers | `buildEscrowTransaction`, hardened `verifyEscrowTransaction` (re-reads object via `readEscrowObject`/`BookingEscrowBcs`), `depositToMist`, `autoReleaseEscrow`, `finalizeClaimEscrow` (v3), `resolveDisputeEscrow`, claim/dispute build+verify |
+| `escrow.test.mjs` | Unit tests for escrow helpers | **39 tests**, no network needed: `extractCreatedObjectId` (15), `verifyEscrowTransaction` (8 — incl. type/amount/host/ref checks), `depositToMist` (1), `isObjectMutated` (8), `verifyClaimDamageTransaction` (4), `verifyDisputeClaimTransaction` (3). Imports the real functions from `escrow.mjs`. Run: `node escrow.test.mjs` |
+| `catalog.mjs` | Prices + tax rates | Single source of truth; `hostAddress` per property (all `null` for demo) |
+| `db.mjs` | Pool + `initDB()` | 10 tables + indexes, `escrow_object_id` + claim/dispute columns, idempotent |
 | `auth.mjs` | OAuth + sessions | JWT verification, CSPRNG IDs |
-| `ai_route.mjs` | Grok AI agent | Server-derived role, per-tool authz |
-| `validation.mjs` | zod request schemas | Validates `/booking/create`, `/payment/create-intent`, `/host/apply` bodies |
-| `bookings.mjs` | Shared `createBooking()` | Used by both REST and AI booking paths; booking refs include a random hex suffix |
+| `ai_route.mjs` | Grok AI agent | Server-derived role, per-tool authz; `release_deposit` delegates to shared `releaseDepositForBooking()` |
+| `validation.mjs` | zod request schemas | Validates booking/payment/host-apply/claim/dispute/resolve bodies |
+| `bookings.mjs` | Shared booking + release logic | `createBooking()` (atomic insert under advisory lock), `releaseDepositForBooking()` (shared by REST + AI), `getPropertyHostAddress()` (honors `DEMO_HOST_ADDRESS`) |
+| `lib/zklogin.js` | Client zkLogin signing | Ephemeral key/proof in `sessionStorage`; epoch + submit now via gRPC `SuiGrpcClient` (June 18 migration) |
 | `lib/authFetch.js` | Shared session-aware fetch | Used by all 6 authenticated frontend pages |
 | `nixpacks.toml` | Railway build config | Node 22 required |
-| `contracts/aria_escrow/` | Move smart contract | escrow.move + 25 tests (23 original + 2 added for P3 expiry bound) |
+| `contracts/aria_escrow/` | Move smart contract | escrow.move + **28 tests** (25 prior + 3 added for `finalize_claim`) |
 | `pages/ai.jsx` | AI chat UI | HTML-escaped output |
 | `pages/bookings.jsx` | Guest dashboard | Full wallet address + copy button |
 | `pages/host.jsx` | Host dashboard | Full wallet address + copy button |
@@ -452,17 +514,25 @@ Railway runs **Node 22** (`nixpacks.toml`: `nodejs_22`). Required by
 
 ## Current Technical Debt
 
-1. Properties frontend-hardcoded; `properties` table empty.
+1. Properties frontend-hardcoded; `properties` table empty. `catalog.mjs`
+   `hostAddress` is `null` for all 6 demo properties — escrow `host` falls back
+   to `DEMO_HOST_ADDRESS` (if set) else the auto-release key. Until a real host
+   address is wired, the claim/dispute flow can't be exercised end-to-end
+   (on-chain `claim_damage` asserts `sender == host`).
 2. Frontend tax/price duplication — `catalog.mjs` centralizes backend; frontend copy remains.
 3. Stripe: create-intent only; webhooks missing.
 4. Error handling inconsistent in some routes.
-5. No automated backend/frontend tests (backend unit tests started with `escrow.test.mjs`).
-6. `hosts` table and `@anthropic-ai/sdk` unused. `zod` is now adopted — see `validation.mjs`.
+5. No automated backend/frontend tests beyond `escrow.test.mjs` (39 tests) and
+   the Move suite (28 tests). No frontend tests.
+6. `hosts` table unused (legacy). `zod` adopted (`validation.mjs`).
+   *(`@anthropic-ai/sdk` was removed June 18, 2026 — no longer a dependency.)*
 7. **Fee collection/routing mechanism — zero implementation.** ARIA's revenue
    (booking fee) is entirely separate from the escrow (guest security deposit) —
    no mechanism exists to collect or route ARIA's cut. Needs design for both
    Stripe (Connect-style split) and SuiUSD on-chain (PTB split between host and
-   ARIA, similar to `resolve_dispute`'s split logic). Needs design before/alongside P0b.
+   ARIA, similar to `resolve_dispute`'s split logic). **Top remaining build item.**
+8. `@mysten/deepbook-v3` may still use JSON-RPC internally for price/liquidity
+   reads — not yet checked against the July 31 2026 sunset (read-only, lower priority).
 
 ---
 
@@ -472,28 +542,40 @@ Railway runs **Node 22** (`nixpacks.toml`: `nodejs_22`). Required by
 ```
 DATABASE_URL, GOOGLE_CLIENT_ID, GOOGLE_CALLBACK_URL, FRONTEND_URL
 HOST_ADDRESSES, SESSION_SECRET, XAI_API_KEY, RESEND_API_KEY, STRIPE_SECRET_KEY
-ESCROW_PACKAGE_ID       = 0x98e712692f22f308bb6d097d2d8a2743ed0c01058135d71436b4abcd34264f26
-                           (LIVE in Railway since June 17, 2026, 3:05 PM CDT — P3
-                           upgrade, package version 2, redeploy confirmed clean via
-                           deploy logs. Original package:
-                           0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe
-                           (still the type-defining ID for existing BookingEscrow
-                           objects — that doesn't change on upgrade). New
-                           create_escrow calls now get the 30-day expiry cap.)
+ESCROW_PACKAGE_ID       = 0xec0d6bd45d6bbf3aad04778ace4aacef33c071a30d79090532ba1697644d8fa1
+                           (LIVE in Railway since June 18, 2026 — v3 upgrade adding
+                           finalize_claim; redeploy confirmed clean via deploy logs
+                           (deploy db4f1425, both keypairs loaded, DB initialized).
+                           Upgrade tx 9wzX4hQkZzzyZTMh9siAU2kHqRLQmJJots3FjzgGMAQa.
+                           Prior: v2 0x98e712692f22f308bb6d097d2d8a2743ed0c01058135d71436b4abcd34264f26.
+                           Type-defining/original (unchanged across upgrades):
+                           0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe)
 ESCROW_MODULE_NAME      = escrow
 ARIA_AUTO_RELEASE_KEY   = <suiprivkey1... bech32 format — in Railway, never commit.
-                           P1b: scoped to auto_release only, zero special privilege.
-                           Public address: 0xc0b4e8b46731329fa83a8a5d93b1600b415fe0b050be986bb3f7cffda22e0ff9>
+                           P1b: scoped to auto_release (and finalize_claim — both
+                           permissionless on-chain), zero special privilege.
+                           Public address: 0xc0b4e8b46731329fa83a8a5d93b1600b415fe0b050be986bb3f7cffda22e0ff9
+                           Confirmed loaded in Railway deploy logs June 18, 2026.>
 ARIA_ARBITRATOR_KEY     = <suiprivkey1... bech32 format — in Railway, never commit.
-                           NEW (P2, June 17, 2026): scoped to resolve_dispute only.
-                           Set in Railway June 17, 2026. Delivered to the user
-                           via chat text only, never written to a file.>
+                           P2 (June 17, 2026): scoped to resolve_dispute only.
+                           Confirmed loaded in Railway deploy logs June 18, 2026.>
 ARIA_ARBITRATOR_ADDRESS = 0xf46527e18f2fd7d3093c9591ded66e3a8711a18de63cd0bede2d88692e6f6a65
-                           (NEW June 17, 2026 — set in Railway, supersedes the P1a
+                           (set in Railway June 17, 2026; supersedes the P1a
                            cold-storage address 0x0069868f93f9127b3e8b51bf95bc529925ca382e6305da0bb01f693826b983f8
-                           for any escrow created going forward. Pre-existing
-                           escrows still need the original P1a key to resolve.)
+                           for escrows created going forward. Pre-existing escrows
+                           still need the original P1a key to resolve.)
+DEMO_HOST_ADDRESS       = <optional, June 18, 2026 — a real Sui address to act as
+                           host for the 6 demo properties (whose catalog.mjs
+                           hostAddress is null), so the claim/dispute flow can be
+                           exercised end-to-end. If unset, escrow host falls back
+                           to ARIA_AUTO_RELEASE_KEY's address. NOT YET SET in Railway.>
 AUTO_RELEASE_SWEEP_INTERVAL_MS = <optional, default 3600000 (1 hour)>
+
+REMOVED June 18, 2026:
+- ARIA_DEPLOYER_KEY  — deleted from Railway (P1b ops complete). The original
+  deployer/UpgradeCap key is cold KeePass-only and never loaded by the backend.
+- ANTHROPIC_API_KEY  — deleted from Railway; @anthropic-ai/sdk removed from the
+  codebase (was unused). The old sk-ant-... key should be revoked in the console.
 ```
 
 **Vercel:**
@@ -514,10 +596,31 @@ NEXT_PUBLIC_API_URL = https://aria-demo-production-e590.up.railway.app
 - Use `extractCreatedObjectId(changedObjects)` for any PTB that creates a shared
   object — do not inline the filter logic.
 - Do not add emergency withdraw or pause functions to the contract.
-- Keep this doc, `ARIA_ROADMAP.md`, and `ARIA_REMEDIATION.md` in sync.
+- For any PTB that creates a shared object, verify it on-chain by **re-reading
+  the object's content** (`readEscrowObject`/BCS) and checking its fields against
+  the expected values — never trust a client-reported digest at face value.
+- Use the single `depositToMist()` helper for dollar→mist conversion everywhere.
+- Keep this doc, `ARIA_ROADMAP.md`, `ARIA_REMEDIATION.md`, and `ARIA_CODE_AUDIT.md` in sync.
 
 ---
 
+*Technical Handoff v4.17 — June 18, 2026*
+*Changes from v4.16: (1) Smart contract upgraded to v3
+(`0xec0d6bd4…644d8fa1`) adding permissionless `finalize_claim` (CLAIMED-deadlock
+fix); `ESCROW_PACKAGE_ID` updated in Railway and redeployed clean (deploy
+db4f1425). (2) Second independent code review — 8 findings fixed, documented in
+`ARIA_CODE_AUDIT.md` "Second Review": hardened `verifyEscrowTransaction`
+(re-reads object type/amount/host/ref), frontend `lib/zklogin.js` migrated off
+JSON-RPC to gRPC, atomic booking insert under advisory lock (fixes silent
+"confirmed" + double-booking race), unified `releaseDepositForBooking()` across
+REST + AI (gates on on-chain result), configurable `DEMO_HOST_ADDRESS`. Backend
+suite 33→39 tests; Move 25→28. (3) Ops: all operational addresses funded; old
+`ARIA_DEPLOYER_KEY` and `ANTHROPIC_API_KEY` removed from Railway; unused
+`@anthropic-ai/sdk` dependency removed from the codebase. Updated the contract
+table/version history, signing section, pre-mainnet checklist, Important Files,
+Tech Debt, and Environment Variables accordingly. Remaining manual: in-browser
+smoke test of the gRPC submit path; optional set `DEMO_HOST_ADDRESS` in Railway;
+fee-collection design.*
 *Technical Handoff v4.16 — June 17, 2026*
 *Changes from v4.15: noted that Phase 2 (Seal/PII) was re-scoped in
 `ARIA_ROADMAP.md` — no longer creates a separate on-chain object, so
