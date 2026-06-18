@@ -18,11 +18,74 @@ import { Transaction, coinWithBalance } from '@mysten/sui/transactions';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
 import { toBase64 } from '@mysten/sui/utils';
+import { bcs } from '@mysten/sui/bcs';
 
 export const suiClient = new SuiGrpcClient({
   network: 'testnet',
   baseUrl: 'https://fullnode.testnet.sui.io:443',
 });
+
+// BCS layout of the on-chain BookingEscrow<T> struct (escrow.move), used to
+// decode an object's raw `content` bytes and verify its fields actually match
+// the booking before we trust a guest-reported escrow-creation digest. A UID
+// serializes as a bare 32-byte address; Coin<T> is { id: UID, balance:
+// Balance<T> { value: u64 } }. Order/types must mirror the Move struct exactly.
+const BalanceBcs = bcs.struct('Balance', { value: bcs.u64() });
+const CoinBcs = bcs.struct('Coin', { id: bcs.Address, balance: BalanceBcs });
+// Exported so unit tests can construct matching object `content` bytes without
+// a live chain (see escrow.test.mjs).
+export const BookingEscrowBcs = bcs.struct('BookingEscrow', {
+  id:           bcs.Address,
+  booking_ref:  bcs.string(),
+  guest:        bcs.Address,
+  host:         bcs.Address,
+  arbitrator:   bcs.Address,
+  amount:       bcs.u64(),
+  coin:         CoinBcs,
+  expiry_ms:    bcs.u64(),
+  status:       bcs.u8(),
+  claim_amount: bcs.u64(),
+});
+
+// Converts a dollar deposit amount to the symbolic testnet mist value the
+// escrow actually holds — the SINGLE source of this conversion so
+// buildEscrowTransaction (which funds the coin) and verifyEscrowTransaction
+// (which checks the funded amount) can never drift apart. See
+// buildEscrowTransaction for why it's depositAmount * 1000 on testnet.
+export function depositToMist(depositAmount) {
+  return BigInt(Math.max(1, depositAmount)) * 1000n;
+}
+
+// Normalizes a Sui address for comparison (lowercase, 0x-prefixed, unpadded
+// leading zeros stripped) so two encodings of the same address compare equal.
+function normalizeAddr(a) {
+  if (!a) return '';
+  let h = String(a).toLowerCase();
+  if (!h.startsWith('0x')) h = '0x' + h;
+  const body = h.slice(2).replace(/^0+/, '') || '0';
+  return '0x' + body;
+}
+
+// Reads a BookingEscrow object's decoded fields from the chain by id, or
+// returns null if it can't be read/decoded. Used by verifyEscrowTransaction to
+// confirm the object a guest created really is OUR escrow type, funded with the
+// right amount, naming the right guest/host/booking_ref — not a cheaper or
+// unrelated object they substituted client-side.
+export async function readEscrowObject(escrowObjectId) {
+  const resp = await suiClient.core.getObjects({
+    objectIds: [escrowObjectId],
+    include: { content: true },
+  });
+  const obj = resp?.objects?.[0];
+  if (!obj || obj instanceof Error || !obj.type || !obj.content) return null;
+  let fields;
+  try {
+    fields = BookingEscrowBcs.parse(obj.content);
+  } catch {
+    return null;
+  }
+  return { type: obj.type, fields };
+}
 
 // P1b (key separation): this used to be ARIA_DEPLOYER_KEY, the same hot key
 // that originally published the package and held the UpgradeCap. Now that
@@ -132,7 +195,7 @@ export async function buildEscrowTransaction(bookingRef, guestAddr, hostAddr, de
   // instead, same as before P1a's dedicated arbitrator key existed.
   const arbitrator = process.env.ARIA_ARBITRATOR_ADDRESS || hostAddr;
   try {
-    const depositMist = BigInt(Math.max(1, depositAmount)) * 1000n;
+    const depositMist = depositToMist(depositAmount);
     const expiryMs    = BigInt(Date.now()) + 300_000n; // 5-min testnet window
 
     const tx = new Transaction();
@@ -170,7 +233,20 @@ export async function buildEscrowTransaction(bookingRef, guestAddr, hostAddr, de
 // client merely claims. This is the only legitimate source of truth for
 // writing escrow_object_id into bookings, since /tax/summary joins against
 // that table for host tax record-keeping.
-export async function verifyEscrowTransaction(digest, expectedSender) {
+// `expected` carries the booking's own authoritative values so the chain
+// result can be checked AGAINST them, not just for internal success:
+//   { sender, host, bookingRef, depositAmount }
+// Because the guest signs and submits this transaction in their own browser,
+// they could otherwise substitute a create_escrow that funds a near-zero
+// deposit, names a different host, or even creates an unrelated object, then
+// report that digest here — the backend would mark deposit_status='held' on a
+// worthless escrow, silently gutting the host's damage protection. So beyond
+// confirming the tx succeeded and the sender is the guest, we now re-read the
+// created object on-chain and assert it really is OUR BookingEscrow type,
+// funded with the expected amount, naming the expected guest/host/booking_ref.
+export async function verifyEscrowTransaction(digest, expected = {}) {
+  const { sender: expectedSender, host: expectedHost, bookingRef: expectedRef, depositAmount } = expected;
+
   const result = await suiClient.core.getTransaction({
     digest,
     include: { transaction: true, effects: true, objectTypes: true },
@@ -193,13 +269,51 @@ export async function verifyEscrowTransaction(digest, expectedSender) {
   const txn = result.Transaction;
 
   const actualSender = txn?.transaction?.sender;
-  if (expectedSender && actualSender && actualSender !== expectedSender) {
+  if (expectedSender && actualSender && normalizeAddr(actualSender) !== normalizeAddr(expectedSender)) {
     return { ok: false, reason: 'Transaction sender does not match the booking guest' };
   }
 
   const escrowId = extractCreatedObjectId(txn?.effects?.changedObjects);
   if (!escrowId) {
     return { ok: false, reason: 'No created object found in transaction effects' };
+  }
+
+  // Re-read the created object and verify it really is our escrow, funded and
+  // addressed as the booking dictates — never trust that the guest submitted
+  // the exact unsigned PTB the backend built.
+  const onChain = await readEscrowObject(escrowId);
+  if (!onChain) {
+    return { ok: false, reason: 'Created object is not a readable BookingEscrow' };
+  }
+
+  const mod = process.env.ESCROW_MODULE_NAME || 'escrow';
+  // type looks like `0x<pkg>::escrow::BookingEscrow<0x2::sui::SUI>`. The pkg in
+  // the type string is the ORIGINAL type-defining package id, which doesn't
+  // change across upgrades — so match on the module::struct suffix rather than
+  // pinning the (possibly-upgraded) current ESCROW_PACKAGE_ID.
+  if (!new RegExp(`::${mod}::BookingEscrow<`).test(onChain.type)) {
+    return { ok: false, reason: `Created object is not a ${mod}::BookingEscrow (got ${onChain.type})` };
+  }
+
+  const f = onChain.fields;
+
+  if (expectedSender && normalizeAddr(f.guest) !== normalizeAddr(expectedSender)) {
+    return { ok: false, reason: 'Escrow guest does not match the booking guest' };
+  }
+  if (expectedHost && normalizeAddr(f.host) !== normalizeAddr(expectedHost)) {
+    return { ok: false, reason: 'Escrow host does not match the booking host' };
+  }
+  if (expectedRef && f.booking_ref !== expectedRef) {
+    return { ok: false, reason: 'Escrow booking_ref does not match this booking' };
+  }
+  if (depositAmount != null) {
+    const expectedMist = depositToMist(depositAmount).toString();
+    // Both the declared `amount` field and the actual coin balance must match
+    // the expected deposit — guards against an escrow that claims one amount
+    // but is funded with another.
+    if (String(f.amount) !== expectedMist || String(f.coin?.balance?.value) !== expectedMist) {
+      return { ok: false, reason: 'Escrow is not funded with the expected deposit amount' };
+    }
   }
 
   return { ok: true, escrowId, sender: actualSender };
@@ -360,6 +474,43 @@ export async function autoReleaseEscrow(escrowObjectId) {
     return true;
   } catch (err) {
     console.warn('autoReleaseEscrow failed:', err.message);
+    return false;
+  }
+}
+
+// Finding #7 (CLAIMED deadlock): permissionless keeper call for a claim the
+// guest never responded to. Same trust profile as autoReleaseEscrow — the
+// contract's finalize_claim has no sender check and only triggers the escrow's
+// own split logic (claim_amount to host, remainder to guest), so the
+// auto-release key signing it carries no special privilege beyond paying gas.
+// Returns false (not throwing) on any failure so the sweep can simply retry.
+// NOTE: finalize_claim ships in escrow.move but requires the v3 package upgrade
+// to be published before it exists on-chain; until then this returns false and
+// the sweep harmlessly retries — no code change needed once it's deployed.
+export async function finalizeClaimEscrow(escrowObjectId) {
+  if (!autoReleaseKeypair || !escrowObjectId || !process.env.ESCROW_PACKAGE_ID) return false;
+  const sender = autoReleaseKeypair.toSuiAddress();
+  try {
+    const tx = new Transaction();
+    tx.setSender(sender);
+    tx.moveCall({
+      target: `${process.env.ESCROW_PACKAGE_ID}::${process.env.ESCROW_MODULE_NAME || 'escrow'}::finalize_claim`,
+      typeArguments: ['0x2::sui::SUI'],
+      arguments: [
+        tx.object(escrowObjectId),
+        tx.object('0x6'),
+      ],
+    });
+    const result = await autoReleaseKeypair.signAndExecuteTransaction({
+      transaction: tx, client: suiClient, include: { effects: true },
+    });
+    if (result?.$kind === 'FailedTransaction') {
+      console.warn('finalizeClaim failed on-chain:', result.FailedTransaction?.status?.error?.message);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn('finalizeClaimEscrow failed:', err.message);
     return false;
   }
 }

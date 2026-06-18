@@ -16,9 +16,9 @@ import {
   verifyEscrowTransaction, autoReleaseEscrow,
   buildClaimDamageTransaction, buildDisputeClaimTransaction,
   verifyClaimDamageTransaction, verifyDisputeClaimTransaction,
-  resolveDisputeEscrow
+  resolveDisputeEscrow, finalizeClaimEscrow
 } from './escrow.mjs';
-import { createBooking } from './bookings.mjs';
+import { createBooking, releaseDepositForBooking } from './bookings.mjs';
 import {
   bookingCreateSchema, paymentCreateIntentSchema, hostApplySchema, validateBody,
   claimDamageSchema, claimDamageConfirmSchema, disputeClaimSchema, disputeClaimConfirmSchema, resolveDisputeSchema
@@ -241,7 +241,8 @@ fastify.post('/booking/create', {
   });
 
   if (result.error) {
-    const status = result.error === 'Property not available for selected dates' ? 409 : 400;
+    const status = result.status
+      || (result.error === 'Property not available for selected dates' ? 409 : 400);
     return reply.code(status).send(result);
   }
   return result;
@@ -290,7 +291,15 @@ fastify.post('/booking/:bookingRef/escrow/confirm', {
 
   let verification;
   try {
-    verification = await verifyEscrowTransaction(digest, session.suiAddress);
+    // Pass the booking's own authoritative values so verifyEscrowTransaction
+    // can confirm the on-chain escrow really matches THIS booking (guest, host,
+    // ref, funded amount) — not just that some object was created by the guest.
+    verification = await verifyEscrowTransaction(digest, {
+      sender: session.suiAddress,
+      host: booking.host_sui_address || undefined,
+      bookingRef,
+      depositAmount: booking.deposit_amount,
+    });
   } catch (err) {
     fastify.log.error({ err, digest, bookingRef }, 'On-chain escrow verification failed');
     return reply.code(502).send({ error: 'Could not verify the transaction on-chain. It may still be processing — try again shortly.' });
@@ -397,28 +406,12 @@ fastify.post('/booking/release-deposit', {
     const booking = result.rows[0];
     if (!(await canManageProperty(session, booking.property_id)))
       return reply.code(403).send({ error: 'You do not manage this property' });
-    if (booking.deposit_status === 'released') return reply.code(400).send({ error: 'Deposit already released' });
-    if (['claimed', 'disputed', 'forfeited'].includes(booking.deposit_status))
-      return reply.code(400).send({ error: `Deposit is in the claim/dispute flow (status: ${booking.deposit_status}) — use /booking/resolve-dispute instead` });
 
-    // P3 (Phase 3 item 1): only callable after checkout — releasing early would
-    // skip the host's 5-day inspection window entirely.
-    const today = new Date(); today.setHours(0, 0, 0, 0);
-    if (today < new Date(booking.check_out))
-      return reply.code(400).send({ error: 'Deposit cannot be released before checkout' });
-
-    // ── On-chain escrow release (non-blocking) ───────────────────────────────
-    let escrowReleased = false;
-    if (booking.escrow_object_id) {
-      escrowReleased = await autoReleaseEscrow(booking.escrow_object_id);
-      if (escrowReleased) {
-        fastify.log.info({ bookingRef, escrowObjectId: booking.escrow_object_id }, 'Escrow released on-chain');
-      } else {
-        fastify.log.warn({ bookingRef }, 'On-chain escrow release failed — continuing with Postgres update');
-      }
-    }
-
-    await pool.query('UPDATE bookings SET deposit_status=$1 WHERE booking_ref=$2', ['released', bookingRef]);
+    // Shared release logic (Findings #4/#5): enforces the released/claim-flow
+    // guards, the post-checkout timing gate, and — when an escrow exists — only
+    // marks the deposit released if auto_release actually succeeds on-chain.
+    const release = await releaseDepositForBooking(booking, { logger: fastify.log });
+    if (release.error) return reply.code(release.status || 400).send({ error: release.error });
 
     const depositReleaseWalrusBlobId = await pushToWalrus({ ...booking, walrusReceiptType: 'deposit_release', depositReleaseTimestamp: new Date().toISOString() });
 
@@ -1184,6 +1177,42 @@ async function runAutoReleaseSweep() {
       }
     } catch (err) {
       fastify.log.error({ err, bookingRef: booking.booking_ref }, 'Auto-release sweep: error releasing booking');
+    }
+  }
+
+  // Finding #7 (CLAIMED deadlock): also finalize claims the guest never
+  // responded to. Once the inspection window has passed and an escrow is still
+  // 'claimed' (host filed a claim, guest neither accepted nor disputed), the
+  // keeper calls the contract's permissionless finalize_claim so funds aren't
+  // locked forever by a silent guest. On success the deposit is settled per the
+  // claim split, so we mark it 'released' (the terminal "deposit settled"
+  // status this app uses for a finalized escrow). Requires the v3 package
+  // upgrade to be live; until then finalizeClaimEscrow returns false and these
+  // simply stay 'claimed' and retry — no code change needed once it's deployed.
+  let claimed;
+  try {
+    const result = await pool.query(
+      `SELECT booking_ref, escrow_object_id FROM bookings
+       WHERE deposit_status = 'claimed' AND escrow_object_id IS NOT NULL
+       AND check_out + INTERVAL '5 days' < NOW()`
+    );
+    claimed = result.rows;
+  } catch (err) {
+    fastify.log.error({ err }, 'Claim-finalize sweep query failed');
+    return;
+  }
+
+  for (const booking of claimed) {
+    try {
+      const finalized = await finalizeClaimEscrow(booking.escrow_object_id);
+      if (finalized) {
+        await pool.query('UPDATE bookings SET deposit_status=$1 WHERE booking_ref=$2', ['released', booking.booking_ref]);
+        fastify.log.info({ bookingRef: booking.booking_ref }, 'Claim-finalize sweep: timed-out claim finalized');
+      } else {
+        fastify.log.warn({ bookingRef: booking.booking_ref }, 'Claim-finalize sweep: on-chain finalize failed (package may predate finalize_claim), will retry');
+      }
+    } catch (err) {
+      fastify.log.error({ err, bookingRef: booking.booking_ref }, 'Claim-finalize sweep: error finalizing booking');
     }
   }
 }

@@ -154,3 +154,120 @@ Not everything needs fixing — several parts of the codebase are genuinely well
 3. Fix #4 (authorization scoping) — second money/access-control gap.
 4. Consolidate #3/#5 (single source of truth + shared booking logic) — prevents the next version of #1 and #4 from being reintroduced.
 5. Everything else (medium/low) can be scheduled incrementally; none are urgent, but #11 (rate limiting/session cleanup) becomes a hard blocker the moment a second server instance is added.
+
+> **Status (June 18, 2026):** all findings in the June 16 audit above were
+> remediated — see `ARIA_REMEDIATION.md`. The section below is a *second,
+> independent review* (escrow/custody, correctness, contract, consistency)
+> performed June 18, 2026 on the post-remediation codebase, with all findings
+> fixed in the same session.
+
+---
+
+# Second Review — Security & Correctness (June 18, 2026)
+
+Scope: full re-review of the codebase as deployed after the June 16 remediation
+— Move contract (`escrow.move` + tests), backend (`escrow.mjs`, `bookings.mjs`,
+`server.mjs`, `ai_route.mjs`, `auth.mjs`, `validation.mjs`, `db.mjs`,
+`catalog.mjs`, `deepbook.mjs`), and the client signing path (`lib/zklogin.js`,
+`pages/*.jsx`). Backend unit suite re-run in a clean dependency install
+(network-isolated sandbox; Move compiler and live RPC unavailable here).
+
+**Overall:** the security fundamentals are solid — server-authoritative pricing
+on every path (REST, AI, Stripe-intent), correct RS256/JWKS Google token
+verification with nonce binding, CSPRNG sessions, AI host-tools re-gated
+server-side, consistent IDOR ownership checks, and a clean non-drainable escrow
+contract. Eight issues were found and **all were fixed this session**.
+
+## P1 — fixed
+
+### S1. Escrow confirmation under-verified the created object (host-protection hole)
+`verifyEscrowTransaction` (`escrow.mjs`) only checked that the tx succeeded, the
+sender was the guest, and that *some* object was created. It did **not** verify
+the created object's **type**, funded **amount**, or **guest/host/booking_ref**.
+Because the guest signs and submits `create_escrow` in their own browser, they
+could substitute a near-zero deposit (or wrong host, or an unrelated object) and
+report that digest — the backend would write `deposit_status='held'` on a
+worthless escrow, gutting host damage protection on mainnet.
+
+**Fix:** `verifyEscrowTransaction` now re-reads the created object on-chain
+(gRPC `getObjects`, BCS-decoding `BookingEscrow` via the new exported
+`BookingEscrowBcs`) and asserts: type matches `::escrow::BookingEscrow<…>`,
+`guest`/`host`/`booking_ref` match the booking, and **both** the `amount` field
+and the actual coin balance equal `depositToMist(deposit_amount)`. The
+`/booking/:ref/escrow/confirm` route passes the booking's authoritative values.
+A new shared `depositToMist()` is the single source of the dollar→mist
+conversion so funding and verification can't drift. (6 new unit tests.)
+
+### S2. Guest signing path still used JSON-RPC (July 31 2026 sunset)
+`lib/zklogin.js` read the epoch via `suix_getLatestSuiSystemState` and submitted
+via `sui_executeTransactionBlock` — both JSON-RPC, which Sui deactivates
+network-wide July 31 2026. P0a only migrated the backend; the browser path would
+have broken guest-funded escrow at the sunset.
+
+**Fix:** both calls now go through the gRPC `SuiGrpcClient`
+(`getCurrentSystemState` / `executeTransaction`), matching the backend. Function
+signatures unchanged, so `index.jsx`/`ai.jsx` are untouched.
+
+### S3. Silent "confirmed" booking on DB failure
+`createBooking` (`bookings.mjs`) caught the INSERT error, only `warn`ed, and
+returned `success:true` with a bookingRef — contradicting the documented
+"honest booking writes" guarantee; the guest got a phantom confirmation.
+
+**Fix:** a failed insert returns `{ error, status: 503 }`; the route surfaces a
+real failure.
+
+## P2 — fixed
+
+### S4/S5. AI release diverged from REST; both wrote DB even when on-chain release failed
+The AI `release_deposit` tool flipped `deposit_status='released'` with no
+checkout gate, no claim/dispute guard, and no on-chain `auto_release`. Both
+paths also updated Postgres even when the on-chain release failed, letting the
+DB read "released" while funds stayed locked on-chain.
+
+**Fix:** new shared `releaseDepositForBooking()` used by both REST and AI —
+identical guards, and it only writes `'released'` when the on-chain
+`auto_release` actually succeeds (returns a 502-class error otherwise).
+
+### S6. Double-booking race
+The overlap check and the INSERT ran as two separate pool queries, so concurrent
+overlapping requests could both pass and both insert.
+
+**Fix:** check + insert now run in one transaction under a per-property
+`pg_advisory_xact_lock`, serializing booking attempts for a given property.
+
+### S7. CLAIMED-state deadlock (contract design)
+Once a host filed a claim, only the *guest* could move the escrow forward
+(accept/dispute). A silent guest locked both parties' funds forever.
+
+**Fix:** added permissionless `finalize_claim` to `escrow.move`, callable by
+anyone after expiry while status is `CLAIMED` — pays the claim to the host and
+the remainder to the guest (same split as `accept_claim`). Backend keeper wired
+(`finalizeClaimEscrow` + a second pass in the auto-release sweep). 3 new Move
+tests. **Requires a v3 package upgrade to go live** (see operator steps below);
+until published, the keeper call no-ops and retries.
+
+### S8. Claim/dispute flow unexercisable on demo properties
+All six demo properties have `hostAddress:null`, so the escrow's on-chain `host`
+became the backend's auto-release key — an address no human holds — making
+`claim_damage` (asserts `sender == host`) impossible to ever exercise.
+
+**Fix:** `getPropertyHostAddress` now prefers an operator-set
+`DEMO_HOST_ADDRESS` so a real wallet can act as host for the demo flow.
+
+### Incidental
+Stripped trailing NUL bytes silently corrupting `escrow.mjs` (broke
+`node --check`/parsers; same artifact previously found in `package.json`).
+
+## Verification
+- Backend unit suite: **39/39 pass** (was 33; +6) in a clean `@mysten/sui`
+  install. All changed JS files pass `node --check`.
+- Move: 3 tests added for `finalize_claim`; **not compiled here** (no `sui` CLI
+  in the sandbox) — operator must run `sui move test` before upgrading.
+
+## Operator follow-ups (cannot be done from the agent sandbox)
+1. `sui move test` then `sui client upgrade` (cold UpgradeCap key) to publish the
+   `finalize_claim` v3 package; bump `ESCROW_PACKAGE_ID` in Railway.
+2. Browser smoke-test the new gRPC submit path (gRPC-web behaves slightly
+   differently in-browser than the old `fetch`).
+3. Optional: set `DEMO_HOST_ADDRESS` in Railway to exercise the claim/dispute
+   flow end-to-end on the demo properties.

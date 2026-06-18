@@ -12,7 +12,7 @@
 import { pool } from './db.mjs';
 import { getSession } from './auth.mjs';
 import { JURISDICTION_TAX_RATES } from './catalog.mjs';
-import { createBooking } from './bookings.mjs';
+import { createBooking, releaseDepositForBooking } from './bookings.mjs';
 
 const GROK_MODEL   = 'grok-3-latest';
 const XAI_BASE_URL = 'https://api.x.ai/v1/chat/completions';
@@ -519,7 +519,12 @@ async function executeTool(toolName, toolInput, session, isHost) {
       return JSON.stringify({ success: true, message: 'Message sent.' });
     }
 
-    // ── Host: release deposit in Postgres ─────────────────────────────────────
+    // ── Host: release deposit ─────────────────────────────────────────────────
+    // Findings #4/#5: this used to be a weaker copy of the REST release path —
+    // no checkout gate, no claim/dispute guard, no on-chain auto_release. It now
+    // delegates to the SAME releaseDepositForBooking() helper server.mjs's REST
+    // route uses, so the two paths enforce identical guards and both only mark
+    // the deposit released when the on-chain release actually succeeds.
     if (toolName === 'release_deposit') {
       const result = await pool.query('SELECT * FROM bookings WHERE booking_ref = $1', [toolInput.bookingRef]);
       if (result.rows.length === 0) return JSON.stringify({ error: 'Booking not found' });
@@ -531,11 +536,9 @@ async function executeTool(toolName, toolInput, session, isHost) {
         if (owns.rows.length === 0) return JSON.stringify({ error: 'You do not manage this property' });
       }
 
-      if (booking.deposit_status === 'released') return JSON.stringify({ error: 'Deposit already released' });
-      await pool.query(
-        `UPDATE bookings SET deposit_status='released' WHERE booking_ref=$1`,
-        [toolInput.bookingRef]
-      );
+      const release = await releaseDepositForBooking(booking);
+      if (release.error) return JSON.stringify({ error: release.error });
+
       const walrusBlobId = await pushToWalrus({
         ...booking, walrusReceiptType: 'deposit_release', depositReleaseTimestamp: new Date().toISOString()
       });

@@ -16,7 +16,7 @@ import crypto from 'node:crypto';
 import { pool } from './db.mjs';
 import { PROPERTIES, JURISDICTION_TAX_RATES } from './catalog.mjs';
 import { calculateHostPayout } from './deepbook.mjs';
-import { buildEscrowTransaction, autoReleaseKeypair } from './escrow.mjs';
+import { buildEscrowTransaction, autoReleaseKeypair, autoReleaseEscrow } from './escrow.mjs';
 import { Resend } from 'resend';
 
 const resend = new Resend(process.env.RESEND_API_KEY);
@@ -35,6 +35,15 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 export async function getPropertyHostAddress(propertyId, logger = console) {
   const configuredHost = PROPERTIES[Number(propertyId)]?.hostAddress;
   if (!configuredHost) {
+    // P2 / Finding #8: the 6 demo properties have no real host wired in yet,
+    // so the escrow's on-chain `host` used to fall back to the backend's
+    // auto-release key address — an address no human holds, which made
+    // claim_damage (asserts sender == escrow.host) impossible to ever exercise
+    // end-to-end. Prefer an operator-set DEMO_HOST_ADDRESS so a real wallet can
+    // act as host for the demo flow; only fall back to the auto-release key (or
+    // null) when neither is configured.
+    const demoHost = (process.env.DEMO_HOST_ADDRESS || '').trim();
+    if (demoHost) return demoHost;
     return autoReleaseKeypair ? autoReleaseKeypair.toSuiAddress() : null;
   }
   try {
@@ -47,6 +56,53 @@ export async function getPropertyHostAddress(propertyId, logger = console) {
     logger?.warn?.({ err, propertyId }, 'host_profiles payout address lookup failed — using configured hostAddress directly');
     return configuredHost;
   }
+}
+
+// ── Shared deposit-release logic (Findings #4 and #5) ──────────────────────
+// Single authoritative implementation of "release this booking's deposit back
+// to the guest," used by BOTH server.mjs's REST /booking/release-deposit and
+// ai_route.mjs's release_deposit AI tool. Previously the AI path was a weaker
+// copy: it flipped deposit_status='released' in Postgres with NO checkout
+// timing gate, NO claim/dispute guard, and NO on-chain auto_release call at
+// all — so a host using the chat agent could "release" a deposit before the
+// inspection window closed and without anything happening on-chain. And both
+// paths flipped the DB even when the on-chain release failed, so Postgres
+// could read 'released' while the coin was still locked in escrow.
+//
+// This helper fixes both: it enforces the same guards as the REST route AND,
+// crucially, only writes deposit_status='released' if the on-chain auto_release
+// actually succeeded (when an escrow object exists). Callers remain responsible
+// for their own authorization check before calling this — it assumes the caller
+// is already permitted to manage this booking. Returns { ok: true } on success
+// or { error, status } on any guard/chain failure.
+export async function releaseDepositForBooking(booking, { logger = console } = {}) {
+  if (booking.deposit_status === 'released') {
+    return { error: 'Deposit already released', status: 400 };
+  }
+  if (['claimed', 'disputed', 'forfeited'].includes(booking.deposit_status)) {
+    return { error: `Deposit is in the claim/dispute flow (status: ${booking.deposit_status}) — use /booking/resolve-dispute instead`, status: 400 };
+  }
+  // Only releasable after checkout — releasing early would skip the host's
+  // 5-day inspection window entirely (Phase 3 item 1).
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  if (today < new Date(booking.check_out)) {
+    return { error: 'Deposit cannot be released before checkout', status: 400 };
+  }
+
+  // If an on-chain escrow exists, the on-chain release is authoritative — do
+  // NOT mark the deposit released in Postgres unless auto_release actually
+  // succeeded on-chain, or the DB and chain would diverge (Finding #5).
+  if (booking.escrow_object_id) {
+    const released = await autoReleaseEscrow(booking.escrow_object_id);
+    if (!released) {
+      logger?.warn?.({ bookingRef: booking.booking_ref }, 'On-chain escrow release failed — leaving deposit_status unchanged');
+      return { error: 'On-chain escrow release failed — the deposit is still locked on-chain (it may not have reached its release time yet). Please try again later.', status: 502 };
+    }
+    logger?.info?.({ bookingRef: booking.booking_ref, escrowObjectId: booking.escrow_object_id }, 'Escrow released on-chain');
+  }
+
+  await pool.query('UPDATE bookings SET deposit_status=$1 WHERE booking_ref=$2', ['released', booking.booking_ref]);
+  return { ok: true };
 }
 
 // Pushes a JSON receipt to Walrus testnet and returns the resulting blobId,
@@ -127,18 +183,6 @@ export async function createBooking({ propertyId, checkIn, checkOut, session, lo
     return { error: 'Stay length must be between 1 and 90 nights' };
   }
 
-  try {
-    const conflict = await pool.query(
-      `SELECT booking_ref FROM bookings
-       WHERE property_id = $1 AND payment_status != 'cancelled'
-       AND check_in < $3 AND check_out > $2`,
-      [propertyId, checkInStr, checkOutStr]
-    );
-    if (conflict.rows.length > 0) {
-      return { error: 'Property not available for selected dates', conflicts: conflict.rows };
-    }
-  } catch (err) { logger?.warn?.({ err }, 'Availability check failed'); }
-
   const jurisdiction  = JURISDICTION_TAX_RATES[Number(propertyId)] || { rate: 0.08, name: 'Unknown', breakdown: '8% occupancy tax' };
   const propertyTitle = prop.title;
   const pricePerNight = prop.price;
@@ -156,8 +200,35 @@ export async function createBooking({ propertyId, checkIn, checkOut, session, lo
   // implausible instead of merely "unlikely."
   const bookingRef     = `ARIA-${propertyId}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
 
+  // ── Atomic availability-check + insert (Findings #3 and #6) ────────────────
+  // Two fixes in one transaction:
+  //  • #6 (double-booking race): the old code ran the overlap check and the
+  //    INSERT as two separate pool queries, so two concurrent requests for the
+  //    same dates could both pass the check and both insert. A per-property
+  //    transaction-scoped advisory lock serializes booking attempts for a given
+  //    property, making check-then-insert atomic without a schema change.
+  //  • #3 (silent "confirmed"): the old INSERT swallowed its error and let the
+  //    function return success anyway — a guest would get a confirmed bookingRef
+  //    that was never persisted. A failed insert now returns { error } so the
+  //    caller sends a real failure instead of a phantom confirmation.
+  let client;
   try {
-    await pool.query(
+    client = await pool.connect();
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock($1)', [Number(propertyId)]);
+
+    const conflict = await client.query(
+      `SELECT booking_ref FROM bookings
+       WHERE property_id = $1 AND payment_status != 'cancelled'
+       AND check_in < $3 AND check_out > $2`,
+      [propertyId, checkInStr, checkOutStr]
+    );
+    if (conflict.rows.length > 0) {
+      await client.query('ROLLBACK');
+      return { error: 'Property not available for selected dates', conflicts: conflict.rows };
+    }
+
+    await client.query(
       `INSERT INTO bookings (booking_ref, property_id, property_title, wallet_address, guest_name, guest_email,
         check_in, check_out, nights, price_per_night, subtotal, aria_fee, taxes, total_amount,
         deposit_amount, payment_status, payment_method, deposit_status)
@@ -165,7 +236,14 @@ export async function createBooking({ propertyId, checkIn, checkOut, session, lo
       [bookingRef, propertyId, propertyTitle, session.suiAddress, session.name, session.email,
        checkInStr, checkOutStr, nights, pricePerNight, subtotal, ariaFee, taxes, bookingTotal, depositAmount]
     );
-  } catch (err) { logger?.warn?.({ err }, 'DB booking save failed'); }
+    await client.query('COMMIT');
+  } catch (err) {
+    if (client) { try { await client.query('ROLLBACK'); } catch {} }
+    logger?.error?.({ err, bookingRef }, 'DB booking save failed');
+    return { error: 'Could not save your booking. Please try again.', status: 503 };
+  } finally {
+    if (client) client.release();
+  }
 
   const receipt = {
     bookingRef, app: 'ARIA Demo', network: 'sui:testnet',

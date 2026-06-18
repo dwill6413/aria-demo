@@ -245,6 +245,60 @@ module aria_escrow::escrow {
         });
     }
 
+    /// Finalize a damage claim the guest never responded to. Callable by ANYONE
+    /// (like auto_release) once the inspection window has passed (expiry_ms),
+    /// but only while the escrow is still STATUS_CLAIMED — i.e. the host filed a
+    /// claim and the guest neither accepted (accept_claim) nor disputed
+    /// (dispute_claim) it. Without this, a silent guest could lock the deposit
+    /// forever: from STATUS_CLAIMED the only exits were guest-only calls, so an
+    /// unresponsive guest left both parties' funds permanently stuck. This pays
+    /// claim_amount to the host and the remainder to the guest — exactly the
+    /// split accept_claim would have produced — so the deadlock resolves itself
+    /// the same way a timely guest acceptance would.
+    public fun finalize_claim<T>(
+        escrow: BookingEscrow<T>,
+        clock:  &Clock,
+        ctx:    &mut TxContext,
+    ) {
+        assert!(escrow.status == STATUS_CLAIMED, EWrongStatus);
+        assert!(clock::timestamp_ms(clock) >= escrow.expiry_ms, ENotExpired);
+
+        let guest        = escrow.guest;
+        let host         = escrow.host;
+        let amount       = escrow.amount;
+        let claim_amount = escrow.claim_amount;
+        let booking_ref  = escrow.booking_ref;
+
+        let BookingEscrow {
+            id, booking_ref: _, guest: _, host: _, arbitrator: _,
+            amount: _, coin, expiry_ms: _, status: _, claim_amount: _,
+        } = escrow;
+
+        let escrow_id = object::uid_to_inner(&id);
+        object::delete(id);
+
+        let mut coin     = coin;
+        let guest_amount = amount - claim_amount;
+
+        if (claim_amount > 0 && guest_amount > 0) {
+            let host_coin = coin::split(&mut coin, claim_amount, ctx);
+            transfer::public_transfer(host_coin, host);
+            transfer::public_transfer(coin, guest);
+        } else if (claim_amount == amount) {
+            transfer::public_transfer(coin, host);
+        } else {
+            transfer::public_transfer(coin, guest);
+        };
+
+        event::emit(DepositReleased {
+            escrow_id,
+            booking_ref,
+            guest,
+            guest_amount,
+            host_amount: claim_amount,
+        });
+    }
+
     /// Guest disputes the host's damage claim.
     /// Moves escrow to STATUS_DISPUTED; arbitrator must then resolve.
     public fun dispute_claim<T>(

@@ -10,8 +10,47 @@
 
 import {
   extractCreatedObjectId, verifyEscrowTransaction, suiClient,
-  isObjectMutated, verifyClaimDamageTransaction, verifyDisputeClaimTransaction
+  isObjectMutated, verifyClaimDamageTransaction, verifyDisputeClaimTransaction,
+  depositToMist, BookingEscrowBcs
 } from './escrow.mjs';
+
+// ── Helpers for the hardened verifyEscrowTransaction (Finding #1) ───────────
+// Realistic 32-byte addresses so normalizeAddr comparisons behave like prod.
+const GUEST = '0x' + '2'.repeat(64);
+const HOST  = '0x' + '3'.repeat(64);
+const ARB   = '0x' + '4'.repeat(64);
+const UID1  = '0x' + '1'.repeat(64);
+const UID5  = '0x' + '5'.repeat(64);
+
+// Builds the BCS `content` bytes a getObjects() call would return for a
+// BookingEscrow with the given fields, so tests can exercise the on-chain
+// field verification without a live node.
+function escrowContent({ guest = GUEST, host = HOST, bookingRef = 'ARIA-2-x', amount = 661000 } = {}) {
+  return BookingEscrowBcs.serialize({
+    id: UID1, booking_ref: bookingRef, guest, host, arbitrator: ARB,
+    amount: String(amount), coin: { id: UID5, balance: { value: String(amount) } },
+    expiry_ms: '1718600000000', status: 0, claim_amount: '0',
+  }).toBytes();
+}
+
+// Mock both chain reads verifyEscrowTransaction now makes: getTransaction
+// (the digest) and getObjects (the created escrow's content/type).
+function mockEscrowChain({ sender = GUEST, createdId = 'real-escrow-id', objType = '0xpkg::escrow::BookingEscrow<0x2::sui::SUI>', content = escrowContent() } = {}) {
+  suiClient.core.getTransaction = async () => ({
+    $kind: 'Transaction',
+    Transaction: {
+      status: { success: true, error: null },
+      transaction: { sender },
+      effects: { changedObjects: [
+        { objectId: 'ephemeral-coin', idOperation: 'Created' },
+        { objectId: createdId, idOperation: 'Created' },
+      ] },
+    },
+  });
+  suiClient.core.getObjects = async () => ({
+    objects: [{ objectId: createdId, type: objType, content }],
+  });
+}
 
 // ─── Test runner ──────────────────────────────────────────────────────────────
 
@@ -155,24 +194,12 @@ console.log('\nverifyEscrowTransaction\n');
 // buggy code) is always undefined, so it silently reported every successful
 // transaction as failed. These tests assert against the real wrapped shape.
 
-await test('successful transaction ($kind: Transaction) — returns ok:true with escrowId', async () => {
-  suiClient.core.getTransaction = async () => ({
-    $kind: 'Transaction',
-    Transaction: {
-      status: { success: true, error: null },
-      transaction: { sender: '0xguest' },
-      effects: {
-        changedObjects: [
-          { objectId: 'ephemeral-coin', idOperation: 'Created' },
-          { objectId: 'real-escrow-id', idOperation: 'Created' },
-        ],
-      },
-    },
-  });
-  const result = await verifyEscrowTransaction('0xdigest', '0xguest');
+await test('successful transaction, matching escrow object — returns ok:true with escrowId', async () => {
+  mockEscrowChain({ sender: GUEST });
+  const result = await verifyEscrowTransaction('0xdigest', { sender: GUEST, host: HOST, bookingRef: 'ARIA-2-x', depositAmount: 661 });
   assertEqual(result.ok, true, 'expected ok:true');
   assertEqual(result.escrowId, 'real-escrow-id');
-  assertEqual(result.sender, '0xguest');
+  assertEqual(result.sender, GUEST);
 });
 
 await test('failed transaction ($kind: FailedTransaction) — returns ok:false', async () => {
@@ -182,23 +209,72 @@ await test('failed transaction ($kind: FailedTransaction) — returns ok:false',
       status: { success: false, error: { message: 'InsufficientGas' } },
     },
   });
-  const result = await verifyEscrowTransaction('0xdigest', '0xguest');
+  const result = await verifyEscrowTransaction('0xdigest', { sender: GUEST });
   assertEqual(result.ok, false, 'expected ok:false');
   assertEqual(result.reason, 'InsufficientGas');
 });
 
 await test('sender mismatch on a successful transaction — returns ok:false', async () => {
+  mockEscrowChain({ sender: '0x' + '9'.repeat(64) });
+  const result = await verifyEscrowTransaction('0xdigest', { sender: GUEST });
+  assertEqual(result.ok, false, 'expected ok:false');
+  assertEqual(result.reason, 'Transaction sender does not match the booking guest');
+});
+
+// ── Finding #1: created object must really be OUR escrow, funded & addressed
+// as the booking dictates — a guest can otherwise substitute a cheaper/wrong
+// create_escrow and report that digest.
+
+await test('created object is not a BookingEscrow type — returns ok:false', async () => {
+  mockEscrowChain({ sender: GUEST, objType: '0x2::coin::Coin<0x2::sui::SUI>' });
+  const result = await verifyEscrowTransaction('0xdigest', { sender: GUEST, host: HOST, bookingRef: 'ARIA-2-x', depositAmount: 661 });
+  assertEqual(result.ok, false, 'expected ok:false');
+  if (!/not a escrow::BookingEscrow/.test(result.reason)) throw new Error(`unexpected reason: ${result.reason}`);
+});
+
+await test('escrow under-funded vs booking deposit — returns ok:false', async () => {
+  // Guest funded only 1000 mist ($1) but the booking deposit is $661.
+  mockEscrowChain({ sender: GUEST, content: escrowContent({ amount: 1000 }) });
+  const result = await verifyEscrowTransaction('0xdigest', { sender: GUEST, host: HOST, bookingRef: 'ARIA-2-x', depositAmount: 661 });
+  assertEqual(result.ok, false, 'expected ok:false');
+  assertEqual(result.reason, 'Escrow is not funded with the expected deposit amount');
+});
+
+await test('escrow names a different host — returns ok:false', async () => {
+  mockEscrowChain({ sender: GUEST, content: escrowContent({ host: '0x' + '7'.repeat(64) }) });
+  const result = await verifyEscrowTransaction('0xdigest', { sender: GUEST, host: HOST, bookingRef: 'ARIA-2-x', depositAmount: 661 });
+  assertEqual(result.ok, false, 'expected ok:false');
+  assertEqual(result.reason, 'Escrow host does not match the booking host');
+});
+
+await test('escrow booking_ref does not match — returns ok:false', async () => {
+  mockEscrowChain({ sender: GUEST, content: escrowContent({ bookingRef: 'ARIA-9-other' }) });
+  const result = await verifyEscrowTransaction('0xdigest', { sender: GUEST, host: HOST, bookingRef: 'ARIA-2-x', depositAmount: 661 });
+  assertEqual(result.ok, false, 'expected ok:false');
+  assertEqual(result.reason, 'Escrow booking_ref does not match this booking');
+});
+
+await test('created object cannot be read as a BookingEscrow — returns ok:false', async () => {
   suiClient.core.getTransaction = async () => ({
     $kind: 'Transaction',
     Transaction: {
       status: { success: true, error: null },
-      transaction: { sender: '0xsomeoneelse' },
-      effects: { changedObjects: [{ objectId: 'escrow-id', idOperation: 'Created' }] },
+      transaction: { sender: GUEST },
+      effects: { changedObjects: [{ objectId: 'real-escrow-id', idOperation: 'Created' }] },
     },
   });
-  const result = await verifyEscrowTransaction('0xdigest', '0xguest');
+  suiClient.core.getObjects = async () => ({ objects: [new Error('not found')] });
+  const result = await verifyEscrowTransaction('0xdigest', { sender: GUEST, depositAmount: 661 });
   assertEqual(result.ok, false, 'expected ok:false');
-  assertEqual(result.reason, 'Transaction sender does not match the booking guest');
+  assertEqual(result.reason, 'Created object is not a readable BookingEscrow');
+});
+
+console.log('\ndepositToMist\n');
+
+await test('depositToMist: dollars * 1000, floors at 1', () => {
+  assertEqual(depositToMist(661).toString(), '661000');
+  assertEqual(depositToMist(0).toString(), '1000');   // Math.max(1, 0) * 1000
+  assertEqual(depositToMist(1).toString(), '1000');
 });
 
 console.log('\nisObjectMutated\n');

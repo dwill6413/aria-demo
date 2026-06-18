@@ -203,6 +203,61 @@ module aria_escrow::escrow_tests {
         ts::end(s);
     }
 
+    /// Host claims, guest goes silent, inspection window passes — anyone can
+    /// finalize the claim so funds aren't locked forever (CLAIMED deadlock fix).
+    #[test]
+    fun test_finalize_claim_after_expiry_succeeds() {
+        let mut s = ts::begin(GUEST);
+        setup_claim(&mut s); // escrow now STATUS_CLAIMED with CLAIM filed
+
+        ts::next_tx(&mut s, STRANGER); // not guest, not host — anyone may call
+        {
+            let mut clock = clock::create_for_testing(ts::ctx(&mut s));
+            clock::set_for_testing(&mut clock, T_AFTER); // past expiry
+            let e = ts::take_shared<BookingEscrow<SUI>>(&s);
+            assert!(escrow::status(&e) == escrow::status_claimed(), 0);
+            escrow::finalize_claim<SUI>(e, &clock, ts::ctx(&mut s));
+            clock::destroy_for_testing(clock);
+        };
+        ts::end(s);
+    }
+
+    /// finalize_claim before the inspection window closes must fail — the guest
+    /// still has time to accept or dispute, so the timeout path isn't open yet.
+    #[test, expected_failure(abort_code = aria_escrow::escrow::ENotExpired)]
+    fun test_finalize_claim_before_expiry_fails() {
+        let mut s = ts::begin(GUEST);
+        setup_claim(&mut s);
+
+        ts::next_tx(&mut s, STRANGER);
+        {
+            let mut clock = clock::create_for_testing(ts::ctx(&mut s));
+            clock::set_for_testing(&mut clock, T_BEFORE); // still inside window
+            let e = ts::take_shared<BookingEscrow<SUI>>(&s);
+            escrow::finalize_claim<SUI>(e, &clock, ts::ctx(&mut s));
+            clock::destroy_for_testing(clock);
+        };
+        ts::end(s);
+    }
+
+    /// finalize_claim on an un-claimed (still ACTIVE) escrow must fail — there's
+    /// no claim to finalize; that path is auto_release's job.
+    #[test, expected_failure(abort_code = aria_escrow::escrow::EWrongStatus)]
+    fun test_finalize_claim_on_active_fails() {
+        let mut s = ts::begin(GUEST);
+        setup_escrow(&mut s);
+
+        ts::next_tx(&mut s, STRANGER);
+        {
+            let mut clock = clock::create_for_testing(ts::ctx(&mut s));
+            clock::set_for_testing(&mut clock, T_AFTER);
+            let e = ts::take_shared<BookingEscrow<SUI>>(&s);
+            escrow::finalize_claim<SUI>(e, &clock, ts::ctx(&mut s));
+            clock::destroy_for_testing(clock);
+        };
+        ts::end(s);
+    }
+
     // ── Accessor Tests ─────────────────────────────────────────────────────────
 
     #[test]
