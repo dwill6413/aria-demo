@@ -1,5 +1,5 @@
 # ARIA — Technical Handoff Document
-**Version:** 4.17 | **Updated:** June 18, 2026
+**Version:** 4.18 | **Updated:** June 19, 2026
 
 Deeper technical details for developers or AI assistants continuing work on ARIA.
 Reconciled against the code actually deployed to production as of June 18, 2026.
@@ -113,19 +113,45 @@ so `pages/index.jsx` / `pages/ai.jsx` were untouched. **Still worth a real
 in-browser smoke test** — gRPC-web behaves slightly differently in-browser than
 the old `fetch`.
 
-**STATUS: escrow verification hardened (June 18, 2026 — `ARIA_CODE_AUDIT.md`
-finding S1).** `verifyEscrowTransaction` previously only checked tx success +
-sender == guest + that *some* object was created. Because the guest signs and
-submits in their own browser, they could substitute a `create_escrow` that funds
-a near-zero deposit (or names a different host, or creates an unrelated object)
-and report that digest — the backend would mark `deposit_status='held'` on a
-worthless escrow. It now **re-reads the created object on-chain** (gRPC
-`getObjects`, BCS-decoding `BookingEscrow` via the exported `BookingEscrowBcs`)
-and asserts: type is `::escrow::BookingEscrow<…>`, `guest`/`host`/`booking_ref`
-match the booking, and both the `amount` field **and** the actual coin balance
-equal `depositToMist(deposit_amount)`. The confirm route passes the booking's
-authoritative values. `depositToMist()` is the single source of the
-dollar→mist conversion shared by build + verify so they can't drift.
+**STATUS: escrow verification hardened, then made lag-robust (June 18–19, 2026
+— `ARIA_CODE_AUDIT.md` finding S1; live-verified June 19).** `verifyEscrowTransaction`
+originally only checked tx success + sender + that *some* object was created — a
+guest signing in their own browser could substitute a near-zero / wrong-host
+escrow and still get `deposit_status='held'`. It now verifies in **layers ordered
+by reliability** (this is the transferable pattern — see "Sui Integration
+Lessons" §1–4 below):
+1. tx succeeded **and** `sender == booking.guest` — lag-free, from `getTransaction`.
+2. the created object is our `BookingEscrow` **type** — read **lag-free** from
+   `getTransaction`'s `objectTypes` map (a `Record<objectId,type>` in the same
+   response), scanned **by value** for the `::escrow::BookingEscrow<` suffix.
+   We match the suffix, NOT the package id, because a struct's type always
+   carries the **original** package id (`0x538262…`), not the upgraded v3 id —
+   see Lessons §3.
+3. **best-effort:** `getObjects` content read (BCS-decoded via the exported
+   `BookingEscrowBcs`) to also confirm `guest`/`host`/`booking_ref` and that the
+   funded amount == `depositToMist(deposit_amount)` (the single dollar→mist
+   source shared with `buildEscrowTransaction`). This read frequently lags
+   minutes on the public fullnode, so it's a bonus: if it can't be read but the
+   **type + sender are confirmed (steps 1–2)**, the deposit is accepted; a
+   readable-but-mismatched object is hard-rejected; if **nothing** is verifiable
+   the confirm returns **503 retryable** (booking stays pending — never marked
+   held on weak evidence).
+
+**Why layered (the bug that forced it):** the first hardening gated on the
+`getObjects` content read, which on the public testnet fullnode returns
+"Object … not found" for **seconds to >1 minute** after creation (read-after-
+write lag — Lessons §1) even though `getTransaction` is instant. That rejected
+nearly every real booking. The `objectTypes` type-gate (step 2) is the fix
+because it rides the lag-free `getTransaction` response. **Live-verified June 19,
+2026:** booking confirmed first-try (`Escrow verified on-chain and recorded`),
+and cancel-after-expiry released the escrow on-chain (`cancelBooking: escrow
+released on-chain`).
+
+**KNOWN LIMITATION (pre-mainnet):** when step 3's content read lags, the
+amount/host/ref check is skipped (type + sender still enforced), so under-funding
+isn't caught on testnet (amounts are symbolic). Mainnet options (roadmapped,
+all lag-free): a reliable/dedicated fullnode, an async reconciler that re-reads
+once indexed, or decoding the `create_escrow` args from the tx inputs.
 
 **The working pattern for `auto_release`** (`@mysten/sui: "latest"`, Node 22):
 
@@ -600,35 +626,142 @@ NEXT_PUBLIC_API_URL = https://aria-demo-production-e590.up.railway.app
   the object's content** (`readEscrowObject`/BCS) and checking its fields against
   the expected values — never trust a client-reported digest at face value.
 
-### ⚠️ Pitfall — read-after-write race on freshly-created objects (June 18, 2026)
-
-`getTransaction(digest)` is queryable the instant a tx executes, but
-`getObjects()` for the **object that tx just created** can lag a beat behind on
-the read node. Code that creates an object and immediately reads it back, then
-**hard-fails** if it's not found, will intermittently reject valid,
-on-chain-confirmed operations. This exact bug broke S1's escrow verification in
-live testing — a real guest-signed, confirmed deposit was rejected as "not a
-readable BookingEscrow," leaving the booking confirmed but the deposit stuck.
-
-Rules for any on-chain-read verification (incl. Phase 2 `seal_approve` and any
-future PTB-creates-object flow):
-1. **Retry** object reads with backoff (`readEscrowObject` uses 4× ~1.2s). A
-   single not-found is not definitive.
-2. **Distinguish** "readable but fields mismatch" (real substitution → hard
-   reject) from "unreadable at all" (infra/timing lag → fall back to the weaker
-   sound guarantee you already hold — e.g. tx-success + verified sender — and
-   log; don't permanently fail a properly-signed op).
-3. **Log the distinct reason** (`object-not-found` / `rpc-error` / `bcs-decode`)
-   so a persistent problem (e.g. a wrong BCS layout silently skipping checks) is
-   visible, not silent.
-4. **Smoke-test live in a browser** — mocked unit tests can't catch read-after-
-   write timing or a BCS-layout mismatch against real chain bytes. The bug
-   shipped past 39 green unit tests; only live testing caught it.
 - Use the single `depositToMist()` helper for dollar→mist conversion everywhere.
 - Keep this doc, `ARIA_ROADMAP.md`, `ARIA_REMEDIATION.md`, and `ARIA_CODE_AUDIT.md` in sync.
 
 ---
 
+## Sui Integration Lessons (transferable)
+
+Hard-won gotchas from building ARIA on Sui (testnet, `@mysten/sui` v2 **gRPC**
+client, zkLogin, package upgrades, Walrus). Written generically so any agent or
+dev can apply them to other Sui dApps — not just ARIA. Reference implementation
+for most of these lives in `escrow.mjs` (`verifyEscrowTransaction`,
+`readEscrowObject`, `BookingEscrowBcs`).
+
+### 1. Read-after-write asymmetry: `getTransaction` is instant, `getObjects` lags
+After a tx executes, `getTransaction(digest)` returns its effects immediately.
+But `getObjects(createdObjectId)` (current object state) can return
+"Object … not found" for **seconds to minutes** on public fullnodes — observed
+**>1 minute** on `fullnode.testnet.sui.io`, because reads are load-balanced
+across replicas that lag the one that processed the tx. **Do not gate critical
+logic on reading back a freshly-created object.** If you must read it, retry with
+backoff AND keep a fallback that neither strands the user nor accepts on weak
+evidence. Prefer verifying from the transaction's own effects (§2).
+
+### 2. Verify a created object's TYPE lag-free via `objectTypes`
+`getTransaction({ digest, include: { objectTypes: true } })` →
+`result.Transaction.objectTypes` is a `Record<objectId, fullType>` populated from
+the **same** call (no extra round-trip, no lag). To find "the object my Move call
+created," **scan that map by value** for your struct type and take the key as the
+object id — more robust than guessing which `effects.changedObjects` "Created"
+entry is yours. Real shape from ARIA:
+```
+{ '0x98e7…': '0x538262…::escrow::BookingEscrow<0x2::sui::SUI>',
+  '0xf26b…': '0x2::coin::Coin<0x2::sui::SUI>' }
+```
+
+### 3. A struct's type carries the ORIGINAL package id, not the upgraded one
+After `sui client upgrade`, your package id changes but every existing/!new
+object's fully-qualified **type still shows the first-published (type-defining)
+package id**. ARIA runs package **v3** (`0xec0d6…`) yet every `BookingEscrow`
+type reads `0x538262…` (v1). So when matching a type string, match the
+`::module::Struct<` **suffix**, never pin your current `PACKAGE_ID`. (Same reason
+Seal's identity namespace anchors to the original package id forever.)
+
+### 4. Verifying a transaction you didn't sign (non-custodial flows)
+When the user signs+submits and only reports a digest, **never trust the digest
+at face value** — re-derive from chain, layered by reliability:
+1. tx succeeded + `sender == expected user` (lag-free).
+2. created object is YOUR type (lag-free, §2) — blocks "created some unrelated
+   object" substitution.
+3. (best-effort) read object content to verify amounts/fields — guards
+   under-funding, but depends on the laggy `getObjects`, so treat as a bonus.
+
+Distinguish **"readable but fields wrong"** (real attack → hard reject) from
+**"couldn't read"** (infra lag → don't strand; accept on the lag-free evidence
+you DO have, or return a **retryable** status). Two anti-patterns to avoid:
+(a) soft-accepting on "some object was created" (lets a guest substitute a
+near-zero deposit); (b) hard-failing a confirmed op because a read replica lagged.
+
+### 5. The gRPC client result is a discriminated union
+`@mysten/sui` gRPC `getTransaction`/`executeTransaction` return
+`{ $kind: 'Transaction' | 'FailedTransaction', Transaction?: {...},
+FailedTransaction?: {...} }`. The real payload (status/effects/transaction/
+objectTypes) is **nested under `.Transaction`**. Reading top-level
+`.status`/`.effects` is always `undefined` — a silent bug that makes every tx
+look failed. Always branch on `$kind`. And nothing is included by default — pass
+`include: { effects: true, objectTypes: true, transaction: true }` explicitly.
+
+### 6. Decoding object content with BCS
+`getObjects({ include: { content: true } })` returns `content` as **raw BCS
+bytes** of the Move struct. Parse with a hand-built `bcs.struct` mirroring the
+Move struct EXACTLY in field order/type. Rules that bite:
+- `UID` serializes as a bare 32-byte address → `bcs.Address`.
+- `Coin<T>` = `{ id: UID, balance: Balance<T> { value: u64 } }`.
+- `std::string::String` = length-prefixed bytes → `bcs.string()`.
+- `u64` comes back as a **string** — compare as string/BigInt, never JS number.
+The `json`/`display` includes exist but their shapes vary across
+JSON-RPC/gRPC/GraphQL — the BCS `content` path is the consistent one.
+
+### 7. `coinWithBalance` + created-object ordering
+`coinWithBalance({ balance })` emits a `SplitCoins` (an ephemeral coin) **and**
+your create call. In `effects` "Created" entries the ephemeral coin is FIRST and
+your real object LAST, so "take the last Created" works — but the §2
+`objectTypes` type-scan is order-independent and preferred.
+
+### 8. Settle on-chain — don't just flip a DB status
+ARIA's cancel path originally set `deposit_status='released'` in Postgres but
+never called the contract, leaving the coin locked on-chain forever (a "stranded
+deposit"). **Any state change that should move funds must actually submit the
+on-chain tx and gate the DB write on its success.** Sui has **no native cron**:
+a keeper (server interval) must submit time-based settlement (e.g. `auto_release`
+after expiry). For testnet set short expiries (ARIA uses `now + 5min`) so timing
+is exercisable without waiting days. Tie related state to object lifecycle where
+possible — ARIA's `auto_release`/`accept_claim`/`resolve_dispute` all
+`object::delete` the escrow, which (bonus) auto-revokes any Seal access keyed to it.
+
+### 9. JS SDK still uses JSON-RPC in places — and JSON-RPC is being sunset
+Sui's JSON-RPC interface deactivates network-wide (announced for July 31, 2026).
+Migrate to the gRPC client. Watch the **browser** path too: ARIA's `lib/zklogin.js`
+silently used `sui_executeTransactionBlock` / `suix_getLatestSuiSystemState`
+(JSON-RPC) long after the backend migrated — submit via the gRPC
+`executeTransaction` and read epoch via `getCurrentSystemState`.
+
+### 10. Server-side fetch of a user-supplied URL = SSRF (general)
+Not Sui-specific but it bit ARIA (iCal import). Any URL a user can register that
+the server later fetches needs: **https-only**, resolve the host and **reject any
+private/loopback/link-local/CGNAT/metadata IP** (`169.254.169.254`),
+`redirect: 'error'` (so a public URL can't 30x to an internal one), a **timeout**
+and a **response-size cap**, plus authz on who can register it. See
+`ical.mjs assertPublicHttpsUrl`.
+
+### 11. You cannot unit-test these — smoke-test the real chain
+Mocked unit tests CANNOT catch read-after-write timing, the gRPC
+discriminated-union shape, or a BCS-layout mismatch against real chain bytes.
+ARIA shipped escrow-verification bugs past **41 green unit tests** that only live
+testnet caught. When integrating a new SDK call, add a **temporary diagnostic log
+of the real response shape**, deploy, exercise it once, read the log, then remove
+the diagnostic. (That is exactly how the `objectTypes` shape in §2 was confirmed.)
+
+---
+
+*Technical Handoff v4.18 — June 19, 2026*
+*Changes from v4.17: escrow verification reworked to be lag-robust and
+**live-verified end-to-end on testnet**. Root cause: gating on the `getObjects`
+content read failed on ~every booking because the public fullnode can't serve a
+just-created object for >1 min (read-after-write lag) while `getTransaction` is
+instant. Fix: `verifyEscrowTransaction` now gates on the created object's TYPE
+read lag-free from `getTransaction`'s `objectTypes` map (scanned by value,
+matched on the `::escrow::BookingEscrow<` suffix since the type carries the
+original package id, not v3), with the `getObjects` content/amount check demoted
+to best-effort and a 503-retryable fallback (never marks held on weak evidence).
+Also live-verified the M1 cancel-time on-chain release (`cancelBooking: escrow
+released on-chain` after the testnet 5-min expiry). Added a new transferable
+**"Sui Integration Lessons"** section (11 gotchas/patterns) and updated the
+signing/verification section. Tests 41/41. Known pre-mainnet limitation: amount
+check skipped under read lag (type+sender still enforced) — mainnet options
+(reliable fullnode / async reconciler / tx-input decode) roadmapped.*
 *Technical Handoff v4.17 — June 18, 2026*
 *Changes from v4.16: (1) Smart contract upgraded to v3
 (`0xec0d6bd4…644d8fa1`) adding permissionless `finalize_claim` (CLAIMED-deadlock

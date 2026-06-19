@@ -528,7 +528,20 @@ evaluated and acted on. Scorecard/rationale: see the evaluation response.
 ## 5c. Second External Review (ChatGPT, June 18, 2026) — Outcomes
 
 A second independent review was evaluated and the high/medium items fixed this
-session (commit pending). Verified each against live code before acting.
+session. Verified each against live code before acting.
+
+> **Update (June 19, 2026 — live-verified):** the escrow "weak-evidence" fix
+> below was reworked once live testing exposed that the public testnet fullnode
+> can't serve a just-created object for >1 min (read-after-write lag), which
+> failed nearly every booking. `verifyEscrowTransaction` now gates on the created
+> object's **type** read **lag-free** from `getTransaction`'s `objectTypes` map
+> (scanned by value; matched on the `::escrow::BookingEscrow<` suffix, since the
+> type carries the *original* package id, not v3); the `getObjects` content/amount
+> check is best-effort; 503-retryable only if nothing is verifiable. Both flows
+> are now **live-verified on testnet**: booking confirm first-try, and cancel-
+> after-expiry on-chain release (M1). Full transferable write-up: see
+> `ARIA_HANDOFF.md` -> "Sui Integration Lessons". Pre-mainnet limitation: amount
+> check skipped under read lag (type+sender still enforced) — see options below.
 
 **Fixed this session:**
 
