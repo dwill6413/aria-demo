@@ -311,14 +311,6 @@ export async function verifyEscrowTransaction(digest, expected = {}, readOptions
   // escrow id — robust to objectId key-formatting differences between the map
   // and the changedObjects list, and to which "Created" entry happens to be last.
   const objectTypes = txn?.objectTypes || {};
-  // DIAGNOSTIC (temporary): surface the real shape so we can confirm what the
-  // gRPC node returns for created-object types if this path ever misses.
-  console.warn('verifyEscrow diag', {
-    changedCount: (txn?.effects?.changedObjects || []).length,
-    objectTypesKeys: Object.keys(objectTypes),
-    objectTypes,
-  });
-
   let escrowId = null;
   for (const [oid, t] of Object.entries(objectTypes)) {
     if (isOurEscrowType(t)) { escrowId = oid; break; }
