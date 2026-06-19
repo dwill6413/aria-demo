@@ -300,27 +300,37 @@ export async function verifyEscrowTransaction(digest, expected = {}, readOptions
     return { ok: false, reason: 'Transaction sender does not match the booking guest' };
   }
 
-  const escrowId = extractCreatedObjectId(txn?.effects?.changedObjects);
-  if (!escrowId) {
-    return { ok: false, reason: 'No created object found in transaction effects' };
-  }
-
   const mod = process.env.ESCROW_MODULE_NAME || 'escrow';
   const isOurEscrowType = (t) => typeof t === 'string' && new RegExp(`::${mod}::BookingEscrow<`).test(t);
 
-  // PRIMARY (lag-free) type gate. The created object's type comes straight from
-  // the transaction's OWN effects (the objectTypes map in the same
-  // getTransaction response we already have), so it does NOT depend on the
-  // separate getObjects read — which on public testnet fullnodes can fail to
-  // serve a just-created object for over a minute. If the tx tells us the
-  // created object is our BookingEscrow type AND the guest signed it (sender
-  // check above), that is sound evidence the guest really created our escrow —
-  // not the weak "some object was created" the earlier soft-accept relied on.
-  const createdType = txn?.objectTypes?.[escrowId];
-  if (createdType && !isOurEscrowType(createdType)) {
-    return { ok: false, reason: `Created object is not a ${mod}::BookingEscrow (got ${createdType})` };
+  // PRIMARY (lag-free) type gate. The created object's type comes from the
+  // transaction's OWN effects (the objectTypes map in the same getTransaction
+  // response), so it does NOT depend on the separate getObjects read — which on
+  // public testnet fullnodes can fail to serve a just-created object for >1 min.
+  // We scan the map by VALUE for our BookingEscrow type and take that key as the
+  // escrow id — robust to objectId key-formatting differences between the map
+  // and the changedObjects list, and to which "Created" entry happens to be last.
+  const objectTypes = txn?.objectTypes || {};
+  // DIAGNOSTIC (temporary): surface the real shape so we can confirm what the
+  // gRPC node returns for created-object types if this path ever misses.
+  console.warn('verifyEscrow diag', {
+    changedCount: (txn?.effects?.changedObjects || []).length,
+    objectTypesKeys: Object.keys(objectTypes),
+    objectTypes,
+  });
+
+  let escrowId = null;
+  for (const [oid, t] of Object.entries(objectTypes)) {
+    if (isOurEscrowType(t)) { escrowId = oid; break; }
   }
-  const typeConfirmed = isOurEscrowType(createdType);
+  const typeConfirmed = !!escrowId;
+
+  // Fall back to the last-created heuristic only if objectTypes didn't yield our
+  // escrow (e.g. the node didn't populate the map).
+  if (!escrowId) escrowId = extractCreatedObjectId(txn?.effects?.changedObjects);
+  if (!escrowId) {
+    return { ok: false, reason: 'No created object found in transaction effects' };
+  }
 
   // SECONDARY (best-effort) strict check: read the object's content to verify it
   // is funded with the expected deposit and names the right guest/host/booking_ref

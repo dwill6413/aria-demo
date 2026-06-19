@@ -290,7 +290,10 @@ await test('object content unreadable BUT tx-effects type confirms BookingEscrow
   assertEqual(result.escrowId, 'real-escrow-id');
 });
 
-await test('tx-effects type is NOT our BookingEscrow — hard reject even when content unreadable', async () => {
+await test('tx-effects shows no BookingEscrow type AND content unreadable — NOT accepted (retryable, safe)', async () => {
+  // A guest reports a tx that created only a non-escrow object (e.g. a Coin) and
+  // the content read lags. The type scan finds no BookingEscrow, so it is never
+  // type-confirmed; with content unreadable it must NOT be accepted — retryable.
   suiClient.core.getTransaction = async () => ({
     $kind: 'Transaction',
     Transaction: {
@@ -302,8 +305,8 @@ await test('tx-effects type is NOT our BookingEscrow — hard reject even when c
   });
   suiClient.core.getObjects = async () => ({ objects: [new Error('not found')] });
   const result = await verifyEscrowTransaction('0xdigest', { sender: GUEST }, { attempts: 1, delayMs: 0 });
-  assertEqual(result.ok, false, 'expected ok:false (wrong type)');
-  if (!/not a escrow::BookingEscrow/.test(result.reason)) throw new Error(`unexpected reason: ${result.reason}`);
+  assertEqual(result.ok, false, 'expected ok:false (no escrow type confirmed)');
+  assertEqual(result.retryable, true, 'expected retryable:true (not accepted on weak evidence)');
 });
 
 console.log('\ndepositToMist\n');
