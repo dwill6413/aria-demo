@@ -58,7 +58,10 @@ export const claimDamageSchema = z.object({
 
 export const claimDamageConfirmSchema = z.object({
   bookingRef: z.string().min(1, 'bookingRef is required'),
-  digest: z.string().min(1, 'digest is required')
+  digest: z.string().min(1, 'digest is required'),
+  // reason is an optional human note shown to the guest. The claim AMOUNT is NOT
+  // accepted here — it is decoded from the on-chain claim_damage tx (P1-2).
+  reason: z.string().max(1000).optional().nullable()
 });
 
 export const disputeClaimSchema = z.object({

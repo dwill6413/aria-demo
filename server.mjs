@@ -9,7 +9,7 @@ import { getSuiUSDLiquidity, calculateHostPayout } from './deepbook.mjs';
 import { generateICal, saveExternalCalendar, checkAvailability, assertPublicHttpsUrl } from './ical.mjs';
 import { Resend } from 'resend';
 import { registerAIRoute } from './ai_route.mjs';
-import { handleZkLoginCallback, getSession } from './auth.mjs';
+import { handleZkLoginCallback, getSession, deleteSession } from './auth.mjs';
 import { initDB, pool } from './db.mjs';
 import { PROPERTIES, JURISDICTION_TAX_RATES } from './catalog.mjs';
 import {
@@ -199,6 +199,14 @@ fastify.get('/auth/me', async (request, reply) => {
 });
 
 fastify.get('/auth/logout', async (request, reply) => {
+  // Revoke server-side, not just the cookie: a copied aria_session (cookie or the
+  // x-session-id fallback) must stop working immediately on logout, not linger
+  // until expiry. deleteSession removes the Postgres session row.
+  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
+  if (sessionId) {
+    try { await deleteSession(sessionId); }
+    catch (err) { fastify.log.warn({ err }, '/auth/logout: session row delete failed'); }
+  }
   reply.clearCookie('aria_session');
   return { success: true };
 });
@@ -475,7 +483,15 @@ fastify.post('/booking/claim-damage/confirm', {
     const verification = await verifyClaimDamageTransaction(digest, session.suiAddress, booking.escrow_object_id);
     if (!verification.ok) return reply.code(400).send({ error: verification.reason || 'Claim transaction could not be verified' });
 
-    const claimAmount = Number(request.body.claimAmount ?? booking.claim_amount ?? 0);
+    // P1-2: record the ON-CHAIN claim amount the host actually signed (decoded
+    // lag-free from the claim_damage tx), NOT a client-supplied body value — a
+    // client could otherwise post a different amount and make the DB/guest email
+    // misstate the real claim. buildClaimDamageTransaction uses claimMist =
+    // dollars * 1000, so divide back to dollars.
+    if (verification.claimAmountMist == null) {
+      return reply.code(400).send({ error: 'Could not read the claim amount from the on-chain transaction. Please retry in a moment.' });
+    }
+    const claimAmount = Number(verification.claimAmountMist) / 1000;
     const reason = request.body.reason ?? null;
     await pool.query(
       `UPDATE bookings SET deposit_status='claimed', claim_amount=$1, claim_reason=$2, claimed_at=NOW() WHERE booking_ref=$3`,

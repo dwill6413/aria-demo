@@ -1,8 +1,18 @@
 # ARIA — Product Roadmap & AI Handoff Document
-**Version:** 2.18 | **Updated:** June 22, 2026
+**Version:** 2.19 | **Updated:** June 22, 2026
 **Purpose:** Complete handoff for an AI assistant continuing ARIA development.
 Read this entire document before writing any code.
 
+> **June 22, 2026 (later):** Third external review evaluated — see **§5d**. Fixed
+> in code: **P1-2** (claim-damage confirm now records the on-chain `claim_amount`
+> decoded lag-free, not a client-supplied value) and **logout server-side
+> revocation** (`deleteSession` now called). New backlog items added in §5d:
+> package-manager/lockfile alignment, CSRF for cookie auth, security headers/CSP,
+> DB integrity constraints, AI per-user budget/audit log, growth indexes. The
+> standalone eval file was deleted after folding its findings here. Also: the
+> lag-free escrow verifier (Phase 1h.5 "step 1") shipped and is live-confirmed —
+> see `ARIA_FEE_DESIGN.md` §13.
+>
 > **June 22, 2026:** Fee collection/routing (Phase 1h.5) now has a written design
 > — see **`ARIA_FEE_DESIGN.md` v2.0**. Decided model: rental + ARIA fee + tax are
 > escrowed in a new non-custodial **`BookingPaymentEscrow`** at booking (one guest
@@ -578,6 +588,40 @@ session. Verified each against live code before acting.
 | Optional escrow reconciler | Replace the manual "Retry escrow deposit" with a sweep that persists the reported digest and auto-re-verifies pending escrows (complements finding #1's retryable result). |
 | AI host-tool property scoping | Same as R6 — `get_all_bookings`/`get_revenue_summary`/`get_all_messages`/`get_reviews` are platform-wide; scope per-property for multi-tenant. |
 | `x-session-id` in `localStorage` | Accepted demo tradeoff (XSS-exposable); see Deliberately Deferred. |
+
+---
+
+## 5d. Third External Review (Security/Quality/Scalability Eval, June 22, 2026) — Outcomes
+
+A third independent review (the standalone `ARIA_SECURITY_QUALITY_SCALABILITY_EVALUATION.md`,
+since deleted — its findings are folded in here so nothing is lost) was evaluated
+against live code. Most findings duplicated items already tracked above; the
+genuinely new/verified ones were acted on or added to the backlog.
+
+**Fixed this session (code, June 22, 2026):**
+
+| Finding | What shipped |
+|---|---|
+| **Claim amount could diverge from chain (P1-2)** | `/booking/claim-damage/confirm` previously wrote `request.body.claimAmount` (client-supplied) to the DB/guest-email while only verifying the escrow was *mutated*. Now `decodeClaimDamageAmountMist()` decodes the **on-chain** `claim_amount` (arg[1] of the signed `claim_damage` PTB, lag-free) via `verifyEscrowMutation`, and the route records that authoritative value; undecodable → 400. Confirm schema now declares `reason` (optional) and no longer accepts an amount. Unit-tested. |
+| **Logout didn't revoke server-side (P1-3 / L2)** | `/auth/logout` only cleared the cookie; the unused `deleteSession()` is now exported and called, deleting the Postgres session row so a copied `aria_session`/`x-session-id` stops working immediately. |
+
+**Already tracked (no new action — see above):** payment collection/routing = Fee
+collection (Phase 1h.5); host-data isolation across `/bookings/all`, `/tax/summary`,
+`/reviews/all`, and AI host tools = **R6** + AI host-tool scoping; DB TLS = **M4**;
+zkLogin salt = **M3**; Stripe finality = **M6**; single-process sweeps/rate-limits =
+**R10**; numbered migrations = **R8**; integration tests + CI = **R11**; iCal cache =
+the iCal-amplification §5c row; UpgradeCap burn + Move audit = pre-mainnet gate.
+
+**New backlog items added (before mainnet / multi-host):**
+
+| Item | Priority | Notes |
+|---|---|---|
+| **Package-manager / lockfile mismatch** | Medium | Repo has `pnpm-lock.yaml` (lockfileVersion 9.0) but Railway/Vercel/Nixpacks all run `npm install` with no `package-lock.json` and no `packageManager` field → prod can drift from the locked graph. Fix: standardize on pnpm (`"packageManager": "pnpm@9"` + `pnpm install --frozen-lockfile` in all three deploy configs). **Deploy-affecting — apply while watching a Railway/Vercel build.** Add `test`/`lint`/`audit` scripts too. |
+| **CSRF protection for cookie auth** | High before real users | Prod cookies use `SameSite=None` (cross-domain Vercel↔Railway). CORS origin-allowlist helps but isn't a complete CSRF strategy. Add CSRF tokens (or strict `Origin` checks) on cookie-authenticated mutation routes; prefer same-site topology so cookies can be `SameSite=Lax`. |
+| **Security headers / CSP** | Medium | No CSP, HSTS, `X-Frame-Options`/`frame-ancestors`, `X-Content-Type-Options`, referrer policy. Add `@fastify/helmet` on the API and Next.js headers in `next.config.mjs`; start CSP in report-only. Matters more because `aria_sid` is in `localStorage`. |
+| **DB integrity constraints** | Medium | `payment_status`/`deposit_status` are free-text (add CHECK enums); no foreign keys; no unique index on `reviews(booking_ref)` despite one-review-per-booking in code (add it). Note `tax_remittances(booking_ref)` is already UNIQUE. Pairs with **R8** migrations. |
+| **AI per-user budget + tool audit log** | Medium | `/api/ai/chat` takes a full client `messages` array with no message-count/length cap and only the global (per-IP) rate limit. Add an AI-specific per-session limit, message/length caps, and persist an audit log for booking-mutating tool calls. |
+| **Growth indexes** | Medium | Add `reviews(property_id)`, unique `reviews(booking_ref)`, `tax_remittances(booking_ref)` and dashboard composite indexes; convert `/reviews/:propertyId` average to SQL `AVG()`/`COUNT()`. |
 
 ---
 

@@ -11,7 +11,7 @@
 import {
   extractCreatedObjectId, verifyEscrowTransaction, suiClient,
   isObjectMutated, verifyClaimDamageTransaction, verifyDisputeClaimTransaction,
-  depositToMist, BookingEscrowBcs, decodeCreateEscrowArgs
+  depositToMist, BookingEscrowBcs, decodeCreateEscrowArgs, decodeClaimDamageAmountMist
 } from './escrow.mjs';
 import { bcs } from '@mysten/sui/bcs';
 import { toBase64 } from '@mysten/sui/utils';
@@ -549,6 +549,35 @@ await test('decodeCreateEscrowArgs: wrong module name — returns null', () => {
 await test('decodeCreateEscrowArgs: malformed transaction — returns null (no throw)', () => {
   assertEqual(decodeCreateEscrowArgs({}, 'escrow'), null);
   assertEqual(decodeCreateEscrowArgs(null, 'escrow'), null);
+});
+
+// ─── decodeClaimDamageAmountMist (P1-2: authoritative claim amount) ──────────
+// claim_damage(escrow, claim_amount, clock) — amount is arguments[1], a pure u64.
+function claimDamageTxData({ claimMist = 50000 } = {}) {
+  return {
+    inputs: [
+      { Object: { ImmOrOwnedObject: {} } },        // 0 escrow object
+      _pure(bcs.u64().serialize(BigInt(claimMist))), // 1 claim_amount
+      { Object: { SharedObject: {} } },            // 2 clock
+    ],
+    commands: [
+      { MoveCall: { module: 'escrow', function: 'claim_damage', typeArguments: ['0x2::sui::SUI'],
+        arguments: [{ Input: 0 }, { Input: 1 }, { Input: 2 }] } },
+    ],
+  };
+}
+
+await test('decodeClaimDamageAmountMist: reads the signed claim amount (arg[1]) lag-free', () => {
+  assertEqual(decodeClaimDamageAmountMist(claimDamageTxData({ claimMist: 50000 }), 'escrow'), '50000'); // $50
+});
+
+await test('decodeClaimDamageAmountMist: wrong module — returns null', () => {
+  assertEqual(decodeClaimDamageAmountMist(claimDamageTxData(), 'nope'), null);
+});
+
+await test('decodeClaimDamageAmountMist: malformed transaction — returns null (no throw)', () => {
+  assertEqual(decodeClaimDamageAmountMist({}, 'escrow'), null);
+  assertEqual(decodeClaimDamageAmountMist(null, 'escrow'), null);
 });
 
 // ─── Summary ──────────────────────────────────────────────────────────────────

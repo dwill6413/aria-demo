@@ -1,5 +1,21 @@
 # ARIA — Technical Handoff Document
-**Version:** 4.19 | **Updated:** June 22, 2026
+**Version:** 4.20 | **Updated:** June 22, 2026
+
+> **June 22, 2026 (later) — security fixes + verifier groundwork:**
+> - **P1-2 fixed:** `/booking/claim-damage/confirm` now records the **on-chain**
+>   `claim_amount` (decoded lag-free from the signed `claim_damage` PTB via
+>   `decodeClaimDamageAmountMist` / `verifyEscrowMutation`), not the client's
+>   `request.body.claimAmount`. Undecodable → 400. `claimDamageConfirmSchema`
+>   gained optional `reason`, dropped the amount.
+> - **Logout revocation fixed:** `deleteSession()` is exported and called by
+>   `/auth/logout`, deleting the Postgres session row (a copied `aria_session`
+>   no longer lingers to expiry).
+> - **Lag-free escrow verifier shipped (Phase 1h.5 step 1):** `decodeCreateEscrowArgs`
+>   + hardened `verifyEscrowTransaction` replace the weak "type+sender only" lag
+>   fallback with a full strict check decoded from the tx; live-confirmed against a
+>   real testnet digest (`check-escrow-decode.mjs`, `ARIA_FEE_DESIGN.md` §13).
+> - A third external review (security/quality/scalability) was folded into
+>   `ARIA_ROADMAP.md` §5d and its standalone file deleted.
 
 Deeper technical details for developers or AI assistants continuing work on ARIA.
 Reconciled against the code actually deployed to production as of June 18, 2026.

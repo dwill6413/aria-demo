@@ -311,6 +311,28 @@ export function decodeCreateEscrowArgs(transaction, moduleName) {
   }
 }
 
+// Decode claim_damage's claim_amount (a u64 arg) from a parsed transaction —
+// lag-free, and authoritative because it's the value the HOST actually signed.
+// The confirm route uses this so the DB/guest-email record the on-chain claim
+// rather than a client-supplied amount (P1-2). Signature:
+// claim_damage(escrow, claim_amount, clock) → the amount is arguments[1].
+export function decodeClaimDamageAmountMist(transaction, moduleName) {
+  try {
+    const inputs = transaction?.inputs;
+    const commands = transaction?.commands;
+    if (!Array.isArray(inputs) || !Array.isArray(commands)) return null;
+    const call = commands.find(
+      (c) => c?.MoveCall && c.MoveCall.module === moduleName && c.MoveCall.function === 'claim_damage',
+    )?.MoveCall;
+    if (!call || !Array.isArray(call.arguments)) return null;
+    const amtArg = call.arguments[1];
+    if (amtArg?.Input == null) return null;
+    return _asU64(inputs[amtArg.Input]); // mist string
+  } catch {
+    return null;
+  }
+}
+
 // Re-queries Sui directly for a transaction digest the guest reported after
 // signing+submitting their escrow tx client-side, and extracts the resulting
 // escrow object id from the CHAIN's own effects — never trusts a value the
@@ -532,7 +554,13 @@ async function verifyEscrowMutation(digest, expectedSender, expectedEscrowId, la
     return { ok: false, reason: `Transaction did not mutate the expected escrow object (${expectedEscrowId})` };
   }
 
-  return { ok: true, sender: actualSender };
+  const out = { ok: true, sender: actualSender };
+  // For claim_damage, also surface the on-chain claim amount (lag-free decode)
+  // so the confirm route can record what was actually signed, not a client value.
+  if (label === 'claim_damage') {
+    out.claimAmountMist = decodeClaimDamageAmountMist(txn?.transaction, process.env.ESCROW_MODULE_NAME || 'escrow');
+  }
+  return out;
 }
 
 export async function verifyClaimDamageTransaction(digest, expectedHost, escrowObjectId) {

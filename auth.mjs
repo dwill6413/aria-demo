@@ -30,7 +30,7 @@ async function saveSession(sessionId, data) {
   );
 }
 
-async function deleteSession(sessionId) {
+export async function deleteSession(sessionId) {
   await pool.query('DELETE FROM sessions WHERE id = $1', [sessionId]);
 }
 
