@@ -1,11 +1,27 @@
 # ARIA — Technical Handoff Document
-**Version:** 4.18 | **Updated:** June 19, 2026
+**Version:** 4.19 | **Updated:** June 22, 2026
 
 Deeper technical details for developers or AI assistants continuing work on ARIA.
 Reconciled against the code actually deployed to production as of June 18, 2026.
 For the security change log see `ARIA_REMEDIATION.md` and `ARIA_CODE_AUDIT.md`
 (the June 18 "Second Review" section). For the build roadmap see `ARIA_ROADMAP.md`.
+For the fee/payment-routing design see **`ARIA_FEE_DESIGN.md`**.
 
+> **June 22, 2026 update summary:**
+> - Fee collection/routing (Phase 1h.5) designed — `ARIA_FEE_DESIGN.md` v2.0.
+>   Non-custodial hold-and-release: a new `BookingPaymentEscrow<T>` holds
+>   rental + ARIA fee + tax, created in the same guest-signed PTB as the deposit
+>   escrow (one signature, two shared objects, atomic). `release_payment` does a
+>   3-way split (`subtotal`→host, `ariaFee`→ARIA fee wallet, `taxes`→remittance)
+>   at check-in — permissionless, signed by the existing zero-privilege
+>   auto-release key via a new `runCheckInReleaseSweep` cron. `refund_payment`
+>   (arbitrator-gated, pre-check-in) gives a full guest refund on cancellation via
+>   a new `/booking/cancel` route. Needs the **v4** contract upgrade — bundle with
+>   Phase 2a's `seal_approve` (one publish). Adds two receive-only treasury
+>   addresses (`ARIA_FEE_ADDRESS`, `ARIA_TAX_REMITTANCE_ADDRESS`); no new signing
+>   key. Fixes the `calculateHostPayout` fee double-count (host gets full
+>   `subtotal`). SuiUSD-only; Stripe Connect deferred. Not yet built.
+>
 > **June 18, 2026 update summary** (details throughout this doc):
 > - Smart contract upgraded to **package v3** (`0xec0d6bd4…644d8fa1`) adding a
 >   permissionless `finalize_claim` — live on testnet, Railway pointed at it.

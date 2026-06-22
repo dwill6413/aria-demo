@@ -1,14 +1,24 @@
 # ARIA — Product Roadmap & AI Handoff Document
-**Version:** 2.17 | **Updated:** June 18, 2026
+**Version:** 2.18 | **Updated:** June 22, 2026
 **Purpose:** Complete handoff for an AI assistant continuing ARIA development.
 Read this entire document before writing any code.
 
+> **June 22, 2026:** Fee collection/routing (Phase 1h.5) now has a written design
+> — see **`ARIA_FEE_DESIGN.md` v2.0**. Decided model: rental + ARIA fee + tax are
+> escrowed in a new non-custodial **`BookingPaymentEscrow`** at booking (one guest
+> signature, alongside the deposit escrow), then released in a 3-way split
+> (`subtotal`→host, `ariaFee`→ARIA, `taxes`→remittance) at **check-in**;
+> full refund to guest on cancellation **before** check-in (binary policy). This
+> needs a contract addition shipped in the **v4** upgrade — bundled with Phase
+> 2a's `seal_approve`. SuiUSD-only this phase; Stripe Connect deferred. Also fixes
+> a fee double-count bug in `calculateHostPayout`. **Top remaining build item:
+> fee collection/routing (now design-complete, awaiting build).**
+>
 > **June 18, 2026:** Contract upgraded to **v3** (`0xec0d6bd4…644d8fa1`, adds
 > `finalize_claim`); a second independent code review fixed 8 findings (see
 > `ARIA_CODE_AUDIT.md` "Second Review"); ops cleanup done (addresses funded, old
 > `ARIA_DEPLOYER_KEY` + `ANTHROPIC_API_KEY` removed from Railway, `@anthropic-ai/sdk`
-> removed). **Top remaining build item: fee collection/routing.** Phase 2
-> (Seal/PII) remains the next feature phase.
+> removed). Phase 2 (Seal/PII) remains the next feature phase.
 
 ---
 
@@ -274,7 +284,7 @@ escrow creation:
 - [x] Contract **v3** published (June 18, 2026 — `finalize_claim` deadlock fix, `0xec0d6bd4…644d8fa1`; Railway `ESCROW_PACKAGE_ID` updated + redeployed clean)
 - [ ] Independent Move audit (OtterSec, Zellic, or similar)
 - [ ] Burn UpgradeCap after audit
-- [ ] **Fee collection/routing** — zero implementation (top remaining build item; see Tech Debt)
+- [ ] **Fee collection/routing** — design complete (`ARIA_FEE_DESIGN.md` v2.0), build pending; ships with the v4 contract upgrade (top remaining build item; see Tech Debt)
 - [ ] In-browser smoke test of the migrated gRPC submit path (`lib/zklogin.js`)
 - [ ] Add ARIA-side audit logging for Seal PII decrypt requests before any
   real (non-demo) guest PII flows through Phase 2 — see Seal compliance note
@@ -433,7 +443,10 @@ original package ID (`0x538262...7fdbe`); no separate contract deployment.
 ✅ Phase 1f2: P0b — Guest wallet funds escrow (done June 16, 2026)
 ✅ Phase 1g2: P1b — Deployer/backend-signer separation (done June 17, 2026)
 ✅ Phase 1h: P2 — Auto-release cron job (done June 17, 2026)
-⬜ Phase 1h.5: Fee collection/routing mechanism (Stripe + SuiUSD paths — needs design)
+⬜ Phase 1h.5: Fee collection/routing mechanism — DESIGN COMPLETE June 22, 2026
+   (ARIA_FEE_DESIGN.md v2.0); build pending. Hold-and-release: BookingPaymentEscrow
+   holds rental+fee+tax, 3-way split released at check-in, full refund to guest
+   before check-in. SuiUSD-only; needs the v4 contract upgrade (bundled w/ 2a).
 ✅ Phase 1i: P2 — Production host address lookup (done June 17, 2026)
 ✅ Phase 1j: P2 — Claim/dispute backend routes (done June 17, 2026)
 ✅ Phase 1k: P3 — STATUS_RESOLVED removed + 30-day expiry bound added, upgrade
@@ -449,9 +462,12 @@ original package ID (`0x538262...7fdbe`); no separate contract deployment.
    (June 18, 2026, package v3 at 0xec0d6bd4...644d8fa1); Railway ESCROW_PACKAGE_ID
    updated to v3 and redeployed clean. NOTE: this consumed the "v3" upgrade slot —
    Phase 2a's seal_approve will be the NEXT upgrade (package v4).
-⬜ Phase 1h.5: Fee collection/routing mechanism — TOP remaining build item
-
-⬜ Phase 2a: Add seal_approve() to escrow.move, publish upgrade (now package **v4**)
+⬜ Phase 1h.5: Fee collection/routing — TOP remaining build item. DESIGN COMPLETE
+   (ARIA_FEE_DESIGN.md v2.0). Its BookingPaymentEscrow + release_payment/
+   refund_payment contract functions ship in the SAME v4 upgrade as 2a's
+   seal_approve — coordinate the two so there is one v4 publish, not two.
+⬜ Phase 2a: Add seal_approve() AND BookingPaymentEscrow/release_payment/
+   refund_payment (Phase 1h.5) to escrow.move, publish ONE upgrade (package **v4**)
 ⬜ Phase 2b: Pick testnet key servers + threshold (no contract deploy — see Phase 2 above)
 ⬜ Phase 2c: guest_verifications table in db.mjs (no pii_object_id column)
 ⬜ Phase 2d: /guest/profile + /host/guest-identity routes (latter returns escrow_object_id too)
@@ -473,7 +489,7 @@ original package ID (`0x538262...7fdbe`); no separate contract deployment.
 | Item | Priority | Notes |
 |---|---|---|
 | Key separation | **Done** | P1a/P1b/P2 all complete — deployer, auto-release, and arbitrator keys are now three separate, appropriately-scoped keypairs. |
-| Fee collection/routing mechanism | High | Currently zero implementation. ARIA's revenue (booking fee) is separate from the escrow (guest security deposit) — no mechanism exists to collect or route ARIA's cut. Two paths to design: Stripe Connect-style split (fiat), and a SuiUSD on-chain split (PTB splits rental payment between host and ARIA in one tx, similar to resolve_dispute's split logic). Needs design before/alongside P0b. |
+| Fee collection/routing mechanism | High — **design done, build pending** | Design complete: `ARIA_FEE_DESIGN.md` v2.0. Non-custodial hold-and-release — a new `BookingPaymentEscrow` holds rental+fee+tax at booking (created in the same guest-signed PTB as the deposit escrow), released as a 3-way split (`subtotal`→host, `ariaFee`→ARIA fee wallet, `taxes`→remittance wallet) at check-in; full guest refund on cancellation before check-in. Reuses existing keys (auto-release key signs `release_payment`, arbitrator key signs `refund_payment`); adds two receive-only treasury addresses. Needs the v4 contract upgrade (bundle with Phase 2a). Also fixes the `calculateHostPayout` fee double-count. SuiUSD path only this phase; Stripe Connect deferred. |
 | Auto-release job | **Done** | Phase 1h — `runAutoReleaseSweep()` in `server.mjs`, hourly + 30s-after-boot |
 | Production host address | **Done** | Phase 1i — `getPropertyHostAddress()` in `bookings.mjs`; `catalog.mjs` still needs real per-property `hostAddress` values set once hosts are onboarded |
 | Claim/dispute routes | **Done** | Phase 1j — `/booking/claim-damage`, `/booking/dispute-claim`, `/booking/resolve-dispute` |
@@ -510,7 +526,7 @@ evaluated and acted on. Scorecard/rationale: see the evaluation response.
 
 | Rec | Why deferred / what's needed |
 |---|---|
-| **`cancel_escrow` contract fn (v4)** | Proper instant pre-expiry refund on cancel. The current fix avoids stranding but a pre-check-in cancel's deposit isn't released on-chain until the sweep at expiry. Needs a Move upgrade (the next package version after v3). |
+| **`cancel_escrow` contract fn (v4)** | Proper instant pre-expiry refund on cancel. The current fix avoids stranding but a pre-check-in cancel's deposit isn't released on-chain until the sweep at expiry. Needs a Move upgrade (the next package version after v3). **Fold into the same v4 upgrade as Phase 1h.5 / 2a** — `ARIA_FEE_DESIGN.md` §7 calls this the optional `refund_deposit` symmetry (arbitrator-signed, pre-check-in) so a cancellation refunds deposit + payment in one flow. |
 | **R6** — scope `/bookings/all` to host's properties | Multi-tenant isolation; only matters once host-owned listings ship. |
 | **M3** — per-user zkLogin salt (+ migration) | salt `'0'` lets anyone derive a user's Sui address from their Google `sub`. Re-derives addresses → migration required. |
 | **M4** — DB TLS CA cert | `rejectUnauthorized:false` is a MITM risk; supply the Railway CA cert. |
