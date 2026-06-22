@@ -568,8 +568,19 @@ the existing deposit `verifyEscrowTransaction` independently (no v4 needed) — 
 is the recommended **first** build step, since it closes the current
 under-funding-under-lag gap and proves the exact pattern the payment escrow reuses.
 
-> Spike caveat: run against a real fetched testnet `create_escrow` digest during
-> the build to confirm the gRPC/`getTransaction` response exposes `rawTransaction`
-> bytes for `Transaction.from()` (use `showRawInput`/equivalent), and that
-> `coinWithBalance` for a non-SUI coin (SuiUSD) still resolves to a `SplitCoins`
-> with a Pure amount (it does for gas-funded SUI; confirm for merged owned coins).
+> **Live check — PASSED (June 22, 2026).** Ran `check-escrow-decode.mjs` against a
+> real testnet `create_escrow` digest (`35D3UZ8GB7duuHR79UjXAcP9E3vnRjT1gi8aMwYX5tg1`).
+> The implemented path reads the **parsed** `txn.transaction.inputs/commands`
+> directly from `suiClient.core.getTransaction({ include: { transaction: true }})`
+> — no `rawTransaction`/`Transaction.from()` needed. The live envelope carries an
+> extra `$kind` discriminator (`{ $kind:'Pure', Pure:{ bytes } }`, commands keyed
+> `$kind`) alongside the `Pure`/`MoveCall`/`SplitCoins` keys the decoder reads, so
+> `decodeCreateEscrowArgs` works unchanged. It decoded `booking_ref`, guest, host,
+> `typeArg`, and recovered the deposit amount (`66000`) lag-free from the
+> `SplitCoins` input, matching `depositToMist(66)`. **Caveat retired for the SUI
+> path.**
+>
+> One minor residual, to confirm when SuiUSD is wired: `coinWithBalance` for a
+> **non-SUI** owned coin may resolve to `MergeCoins` + `SplitCoins` rather than a
+> bare gas split; the `SplitCoins` amount is still a Pure input (low risk), but
+> re-run `check-escrow-decode.mjs` against the first real SuiUSD escrow to confirm.
