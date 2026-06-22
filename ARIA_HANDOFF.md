@@ -1,6 +1,16 @@
 # ARIA — Technical Handoff Document
-**Version:** 4.20 | **Updated:** June 22, 2026
+**Version:** 4.21 | **Updated:** June 22, 2026
 
+> **June 22, 2026 (Codex review fixes):**
+> - **Cross-tenant cancellation fixed:** `cancelBooking()` no longer bypasses the
+>   ownership check for hosts. New `hostManagesBooking(session, booking)` in
+>   `bookings.mjs` scopes a host to bookings they manage (superadmin / escrow
+>   `host_sui_address` / `properties.host_address`); the `isHost` param was removed
+>   from `cancelBooking` and both call sites (`/booking/cancel`, AI `cancel_booking`).
+> - **Missing column added:** `db.mjs` now creates `bookings.deposit_release_walrus_blob_id`
+>   (idempotent) — `ai_route.mjs` wrote it on AI-path deposit release but it was
+>   never in the schema.
+>
 > **June 22, 2026 (later) — security fixes + verifier groundwork:**
 > - **P1-2 fixed:** `/booking/claim-damage/confirm` now records the **on-chain**
 >   `claim_amount` (decoded lag-free from the signed `claim_damage` PTB via

@@ -366,7 +366,9 @@ fastify.post('/booking/cancel', {
   const session = await getAuthedSession(request, reply);
   if (!session) return;
   const { bookingRef } = request.body;
-  const result = await cancelBooking({ bookingRef, session, isHost: isHost(session), logger: fastify.log });
+  // No isHost bypass: cancelBooking self-authorizes (guest owns it, or host
+  // manages the property) so a host can't cancel another tenant's booking.
+  const result = await cancelBooking({ bookingRef, session, logger: fastify.log });
   if (result.error) return reply.code(result.status || 400).send({ error: result.error });
   return result;
 });

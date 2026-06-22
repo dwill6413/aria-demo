@@ -352,9 +352,10 @@ async function executeTool(toolName, toolInput, session, isHost) {
     // ── Cancel booking in Postgres ────────────────────────────────────────────
     // ── Cancel booking — delegates to the shared cancelBooking() service ──────
     // (R2 + M1) identical logic to REST /booking/cancel, including on-chain escrow
-    // release. Guest cancels their own; a host (isHost) may cancel any.
+    // release. cancelBooking self-authorizes (guest owns it, or host manages the
+    // property), so a host can only cancel bookings for properties they manage.
     if (toolName === 'cancel_booking') {
-      const result = await cancelBooking({ bookingRef: toolInput.bookingRef, session, isHost });
+      const result = await cancelBooking({ bookingRef: toolInput.bookingRef, session });
       return JSON.stringify(result.error ? { error: result.error } : result);
     }
 

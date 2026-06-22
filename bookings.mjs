@@ -123,9 +123,24 @@ export async function releaseDepositForBooking(booking, { logger = console } = {
 // 'held' so the existing sweep releases it once expiry passes, rather than being
 // flipped to 'released' and skipped. Either way the coin is no longer stranded.
 //
-// Auth: a guest may cancel only their own booking; a host (isHost) may cancel any
-// (matches the prior AI-tool behavior / demo super-host model).
-export async function cancelBooking({ bookingRef, session, isHost = false, logger = console }) {
+// Returns true if this host session may act on this booking — a configured
+// superadmin (HOST_ADDRESSES), the address baked into the booking's escrow as
+// host, or a host_address on the booking's property. Mirrors server.mjs
+// canClaimAsHost so host actions can't cross tenants.
+const _HOST_ADDRESSES = (process.env.HOST_ADDRESSES || '').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean);
+export async function hostManagesBooking(session, booking) {
+  if (session?.email && _HOST_ADDRESSES.includes(session.email.toLowerCase())) return true;
+  if (booking?.host_sui_address && session?.suiAddress === booking.host_sui_address) return true;
+  try {
+    const r = await pool.query('SELECT 1 FROM properties WHERE id = $1 AND host_address = $2', [booking?.property_id, session?.suiAddress]);
+    return r.rows.length > 0;
+  } catch { return false; }
+}
+
+// Auth: a guest may cancel only their own booking; a host may cancel only
+// bookings for properties they actually manage — NOT any booking platform-wide.
+// (Previously any approved host could cancel ANY booking: cross-tenant bug.)
+export async function cancelBooking({ bookingRef, session, logger = console }) {
   if (!bookingRef || typeof bookingRef !== 'string' || !bookingRef.startsWith('ARIA-')) {
     return { error: 'A valid bookingRef is required', status: 400 };
   }
@@ -138,7 +153,9 @@ export async function cancelBooking({ bookingRef, session, isHost = false, logge
     return { error: 'Booking lookup failed', status: 500 };
   }
   if (!booking) return { error: 'Booking not found', status: 404 };
-  if (!isHost && booking.wallet_address !== session.suiAddress) {
+  const ownsAsGuest = booking.wallet_address === session.suiAddress;
+  const managesAsHost = ownsAsGuest ? false : await hostManagesBooking(session, booking);
+  if (!ownsAsGuest && !managesAsHost) {
     return { error: 'Not your booking', status: 403 };
   }
   if (booking.payment_status === 'cancelled') return { error: 'Already cancelled', status: 400 };

@@ -146,6 +146,10 @@ export async function initDB() {
   await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS resolved_guest_amount INTEGER`);
   await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS resolved_host_amount INTEGER`);
   await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ`);
+  // Walrus receipt for an AI-path deposit release (ai_route.mjs writes this on
+  // release). Was previously written but never created — a clean DB would throw
+  // "column does not exist" on release. Idempotent for existing deployments.
+  await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS deposit_release_walrus_blob_id TEXT`);
 
   // ── Indexes (Phase 3 / Finding #13) ───────────────────────────────────────
   // bookings.booking_ref already has an implicit unique index from its UNIQUE

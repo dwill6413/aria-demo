@@ -1,8 +1,14 @@
 # ARIA — Product Roadmap & AI Handoff Document
-**Version:** 2.19 | **Updated:** June 22, 2026
+**Version:** 2.20 | **Updated:** June 22, 2026
 **Purpose:** Complete handoff for an AI assistant continuing ARIA development.
 Read this entire document before writing any code.
 
+> **June 22, 2026 (later still):** Fourth external review (Codex) evaluated — see
+> **§5e**. Fixed two new verified issues: **cross-tenant booking cancellation**
+> (any host could cancel any booking — now scoped to managed properties via
+> `hostManagesBooking`) and a **missing `deposit_release_walrus_blob_id` column**
+> (`ai_route.mjs` wrote it but `db.mjs` never created it).
+>
 > **June 22, 2026 (later):** Third external review evaluated — see **§5d**. Fixed
 > in code: **P1-2** (claim-damage confirm now records the on-chain `claim_amount`
 > decoded lag-free, not a client-supplied value) and **logout server-side
@@ -622,6 +628,26 @@ the iCal-amplification §5c row; UpgradeCap burn + Move audit = pre-mainnet gate
 | **DB integrity constraints** | Medium | `payment_status`/`deposit_status` are free-text (add CHECK enums); no foreign keys; no unique index on `reviews(booking_ref)` despite one-review-per-booking in code (add it). Note `tax_remittances(booking_ref)` is already UNIQUE. Pairs with **R8** migrations. |
 | **AI per-user budget + tool audit log** | Medium | `/api/ai/chat` takes a full client `messages` array with no message-count/length cap and only the global (per-IP) rate limit. Add an AI-specific per-session limit, message/length caps, and persist an audit log for booking-mutating tool calls. |
 | **Growth indexes** | Medium | Add `reviews(property_id)`, unique `reviews(booking_ref)`, `tax_remittances(booking_ref)` and dashboard composite indexes; convert `/reviews/:propertyId` average to SQL `AVG()`/`COUNT()`. |
+
+---
+
+## 5e. Fourth External Review (Codex audit, June 22, 2026) — Outcomes
+
+A fourth independent audit was evaluated against live code. Two findings were
+genuinely new and verified; both fixed this session. The rest duplicated items
+already tracked.
+
+**Fixed this session (code, June 22, 2026):**
+
+| Finding | What shipped |
+|---|---|
+| **Cross-tenant booking cancellation (High)** | `cancelBooking()` skipped the ownership check whenever `isHost` was true → any approved host could cancel **any** booking platform-wide. Now `cancelBooking` self-authorizes via new `hostManagesBooking(session, booking)` in `bookings.mjs` (superadmin `HOST_ADDRESSES`, OR the booking's escrow `host_sui_address`, OR a `properties.host_address` match — mirrors `canClaimAsHost`). The unsafe `isHost` param was removed from `cancelBooking` and from both call sites (`/booking/cancel`, AI `cancel_booking`). Demo super-host (in `HOST_ADDRESSES`) is unaffected; regular hosts are now correctly scoped. |
+| **AI release wrote a non-existent column (Medium)** | `ai_route.mjs` wrote `bookings.deposit_release_walrus_blob_id`, but `db.mjs` never created it → a clean DB would throw "column does not exist" on an AI-path deposit release. Added the idempotent `ALTER TABLE … ADD COLUMN IF NOT EXISTS deposit_release_walrus_blob_id TEXT` in `initDB()`. |
+
+**Already tracked (no new action):** host data platform-wide = **R6** + AI host-tool
+scoping (§5d); session model (localStorage/`x-session-id`/`SameSite=None`) = CSRF +
+XSS hardening (§5d); process-local rate-limit/sweeps = **R10**; public `/availability`
+iCal amplification = §5c/§5d iCal item; package-manager/lockfile drift = §5d.
 
 ---
 
