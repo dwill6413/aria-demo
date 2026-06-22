@@ -8,7 +8,11 @@ For the security change log see `ARIA_REMEDIATION.md` and `ARIA_CODE_AUDIT.md`
 For the fee/payment-routing design see **`ARIA_FEE_DESIGN.md`**.
 
 > **June 22, 2026 update summary:**
-> - Fee collection/routing (Phase 1h.5) designed — `ARIA_FEE_DESIGN.md` v2.0.
+> - Fee collection/routing (Phase 1h.5) designed — `ARIA_FEE_DESIGN.md` v2.1
+>   (v2.1 adds §12 production-safety hardening: lag-free PTB-arg verification for
+>   both escrows + destination-authority checks, replay/idempotency, abandoned-
+>   booking sweep, reconciler, host self-release backstop; `refund_deposit`
+>   promoted to a v1 requirement so cancel refunds payment + deposit together).
 >   Non-custodial hold-and-release: a new `BookingPaymentEscrow<T>` holds
 >   rental + ARIA fee + tax, created in the same guest-signed PTB as the deposit
 >   escrow (one signature, two shared objects, atomic). `release_payment` does a

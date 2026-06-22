@@ -1,12 +1,25 @@
 # ARIA — Fee Collection & Payment Routing Design
 
-**Version:** 2.0 (design) | **Created:** June 22, 2026 | **Revised:** June 22, 2026
+**Version:** 2.1 (design) | **Created:** June 22, 2026 | **Revised:** June 22, 2026
 **Status:** Design — not yet implemented. Spec for build Phase 1h.5
 ("Fee collection/routing"), the top remaining build item in `ARIA_ROADMAP.md`.
 **Scope this phase:** SuiUSD on-chain path only. Stripe Connect (fiat) is a
 future phase (§10), not built now — mirrors the P0b precedent of shipping the
 SuiUSD path first.
 
+> **v2.1 change (production hardening):** added §12 "Production-readiness & safety
+> hardening" — the invariants and threat→mitigation analysis that make the build
+> safe for **both host and guest** funds. Promoted **lag-free PTB-argument
+> verification** to a first-class requirement for *both* escrows (§6, §11), so the
+> documented under-funding-under-fullnode-lag gap can never reach mainnet. Added
+> **destination-authority** checks (the backend verifies the on-chain split pays
+> ARIA's real wallets and the booking's real host — not attacker-chosen
+> addresses), **replay/idempotency** protection, **abandoned-booking cleanup**,
+> and a **permissionless release backstop**. Elevated the optional `refund_deposit`
+> to **recommended for v1** (guest gets deposit + payment back together on cancel).
+> Marked the `calculateHostPayout` double-count **done** (fixed in code, commit
+> `5783260`).
+>
 > **v2.0 change:** the original v1.0 draft settled the rental **instantly** at
 > booking, which made the rental portion non-refundable on-chain. v2.0 replaces
 > that with a **hold-and-release** model: rental, fee, and tax are escrowed at
@@ -208,15 +221,44 @@ for the booking path.
 
 ## 6. Backend changes
 
-**Verification at booking** (`verifyBookingPaymentTransaction`, extends the P0b
-pattern). After the guest submits, re-fetch by digest and assert before writing
-`payment_status = 'confirmed'`:
-1. Transaction succeeded; sender == `guestAddr`.
-2. A `BookingPaymentEscrow` was created with `host_amount/aria_amount/tax_amount`
-   == `toUnits(subtotal/ariaFee/taxes)` and the correct `host/aria_addr/tax_addr`.
-3. A `BookingEscrow` (deposit) was created holding `toUnits(depositAmount)`
-   (existing check).
-4. `release_time_ms` matches the booking's check-in.
+**Verification at booking** (`verifyBookingPaymentTransaction`). After the guest
+submits, re-fetch by digest and assert ALL of the following before writing
+`payment_status = 'confirmed'`. This is the security-critical step — a guest
+signs and submits their own tx, so the backend must *never* trust that it matches
+what it built; it must independently prove the on-chain reality.
+
+Primary verification is **lag-free PTB-argument decoding**, not object reads:
+
+1. Transaction **succeeded** and **sender == the session guest's `guestAddr`**
+   (not just "a guest" — the wallet bound to this session).
+2. The tx contains a `create_payment_escrow` call to **our** `ESCROW_PACKAGE_ID`
+   / module, with the expected **type argument** (`PAYMENT_COIN_TYPE`).
+3. **Decode the call's input arguments** (lag-free — they live in the tx inputs,
+   readable immediately regardless of `getObjects`/fullnode indexing lag) and
+   assert each against the booking's server-authoritative values:
+   - `host_amount == toUnits(subtotal)`, `aria_amount == toUnits(ariaFee)`,
+     `tax_amount == toUnits(taxes)`, and their **sum == the funded coin value**.
+   - **Destination authority:** `aria_addr == ARIA_FEE_ADDRESS`,
+     `tax_addr == ARIA_TAX_REMITTANCE_ADDRESS`, and `host == ` the property's
+     authoritative payout address (from `host_profiles`/`catalog`, **not** any
+     value echoed by the client). This blocks a tampered PTB that points the
+     rental or fee leg at an attacker-controlled wallet.
+   - `booking_ref` matches **this** booking, `guest == guestAddr`,
+     `arbitrator == ARIA_ARBITRATOR_ADDRESS`, `release_time_ms ==` the booking's
+     check-in basis (§7).
+4. The same tx also created the **deposit** `BookingEscrow` holding
+   `toUnits(depositAmount)` — verified by decoding the `create_escrow` args the
+   same lag-free way (this also closes the existing `escrow.mjs` "amount NOT
+   re-verified under lag" gap for the deposit path).
+5. **Replay/idempotency:** the digest has not already been recorded for another
+   booking; `settlement_digest` is unique. A given on-chain tx can confirm exactly
+   one booking.
+
+The object-content read (via `getObjects`) is kept only as a *secondary,
+best-effort* cross-check; it is never the sole basis for acceptance, and a lag
+there no longer downgrades verification to "type+sender only." If decoding can't
+satisfy all checks, return **503/`pending`** and let the guest retry — never
+confirm on partial evidence.
 
 **Check-in release cron** (`runCheckInReleaseSweep`, mirrors `runAutoReleaseSweep`).
 Hourly + 30s startup sweep: find bookings where `check_in <= NOW()`,
@@ -240,11 +282,15 @@ against racing the release cron with a status check, the same way
   `released` xor `refunded`) inside the same guard pattern already used for
   deposit release. On-chain, `status == ACTIVE` makes the second call abort
   anyway, but the DB guard avoids even attempting it.
-- **Deposit on cancellation.** v1: the deposit rides its normal lifecycle and
-  `auto_release`s back to the guest at expiry — the guest is made whole, just not
-  instantly for the deposit leg. Optional symmetry: add a `refund_deposit`
-  (arbitrator, pre-check-in) so a cancellation returns deposit + payment in one
-  flow. Recommended as a fast-follow, not required for v1.
+- **Deposit on cancellation (now recommended for v1).** A cancelling guest should
+  get **all** their money back promptly — both the payment escrow and the deposit.
+  Add a `refund_deposit` (arbitrator-gated, pre-check-in) to the v4 upgrade so
+  `/booking/cancel` returns deposit + payment in one flow. Relying on the deposit's
+  `auto_release` at expiry instead would make a cancelling guest wait (potentially
+  weeks) for their own deposit back — poor for guest trust. Since v4 is already
+  being cut for the payment escrow, the marginal cost of `refund_deposit` is small;
+  build it now. (This also subsumes the previously-tracked `cancel_escrow` v4
+  pre-mainnet item.)
 - **Guest trust on refunds.** v1 routes refunds through the arbitrator so DB and
   calendar stay consistent. This means a guest's refund depends on ARIA signing.
   To make it trustless, a later version can also permit the **guest** to call
@@ -265,6 +311,36 @@ against racing the release cron with a status check, the same way
 - **Check-in timestamp basis.** Decide `release_time_ms` = check-in 00:00 in the
   property's timezone, or check-in + 24h grace (closer to Airbnb). Recommend
   +24h; make it explicit so the cron and the on-chain assert agree.
+- **Abandoned `pending` bookings block the calendar.** A booking inserts as
+  `pending` and the date range is reserved (the overlap check excludes only
+  `cancelled`). A guest who never signs would otherwise hold those dates forever.
+  Add a **pending-expiry sweep**: bookings still `pending`/`held` with no verified
+  settlement after a short TTL (e.g. 30 min) are auto-cancelled and their dates
+  freed. Without this, griefers can lock a property's calendar for free.
+- **Stuck funds if the cron is down.** If `release_payment` never fires (cron
+  outage) after check-in, funds sit in the escrow. Mitigation is built in:
+  `release_payment` is **permissionless**, so the **host can call it themselves**
+  to self-serve their payout, and a startup/backstop sweep re-attempts any
+  `held`-past-check-in booking. Surface a "release my payout" affordance in the
+  host UI as the manual backstop.
+- **Host payout address is frozen at booking.** `host` is baked into the escrow at
+  creation, so if a host changes their `payout_sui_address` afterwards, escrows
+  created earlier still pay the old address. This is the correct trust property
+  (the guest agreed to pay *that* address) but must be documented; a host rotating
+  a compromised key should expect in-flight bookings to pay the prior address.
+- **Signing-key gas + liveness.** The auto-release key (release) and arbitrator
+  key (refund) must always hold gas. Add **balance monitoring/alerting**; a
+  gas-starved signer silently stalls payouts/refunds. (Guest still has the
+  permissionless self-release path; refunds do depend on the arbitrator key.)
+- **DB↔chain drift / reconciler.** A `release_payment` can succeed on-chain while
+  the DB write fails (or vice-versa). Run a **reconciler** that compares each
+  booking's `settlement_status` against the on-chain escrow object's `status`
+  (ACTIVE/RELEASED/REFUNDED) and repairs drift — so the source of truth is always
+  the chain, and a crashed mid-flight tx self-heals.
+- **Zero-amount legs.** A no-tax jurisdiction yields `tax_amount == 0`. The
+  contract must allow `tax_amount == 0` / `aria_amount == 0` (skip the transfer
+  for a zero leg) while still asserting `host_amount > 0` and the exact sum — a
+  blanket `> 0` assert on every leg would wrongly reject tax-free bookings.
 
 ---
 
@@ -317,20 +393,101 @@ Larger surface; deferred.
 
 ## 11. Definition of done (Phase 1h.5)
 
-- [ ] `BookingPaymentEscrow` + `create_payment_escrow`/`release_payment`/`refund_payment` in `escrow.move`, with Move tests; shipped in the v4 upgrade (with `seal_approve`).
+- [ ] `BookingPaymentEscrow` + `create_payment_escrow`/`release_payment`/`refund_payment` **+ `refund_deposit`** in `escrow.move`, with Move tests; shipped in the v4 upgrade (with `seal_approve`). Zero-amount legs handled (§7).
 - [ ] `buildBookingPaymentTransaction` (two-escrow PTB) + `verifyBookingPaymentTransaction`; shared `toUnits()`.
-- [ ] `calculateHostPayout` double-count removed (host gets full `subtotal`).
-- [ ] `runCheckInReleaseSweep` cron releases the 3-way split at check-in; `/booking/cancel` refunds before check-in; both race-guarded on `settlement_status`.
+- [x] `calculateHostPayout` double-count removed (host gets full `subtotal`). **DONE — commit `5783260` (June 22, 2026); same fix applied to AI `get_revenue_summary`.**
+- [ ] **Lag-free verification (§6): decode `create_payment_escrow` + `create_escrow` PTB args** to verify amounts, **destination authority** (ARIA fee/tax wallets + authoritative host address), `booking_ref`, guest sender, arbitrator, type arg, and `release_time_ms`. No acceptance on type+sender alone; object reads are secondary only. Applies to the deposit path too (closes the existing `escrow.mjs` lag gap).
+- [ ] **Replay/idempotency:** `settlement_digest` unique; one tx confirms one booking; confirm route idempotent.
+- [ ] `runCheckInReleaseSweep` cron releases the 3-way split at check-in; `/booking/cancel` refunds **payment + deposit** before check-in; both race-guarded on `settlement_status`. Host-triggered self-release path exposed (permissionless backstop).
+- [ ] **Abandoned-booking sweep:** `pending`/`held` bookings past a short TTL auto-cancel and free the calendar (anti-griefing).
+- [ ] **Reconciler:** periodic DB↔chain `settlement_status` vs on-chain `status` repair; chain is source of truth.
 - [ ] `payment_escrow_object_id` / `settlement_status` / `settlement_digest` columns added idempotently.
-- [ ] Frontend: one signature; breakdown shows held→released routing + cancellation policy.
+- [ ] **Signing-key gas monitoring/alerting** for auto-release + arbitrator keys.
+- [ ] Frontend: one signature; **pre-sign confirmation shows exact amounts, each destination, release schedule, and cancellation policy** before the guest signs; held→released routing visible afterwards.
 - [ ] `ARIA_FEE_ADDRESS` + `ARIA_TAX_REMITTANCE_ADDRESS` generated, set in Railway, added to `ARIA_KEY_INVENTORY.md`. No new signing key.
-- [ ] Unit + Move tests: full split at release, refund before check-in, refund-after-release blocked, release-before-check-in blocked, rounding/scaling edges. Full suite green.
-- [ ] Cancellation-policy copy: full refund before check-in, none after.
+- [ ] Unit + Move tests incl. **adversarial matrix (§12):** tampered destination, under-funded leg, sum mismatch, replayed digest, double-confirm, refund-after-release blocked, release-before-check-in blocked, zero-tax leg, abandoned-booking cleanup, cron-down host self-release, rounding/scaling edges. Full suite green.
+- [ ] Cancellation-policy copy: full refund (payment + deposit) before check-in, none after.
 - [ ] `ARIA_ROADMAP.md` / `ARIA_HANDOFF.md` updated; Phase 1h.5 bundled with the v4 upgrade.
 
 ---
 
 *Open items for the build session: (1) confirm `release_time_ms` basis — check-in
 00:00 vs. +24h grace (recommended +24h); (2) confirm the mainnet SuiUSD coin-type
-string for `PAYMENT_COIN_TYPE`; (3) decide whether to add the optional
-`refund_deposit` symmetry in v1 or as a fast-follow.*
+string for `PAYMENT_COIN_TYPE`; (3) confirm the pending-booking TTL (recommended
+30 min).*
+
+---
+
+## 12. Production-readiness & safety hardening
+
+The goal of this section: **neither a host nor a guest can lose funds, and neither
+can cheat the other**, even under a malicious counterparty, a hostile client, or
+infrastructure failure. Everything here is a build requirement, not a nicety.
+
+### 12.1 Invariants (must always hold)
+
+1. **Conservation:** for every booking, the sum of all on-chain transfers equals
+   exactly what the guest signed (`subtotal + ariaFee + taxes + depositAmount ==
+   chargeAmount`). No tokens are created or destroyed by ARIA; ARIA holds no
+   pooled balance.
+2. **Two-sided fairness:** before check-in the guest can get 100% back (payment +
+   deposit); at/after check-in the host is guaranteed the full `subtotal` and can
+   self-claim it permissionlessly. There is no window where the host has delivered
+   (check-in passed) and cannot be paid, nor where the guest has paid and can
+   neither stay nor be refunded.
+3. **No trusted custodian:** ARIA never holds guest or host principal. The only
+   ARIA-held funds are its own collected fee and accrued tax (in receive-only
+   wallets it cannot be tricked into over-collecting, because amounts are asserted
+   on-chain at creation).
+4. **Bounded authority:** the arbitrator key can only ever (a) split a *disputed
+   deposit* between guest and host, or (b) refund a *pre-check-in* payment/deposit
+   to the guest. It can never redirect funds to a third party or touch a
+   post-check-in payment. The auto-release/release key carries zero privilege.
+5. **Booking↔settlement coupling:** a booking is `confirmed` **iff** a verified
+   on-chain settlement exists for it; the chain is the source of truth and the DB
+   is reconciled to it.
+
+### 12.2 Threat → mitigation (host & guest safety)
+
+| # | Threat | Who's at risk | Mitigation |
+|---|---|---|---|
+| T1 | Malicious guest submits a PTB that **redirects the rental/fee leg** to their own wallet, or under-funds a leg, then claims "confirmed" | Host, ARIA | §6 lag-free arg decode + **destination-authority** check; backend confirms only if host/aria/tax addresses and amounts match server-authoritative values |
+| T2 | **Fullnode lag** lets an under-funded escrow pass on "type+sender only" | Host | Verification decodes lag-free tx inputs for amounts; never accepts on type+sender alone; else 503/`pending` |
+| T3 | Guest **confirms once but the booking is created twice**, or replays another booking's tx digest | ARIA, host | `settlement_digest` uniqueness; digest must encode *this* `booking_ref`; idempotent confirm |
+| T4 | Guest **books to grief**, never signs, locking the calendar | Host | Pending-expiry sweep auto-cancels + frees dates after TTL |
+| T5 | Guest cancels but **deposit is stuck** until expiry | Guest | `refund_deposit` in v1 returns payment + deposit together on cancel |
+| T6 | **Cron outage** after check-in — host unpaid | Host | `release_payment` is permissionless: host self-releases from the UI; backstop sweep retries |
+| T7 | ARIA **withholds a legitimate refund** (arbitrator won't sign) | Guest | Documented v1 trust assumption; trustless guest-callable `refund_payment` is the planned follow-up (§7). Until then, refunds are SLA'd + monitored |
+| T8 | **Release/refund race** double-acts on one escrow | Both | On-chain `status == ACTIVE` aborts the second call; DB `settlement_status` guard prevents even attempting it |
+| T9 | **Signing key gas-starved** → payouts/refunds stall silently | Both | Balance monitoring + alerting; host self-release path independent of ARIA gas |
+| T10 | **DB says released, chain didn't** (or vice-versa) | Both | Reconciler repairs drift against on-chain `status`; chain wins |
+| T11 | Guest signs **without understanding** what leaves their wallet | Guest | Pre-sign confirmation itemizes every amount + destination + the cancellation policy before signing |
+| T12 | Host **rotates payout key**, expects in-flight bookings to follow | Host | Documented: `host` is frozen at booking; rotate forward-only, expect prior escrows to pay the old address |
+| T13 | **Tax-free jurisdiction** (`tax_amount == 0`) wrongly rejected | Guest/host | Contract permits zero legs (skip transfer) while asserting exact sum |
+| T14 | **Wrong coin type** (e.g. a worthless token) passed as `Coin<T>` | Host, ARIA | Verify the tx **type argument** == `PAYMENT_COIN_TYPE`; reject otherwise |
+
+### 12.3 Operational backstops
+
+- **Reconciler** (periodic): DB `settlement_status` ⇔ on-chain `status`; self-heal.
+- **Pending-expiry sweep:** free calendars held by unpaid bookings.
+- **Backstop release sweep** + **host self-release UI** for cron outages.
+- **Key gas alarms** for the auto-release and arbitrator keys.
+- **Refund SLA + alerting** while refunds remain arbitrator-gated.
+- **Event indexing:** index `PaymentEscrowCreated/Released/Refunded` for audit and
+  reconciliation; never rely on client-reported state.
+
+### 12.4 Test matrix (gate for "done")
+
+- **Move (`#[expected_failure]` where noted):** create asserts sum==coin; release
+  before `release_time` *fails*; refund after release *fails*; refund by
+  non-arbitrator *fails*; double-release/refund *fails* (object consumed);
+  zero-tax leg succeeds; full 3-way split lands exact amounts.
+- **Backend unit:** decode-and-verify accepts the canonical tx; rejects tampered
+  destination (T1), under-funded leg (T2), wrong coin type (T14), replayed digest
+  (T3), double-confirm (T3); release/refund race guard (T8).
+- **Integration (end-to-end):** book → pay → verify → check-in release (host paid,
+  ARIA fee + tax routed); book → cancel → payment+deposit refunded; abandoned
+  booking → swept + dates freed; cron-down → host self-release; reconciler repairs
+  an injected DB↔chain drift.
+- **Frontend:** pre-sign confirmation renders exact amounts/destinations/policy;
+  abandoned signing leaves no `confirmed` booking.

@@ -444,7 +444,7 @@ original package ID (`0x538262...7fdbe`); no separate contract deployment.
 ✅ Phase 1g2: P1b — Deployer/backend-signer separation (done June 17, 2026)
 ✅ Phase 1h: P2 — Auto-release cron job (done June 17, 2026)
 ⬜ Phase 1h.5: Fee collection/routing mechanism — DESIGN COMPLETE June 22, 2026
-   (ARIA_FEE_DESIGN.md v2.0); build pending. Hold-and-release: BookingPaymentEscrow
+   (ARIA_FEE_DESIGN.md v2.1); build pending. Hold-and-release: BookingPaymentEscrow
    holds rental+fee+tax, 3-way split released at check-in, full refund to guest
    before check-in. SuiUSD-only; needs the v4 contract upgrade (bundled w/ 2a).
 ✅ Phase 1i: P2 — Production host address lookup (done June 17, 2026)
@@ -463,7 +463,7 @@ original package ID (`0x538262...7fdbe`); no separate contract deployment.
    updated to v3 and redeployed clean. NOTE: this consumed the "v3" upgrade slot —
    Phase 2a's seal_approve will be the NEXT upgrade (package v4).
 ⬜ Phase 1h.5: Fee collection/routing — TOP remaining build item. DESIGN COMPLETE
-   (ARIA_FEE_DESIGN.md v2.0). Its BookingPaymentEscrow + release_payment/
+   (ARIA_FEE_DESIGN.md v2.1). Its BookingPaymentEscrow + release_payment/
    refund_payment contract functions ship in the SAME v4 upgrade as 2a's
    seal_approve — coordinate the two so there is one v4 publish, not two.
 ⬜ Phase 2a: Add seal_approve() AND BookingPaymentEscrow/release_payment/
@@ -526,7 +526,7 @@ evaluated and acted on. Scorecard/rationale: see the evaluation response.
 
 | Rec | Why deferred / what's needed |
 |---|---|
-| **`cancel_escrow` contract fn (v4)** | Proper instant pre-expiry refund on cancel. The current fix avoids stranding but a pre-check-in cancel's deposit isn't released on-chain until the sweep at expiry. Needs a Move upgrade (the next package version after v3). **Fold into the same v4 upgrade as Phase 1h.5 / 2a** — `ARIA_FEE_DESIGN.md` §7 calls this the optional `refund_deposit` symmetry (arbitrator-signed, pre-check-in) so a cancellation refunds deposit + payment in one flow. |
+| **`cancel_escrow` / `refund_deposit` contract fn (v4)** | Proper instant pre-expiry refund on cancel. **Now promoted to a v1 requirement of Phase 1h.5** (`ARIA_FEE_DESIGN.md` v2.1 §7/§11): `refund_deposit` (arbitrator-signed, pre-check-in) ships in the same v4 upgrade so `/booking/cancel` returns deposit + payment together instead of making a cancelling guest wait for `auto_release` at expiry. No longer a deferred fast-follow. |
 | **R6** — scope `/bookings/all` to host's properties | Multi-tenant isolation; only matters once host-owned listings ship. |
 | **M3** — per-user zkLogin salt (+ migration) | salt `'0'` lets anyone derive a user's Sui address from their Google `sub`. Re-derives addresses → migration required. |
 | **M4** — DB TLS CA cert | `rejectUnauthorized:false` is a MITM risk; supply the Railway CA cert. |
