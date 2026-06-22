@@ -1,5 +1,5 @@
 // escrow.test.mjs
-// Unit tests for extractCreatedObjectId — no network, no Sui SDK needed.
+// Unit tests for extractCreatedObjectId and friends — no network needed.
 // Run with: node escrow.test.mjs
 
 // ─── Function under test ───────────────────────────────────────────────────
@@ -11,8 +11,10 @@
 import {
   extractCreatedObjectId, verifyEscrowTransaction, suiClient,
   isObjectMutated, verifyClaimDamageTransaction, verifyDisputeClaimTransaction,
-  depositToMist, BookingEscrowBcs
+  depositToMist, BookingEscrowBcs, decodeCreateEscrowArgs
 } from './escrow.mjs';
+import { bcs } from '@mysten/sui/bcs';
+import { toBase64 } from '@mysten/sui/utils';
 
 // ── Helpers for the hardened verifyEscrowTransaction (Finding #1) ───────────
 // Realistic 32-byte addresses so normalizeAddr comparisons behave like prod.
@@ -458,6 +460,57 @@ await test('failed dispute_claim transaction ($kind: FailedTransaction) — retu
   const result = await verifyDisputeClaimTransaction('0xdigest', '0xguest', 'escrow-id');
   assertEqual(result.ok, false, 'expected ok:false');
   assertEqual(result.reason, 'ENotGuest');
+});
+
+// ─── decodeCreateEscrowArgs (lag-free PTB-arg verification, ARIA_FEE_DESIGN §13) ──
+// Builds the parsed-transaction shape (SerializedTransactionDataV2) the gRPC
+// getTransaction response carries under `Transaction.transaction`, so the decoder
+// can be exercised with no network. create_escrow's Coin arg is a NestedResult of
+// a SplitCoins whose amount is a pure u64 input — that's how the funded deposit is
+// recovered lag-free.
+const _DGUEST = '0x' + '2'.repeat(64);
+const _DHOST  = '0x' + '3'.repeat(64);
+const _DARB   = '0x' + '4'.repeat(64);
+const _pure = (ser) => ({ Pure: { bytes: toBase64(ser.toBytes()) } });
+function createEscrowTxData({ ref = 'ARIA-2-x', guest = _DGUEST, host = _DHOST, amount = 661000 } = {}) {
+  return {
+    inputs: [
+      _pure(bcs.string().serialize(ref)),          // 0 booking_ref
+      _pure(bcs.Address.serialize(guest)),         // 1 guest
+      _pure(bcs.Address.serialize(host)),          // 2 host
+      _pure(bcs.Address.serialize(_DARB)),         // 3 arbitrator
+      _pure(bcs.u64().serialize(1n)),              // 4 expiry_ms
+      _pure(bcs.u64().serialize(BigInt(amount))),  // 5 split amount (deposit)
+    ],
+    commands: [
+      { SplitCoins: { coin: { GasCoin: true }, amounts: [{ Input: 5 }] } },
+      { MoveCall: { module: 'escrow', function: 'create_escrow', typeArguments: ['0x2::sui::SUI'],
+        arguments: [{ Input: 0 }, { Input: 1 }, { Input: 2 }, { Input: 3 }, { Input: 4 }, { NestedResult: [0, 0] }, { Input: 6 }] } },
+    ],
+  };
+}
+
+await test('decodeCreateEscrowArgs: decodes ref/guest/host/amount/type lag-free', () => {
+  const d = decodeCreateEscrowArgs(createEscrowTxData(), 'escrow');
+  assertEqual(d.bookingRef, 'ARIA-2-x');
+  assertEqual(d.guest, _DGUEST);
+  assertEqual(d.host, _DHOST);
+  assertEqual(d.amountMist, '661000');
+  assertEqual(d.typeArg, '0x2::sui::SUI');
+});
+
+await test('decodeCreateEscrowArgs: surfaces an under-funded deposit amount', () => {
+  const d = decodeCreateEscrowArgs(createEscrowTxData({ amount: 1 }), 'escrow');
+  assertEqual(d.amountMist, '1'); // verifier compares this to depositToMist(expected)
+});
+
+await test('decodeCreateEscrowArgs: wrong module name — returns null', () => {
+  assertEqual(decodeCreateEscrowArgs(createEscrowTxData(), 'nope'), null);
+});
+
+await test('decodeCreateEscrowArgs: malformed transaction — returns null (no throw)', () => {
+  assertEqual(decodeCreateEscrowArgs({}, 'escrow'), null);
+  assertEqual(decodeCreateEscrowArgs(null, 'escrow'), null);
 });
 
 // ─── Summary ──────────────────────────────────────────────────────────────────

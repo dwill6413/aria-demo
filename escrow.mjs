@@ -17,7 +17,7 @@ import { SuiGrpcClient } from '@mysten/sui/grpc';
 import { Transaction, coinWithBalance } from '@mysten/sui/transactions';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
-import { toBase64 } from '@mysten/sui/utils';
+import { toBase64, fromBase64 } from '@mysten/sui/utils';
 import { bcs } from '@mysten/sui/bcs';
 
 export const suiClient = new SuiGrpcClient({
@@ -254,6 +254,63 @@ export async function buildEscrowTransaction(bookingRef, guestAddr, hostAddr, de
   }
 }
 
+// ── Lag-free PTB-argument decoding ──────────────────────────────────────────
+// The strict object-content check below depends on getObjects, which on public
+// testnet fullnodes can fail to serve a just-created object for >1 min. These
+// helpers instead decode create_escrow's arguments straight from the parsed
+// transaction (`txn.transaction.{inputs,commands}`, present in the SAME
+// getTransaction response, so lag-free) — closing the under-funding gap where a
+// guest could report a digest for a near-zero / wrong-host escrow during lag.
+//
+// Validated against @mysten/sui: pure u64/address/string inputs round-trip via
+// BCS, and create_escrow's Coin arg is a NestedResult of a SplitCoins whose
+// amount is itself a pure u64 input — so the funded deposit is recoverable
+// without reading the object. See ARIA_FEE_DESIGN.md §13.
+const _pureBytes = (inp) => fromBase64(inp.Pure.bytes);
+const _asU64  = (inp) => bcs.u64().parse(_pureBytes(inp));      // -> decimal string
+const _asAddr = (inp) => bcs.Address.parse(_pureBytes(inp));   // -> 0x… (64 hex)
+const _asStr  = (inp) => bcs.string().parse(_pureBytes(inp));
+
+// Decode create_escrow's args from a parsed transaction. Returns null if the
+// shape isn't what we expect (caller then falls back to retryable, never to a
+// blind accept). Maps args to inputs BY INDEX — never guesses by byte length.
+export function decodeCreateEscrowArgs(transaction, moduleName) {
+  try {
+    const inputs = transaction?.inputs;
+    const commands = transaction?.commands;
+    if (!Array.isArray(inputs) || !Array.isArray(commands)) return null;
+
+    const call = commands.find(
+      (c) => c?.MoveCall && c.MoveCall.module === moduleName && c.MoveCall.function === 'create_escrow',
+    )?.MoveCall;
+    if (!call || !Array.isArray(call.arguments)) return null;
+
+    const inputOf = (arg) => (arg && arg.Input != null ? inputs[arg.Input] : arg);
+    // create_escrow(booking_ref, guest, host, arbitrator, expiry_ms, coin, clock)
+    const [refA, guestA, hostA, , , coinA] = call.arguments;
+
+    // Deposit amount = the SplitCoins amount whose result feeds the coin arg.
+    let amountMist = null;
+    const splitIdx = coinA?.Result ?? (coinA?.NestedResult ? coinA.NestedResult[0] : null);
+    if (splitIdx != null) {
+      const sc = commands[splitIdx]?.SplitCoins;
+      if (sc && Array.isArray(sc.amounts) && sc.amounts[0]) {
+        amountMist = _asU64(inputOf(sc.amounts[0]));
+      }
+    }
+
+    return {
+      bookingRef: refA?.Input != null ? _asStr(inputs[refA.Input]) : null,
+      guest:      guestA?.Input != null ? _asAddr(inputs[guestA.Input]) : null,
+      host:       hostA?.Input != null ? _asAddr(inputs[hostA.Input]) : null,
+      amountMist,
+      typeArg:    call.typeArguments?.[0] ?? null,
+    };
+  } catch {
+    return null; // unexpected shape → caller treats as not-yet-verifiable
+  }
+}
+
 // Re-queries Sui directly for a transaction digest the guest reported after
 // signing+submitting their escrow tx client-side, and extracts the resulting
 // escrow object id from the CHAIN's own effects — never trusts a value the
@@ -353,16 +410,36 @@ export async function verifyEscrowTransaction(digest, expected = {}, readOptions
     return { ok: true, escrowId, sender: actualSender, amountVerified: true };
   }
 
-  // Object content unreadable (getObjects lag). If the tx effects already
-  // confirmed the created object is our BookingEscrow type, accept on that +
-  // the verified guest sender. The strict amount/host/ref check is skipped this
-  // time only (logged). NOTE for mainnet: this leaves an under-funding gap when
-  // getObjects lags — the durable fix is to decode the create_escrow arguments
-  // (host, booking_ref, amount) from the transaction inputs, which are also
-  // lag-free; tracked as a pre-mainnet item.
+  // Object content unreadable (getObjects lag). Instead of the old weak
+  // "accept on type+sender only" path, do the STRICT amount/host/ref check
+  // lag-free by decoding create_escrow's own arguments from the transaction
+  // (present in this same response, independent of getObjects). This closes the
+  // under-funding gap: a guest who reports a digest for a near-zero-deposit or
+  // wrong-host escrow is rejected even while the object read is lagging.
   if (typeConfirmed) {
-    console.warn('verifyEscrowTransaction: object content unreadable; accepted on lag-free type+sender (amount NOT re-verified)', { escrowId, reason: onChain?.error });
-    return { ok: true, escrowId, sender: actualSender, amountVerified: false };
+    const decoded = decodeCreateEscrowArgs(txn?.transaction, mod);
+    if (decoded && decoded.amountMist != null) {
+      if (expectedHost && decoded.host && normalizeAddr(decoded.host) !== normalizeAddr(expectedHost)) {
+        return { ok: false, reason: 'Escrow host does not match the booking host (decoded)' };
+      }
+      if (expectedRef && decoded.bookingRef && decoded.bookingRef !== expectedRef) {
+        return { ok: false, reason: 'Escrow booking_ref does not match this booking (decoded)' };
+      }
+      if (expectedSender && decoded.guest && normalizeAddr(decoded.guest) !== normalizeAddr(expectedSender)) {
+        return { ok: false, reason: 'Escrow guest does not match the booking guest (decoded)' };
+      }
+      if (depositAmount != null) {
+        const expectedMist = depositToMist(depositAmount).toString();
+        if (String(decoded.amountMist) !== expectedMist) {
+          return { ok: false, reason: 'Escrow is not funded with the expected deposit amount (decoded)' };
+        }
+      }
+      console.warn('verifyEscrowTransaction: object content unreadable; verified lag-free from decoded create_escrow args', { escrowId });
+      return { ok: true, escrowId, sender: actualSender, amountVerified: true, verifiedVia: 'decoded-inputs' };
+    }
+    // Decode failed (unexpected tx shape) — do NOT fall back to a blind accept.
+    console.warn('verifyEscrowTransaction: object content unreadable AND create_escrow args undecodable — retryable', { escrowId, reason: onChain?.error });
+    return { ok: false, retryable: true, escrowId, reason: 'Escrow not yet verifiable on-chain — please retry in a moment.' };
   }
 
   // Neither object content NOR tx-effects type available — genuinely cannot

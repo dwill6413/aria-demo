@@ -491,3 +491,85 @@ infrastructure failure. Everything here is a build requirement, not a nicety.
   an injected DB↔chain drift.
 - **Frontend:** pre-sign confirmation renders exact amounts/destinations/policy;
   abandoned signing leaves no `confirmed` booking.
+
+---
+
+## 13. Verification spike — lag-free decode PROVEN (June 22, 2026)
+
+A feasibility spike against `@mysten/sui` confirmed the §6 lag-free verification
+approach works, and **resolved the open wrinkle** about the deposit escrow.
+
+**What was proven:**
+
+1. **Pure inputs round-trip cleanly.** `tx.pure` u64 / address / string values
+   decode back exactly via `bcs.u64() / bcs.Address / bcs.string()` from the
+   transaction's own inputs — no `getObjects`, no fullnode object read, so they
+   are immune to indexing lag.
+2. **The deposit amount IS recoverable lag-free** — this is the wrinkle resolved.
+   Even though `create_escrow` takes a `Coin<T>` (no explicit amount argument),
+   the coin is produced by a `SplitCoins` command whose **amount is itself a Pure
+   u64 input**. The spike read it back as `input[0] = 95`. So the deposit's funded
+   amount can be verified from the PTB without reading the created object.
+3. **The new `create_payment_escrow` explicit amounts decode directly** — the
+   `host_amount / aria_amount / tax_amount` u64 args appeared as Pure inputs and
+   decoded to `[80, 3, 12]`; addresses (32 bytes) and the `booking_ref` string
+   (length-prefixed) decode too.
+
+**The one rule the implementation must follow:** map a MoveCall's arguments to
+inputs **by index** (`arg.Input` → `data.inputs[i]`), and find the deposit amount
+by following the `SplitCoins` result that feeds the escrow's coin argument. Do
+**not** identify values by byte length (two different u64s are both 8 bytes; an
+address and some hashes are both 32) — that is fragile. Always verify against the
+**fetched, resolved** transaction (what's on-chain), parsed via
+`Transaction.from(txBytes)`, since a fetched tx is always in resolved form.
+
+**Reference decoder (validated shape):**
+
+```js
+import { Transaction } from '@mysten/sui/transactions';
+import { bcs } from '@mysten/sui/bcs';
+import { fromBase64 } from '@mysten/sui/utils';
+
+const asU64  = (inp) => bcs.u64().parse(fromBase64(inp.Pure.bytes));      // -> string
+const asAddr = (inp) => bcs.Address.parse(fromBase64(inp.Pure.bytes));    // -> 0x..
+const asStr  = (inp) => bcs.string().parse(fromBase64(inp.Pure.bytes));   // -> string
+
+// Pull a named MoveCall and a positional arg→input resolver out of a fetched tx.
+function decodeCall(txBytes, fn, moduleName = 'escrow') {
+  const data = Transaction.from(txBytes).getData();          // { inputs[], commands[] }
+  const idx  = data.commands.findIndex(
+    (c) => c.MoveCall && c.MoveCall.module === moduleName && c.MoveCall.function === fn,
+  );
+  if (idx < 0) return null;
+  const call = data.commands[idx].MoveCall;
+  const inputOf = (argPos) => {                              // resolve an arg to its input
+    const a = call.arguments[argPos];
+    return a.Input != null ? data.inputs[a.Input] : a;       // Pure/Object input, or Result
+  };
+  return { call, inputOf, data };
+}
+
+// Deposit amount = the SplitCoins amount whose Result feeds create_escrow's coin arg.
+function depositAmountFromSplit({ call, data }) {
+  const coinArg = call.arguments.find((a) => a.Result != null || a.NestedResult != null);
+  const splitIdx = coinArg.Result ?? coinArg.NestedResult[0];
+  const split = data.commands[splitIdx];                     // { SplitCoins: { coin, amounts:[Input] } }
+  return asU64(data.inputs[split.SplitCoins.amounts[0].Input]);
+}
+```
+
+`verifyBookingPaymentTransaction` then asserts, all from the decoded values:
+`host_amount/aria_amount/tax_amount == toUnits(subtotal/ariaFee/taxes)`, their
+sum == the split coin amount, `aria_addr == ARIA_FEE_ADDRESS`,
+`tax_addr == ARIA_TAX_REMITTANCE_ADDRESS`, `host ==` authoritative payout addr,
+`booking_ref ==` this booking, `guest ==` session guest, plus the type argument
+== `PAYMENT_COIN_TYPE`. The same `decodeCall` + `depositAmountFromSplit` hardens
+the existing deposit `verifyEscrowTransaction` independently (no v4 needed) — this
+is the recommended **first** build step, since it closes the current
+under-funding-under-lag gap and proves the exact pattern the payment escrow reuses.
+
+> Spike caveat: run against a real fetched testnet `create_escrow` digest during
+> the build to confirm the gRPC/`getTransaction` response exposes `rawTransaction`
+> bytes for `Transaction.from()` (use `showRawInput`/equivalent), and that
+> `coinWithBalance` for a non-SUI coin (SuiUSD) still resolves to a `SplitCoins`
+> with a Pure amount (it does for gas-funded SUI; confirm for merged owned coins).
