@@ -378,13 +378,16 @@ async function executeTool(toolName, toolInput, session, isHost) {
         totalGross += Number(b.total_amount) || 0;
         totalFees  += fee;
         totalTaxes += tax;
-        totalNet   += subtotal - fee;
+        // Host net = full subtotal. The ARIA fee is a guest-side add-on, not a
+        // host deduction (see calculateHostPayout / ARIA_FEE_DESIGN.md). The fee
+        // is still surfaced separately as totalFees.
+        totalNet   += subtotal;
         if (b.deposit_status === 'held') totalDeposits += Number(b.deposit_amount) || 0;
         const prop = b.property_title || 'Unknown';
         if (!byProperty[prop]) byProperty[prop] = { bookings: 0, gross: 0, net: 0, jurisdiction: jur.name, taxRate: `${(jur.rate * 100).toFixed(2)}%` };
         byProperty[prop].bookings++;
         byProperty[prop].gross += Number(b.total_amount) || 0;
-        byProperty[prop].net   += subtotal - fee;
+        byProperty[prop].net   += subtotal;
       });
       return JSON.stringify({ totalBookings: bookings.length, totalGross, totalFees, totalTaxes, totalNet, totalDepositsHeld: totalDeposits, byProperty });
     }

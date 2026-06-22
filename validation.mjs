@@ -38,7 +38,10 @@ export const hostApplySchema = z.object({
   country: z.string().optional().nullable(),
   jurisdiction: z.string().optional().nullable(),
   strPermit: z.string().optional().nullable(),
-  payoutSuiAddress: z.string().optional().nullable(),
+  // Enforce the Sui address format server-side (0x + 64 hex) when provided —
+  // previously accepted any string. Still optional/nullable so applicants who
+  // haven't set a payout wallet yet aren't blocked.
+  payoutSuiAddress: z.string().regex(/^0x[0-9a-fA-F]{64}$/, 'payoutSuiAddress must be a 0x-prefixed 64-character hex Sui address').optional().nullable(),
   payoutNotes: z.string().optional().nullable(),
   termsAgreed: z.boolean(),
   complianceConfirmed: z.boolean()

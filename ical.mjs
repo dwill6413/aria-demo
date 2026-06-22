@@ -58,7 +58,11 @@ export async function generateICal(propertyId, propertyTitle) {
 
   try {
     const result = await pool.query(
-      `SELECT booking_ref, check_in, check_out, guest_name
+      // No guest PII selected: the exported .ics is served unauthenticated from
+      // GET /ical/:propertyId, so it intentionally exposes only the booking ref
+      // and occupied date range — never guest_name/email. (guest_name was
+      // previously selected but unused; removed to make that guarantee explicit.)
+      `SELECT booking_ref, check_in, check_out
        FROM bookings
        WHERE property_id = $1 AND payment_status != 'cancelled'
        ORDER BY check_in ASC`,
