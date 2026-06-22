@@ -275,21 +275,59 @@ await test('created object unreadable (RPC/indexing lag) — returns retryable, 
   assertEqual(result.escrowId, 'real-escrow-id');
 });
 
-await test('object content unreadable BUT tx-effects type confirms BookingEscrow — accepts on lag-free type+sender (finding #1 durable fix)', async () => {
+await test('object content unreadable BUT create_escrow args decodable — verifies amount/host/ref/guest lag-free (finding #1 durable fix)', async () => {
+  // Durable fix: under getObjects lag we no longer accept on type+sender alone.
+  // Instead we decode create_escrow's own args from the tx (lag-free) and run the
+  // FULL strict check — so an under-funded/wrong-host escrow is still rejected.
+  const pure = (ser) => ({ Pure: { bytes: toBase64(ser.toBytes()) } });
   suiClient.core.getTransaction = async () => ({
     $kind: 'Transaction',
     Transaction: {
       status: { success: true, error: null },
-      transaction: { sender: GUEST },
+      transaction: {
+        sender: GUEST,
+        inputs: [
+          pure(bcs.string().serialize('ARIA-2-x')),     // 0 booking_ref
+          pure(bcs.Address.serialize(GUEST)),           // 1 guest
+          pure(bcs.Address.serialize(HOST)),            // 2 host
+          pure(bcs.Address.serialize(ARB)),             // 3 arbitrator
+          pure(bcs.u64().serialize(1n)),                // 4 expiry_ms
+          pure(bcs.u64().serialize(661000n)),           // 5 split amount = depositToMist(661)
+        ],
+        commands: [
+          { SplitCoins: { coin: { GasCoin: true }, amounts: [{ Input: 5 }] } },
+          { MoveCall: { module: 'escrow', function: 'create_escrow', typeArguments: ['0x2::sui::SUI'],
+            arguments: [{ Input: 0 }, { Input: 1 }, { Input: 2 }, { Input: 3 }, { Input: 4 }, { NestedResult: [0, 0] }, { Input: 6 }] } },
+        ],
+      },
+      effects: { changedObjects: [{ objectId: 'real-escrow-id', idOperation: 'Created' }] },
+      objectTypes: { 'real-escrow-id': '0xpkg::escrow::BookingEscrow<0x2::sui::SUI>' },
+    },
+  });
+  suiClient.core.getObjects = async () => ({ objects: [new Error('not found')] });
+  const result = await verifyEscrowTransaction('0xdigest', { sender: GUEST, host: HOST, bookingRef: 'ARIA-2-x', depositAmount: 661 }, { attempts: 1, delayMs: 0 });
+  assertEqual(result.ok, true, 'expected ok:true (verified lag-free from decoded args)');
+  assertEqual(result.amountVerified, true, 'amount IS re-verified lag-free via decoded args');
+  assertEqual(result.verifiedVia, 'decoded-inputs');
+  assertEqual(result.escrowId, 'real-escrow-id');
+});
+
+await test('object content unreadable AND create_escrow args undecodable — retryable, never a blind accept (finding #1)', async () => {
+  // Type-confirmed, but the tx carries no decodable create_escrow args (e.g. an
+  // unexpected shape). Must NOT fall back to accepting on type+sender — retryable.
+  suiClient.core.getTransaction = async () => ({
+    $kind: 'Transaction',
+    Transaction: {
+      status: { success: true, error: null },
+      transaction: { sender: GUEST }, // no inputs/commands to decode
       effects: { changedObjects: [{ objectId: 'real-escrow-id', idOperation: 'Created' }] },
       objectTypes: { 'real-escrow-id': '0xpkg::escrow::BookingEscrow<0x2::sui::SUI>' },
     },
   });
   suiClient.core.getObjects = async () => ({ objects: [new Error('not found')] });
   const result = await verifyEscrowTransaction('0xdigest', { sender: GUEST, depositAmount: 661 }, { attempts: 1, delayMs: 0 });
-  assertEqual(result.ok, true, 'expected ok:true (type+sender gate, content lagged)');
-  assertEqual(result.amountVerified, false, 'amount not re-verified under read lag');
-  assertEqual(result.escrowId, 'real-escrow-id');
+  assertEqual(result.ok, false, 'undecodable args under content lag must NOT be accepted');
+  assertEqual(result.retryable, true, 'expected retryable:true');
 });
 
 await test('tx-effects shows no BookingEscrow type AND content unreadable — NOT accepted (retryable, safe)', async () => {
