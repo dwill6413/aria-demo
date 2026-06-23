@@ -1,8 +1,16 @@
 [phases.setup]
 nixPkgs = ["nodejs_22"]
 
+# Use pnpm (matches pnpm-lock.yaml) via corepack — far faster than `npm install`,
+# which was doing a full fresh resolution of the large Sui/Seal dependency tree
+# every deploy and timing out Railway's build heartbeat. --frozen-lockfile
+# installs exactly what the committed lockfile pins.
 [phases.install]
-cmds = ["npm install"]
+cmds = [
+  "corepack enable",
+  "corepack prepare pnpm@11.1.2 --activate",
+  "pnpm install --frozen-lockfile",
+]
 
 [start]
 cmd = "node server.mjs"

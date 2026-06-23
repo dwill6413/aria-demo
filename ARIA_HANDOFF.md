@@ -15,8 +15,11 @@
 > seal_approve CALL uses the current/v4 id), `pages/profile.jsx` (guest encrypt →
 > Walrus), host "View Guest Identity" modal in `pages/host.jsx`, and
 > `signPersonalMessageWithZkLogin` in `lib/zklogin.js` for Seal's SessionKey.
-> NEEDS `@mysten/seal` installed, the v4 publish + `NEXT_PUBLIC_ESCROW_PACKAGE_ID`,
-> and an in-browser smoke test (zkLogin↔SessionKey signing is untested).
+> **SMOKE-TESTED END-TO-END June 23, 2026 (PASS):** `@mysten/seal` installed
+> (Sui bumped 2.16→2.19 for its peer), v4 published (`0xf68a874f…`),
+> `NEXT_PUBLIC_ESCROW_PACKAGE_ID` set, and the full guest-encrypt → host-decrypt
+> round-trip verified in-browser (zkLogin SessionKey signing works). See Sui
+> Integration Lessons §13 for the Seal package-id pattern that this surfaced.
 >
 > **June 23, 2026 (Phase 1h.5 — payment escrow backend + contract BUILT):**
 > Fee collection / payment routing landed on the backend and contract — full
@@ -863,6 +866,33 @@ ARIA shipped escrow-verification bugs past **41 green unit tests** that only liv
 testnet caught. When integrating a new SDK call, add a **temporary diagnostic log
 of the real response shape**, deploy, exercise it once, read the log, then remove
 the diagnostic. (That is exactly how the `objectTypes` shape in §2 was confirmed.)
+
+### 12. Decoding a coin amount from a CONSOLIDATED SplitCoins
+`coinWithBalance` used twice in one PTB (ARIA's combined payment+deposit booking)
+does NOT emit two separate `SplitCoins` — the SDK consolidates them into ONE
+`SplitCoins` with an `amounts` array `[a, b]`, and each consuming call references
+a different **result index** (`NestedResult[splitCmd, 0]`, `[splitCmd, 1]`). When
+decoding an amount lag-free from tx inputs, index `amounts[]` by the coin arg's
+result index — NOT `amounts[0]` unconditionally. Reading `[0]` made the deposit
+decoder return the *payment* amount and reject the first live combined booking.
+(See `decodeCreateEscrowArgs` in `escrow.mjs`; regression-tested in `escrow.test.mjs`.)
+
+### 13. Seal + package upgrades: original id for encrypt, current id for the call
+**Live-confirmed June 23, 2026.** When `seal_approve` is added in a package
+UPGRADE (not the first publish), the ids must be split:
+- **encrypt** and **`SessionKey.create`** require the **original / first-published**
+  package id (`0x538262…`). Passing an upgraded id (v4) throws
+  **"Package ID used in PTB is invalid"** — Seal only accepts a first-version id.
+- the **`seal_approve` move-call target** must be the **current/upgraded** id
+  (v4 `0xf68a874f…`, where the function actually exists), or `tx.build` fails
+  **"unable to find function …::escrow::seal_approve"**.
+Seal reconciles the two by resolving the call's package to its first version. In
+`lib/seal.js`: `SEAL_PACKAGE_ID` (original) for encrypt + SessionKey,
+`CURRENT_PACKAGE_ID` (v4, from `NEXT_PUBLIC_ESCROW_PACKAGE_ID`) for the call.
+Also: `seal_approve` gates on `sender == escrow.host`, so the host's wallet must
+BE the escrow's host — set `DEMO_HOST_ADDRESS` to that wallet BEFORE the booking
+is created (existing escrows keep the old host immutably), or the key servers
+return **"User does not have access to one or more of the requested keys."**
 
 ---
 

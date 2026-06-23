@@ -3,6 +3,18 @@
 **Purpose:** Complete handoff for an AI assistant continuing ARIA development.
 Read this entire document before writing any code.
 
+> **June 23, 2026 (LATE — Phases 1h.5 + 2 SMOKE-TESTED LIVE, PASS):** v4 contract
+> published (`0xf68a874f…`, fee fns + `seal_approve`); env wired (Railway
+> `ESCROW_PACKAGE_ID`/`ARIA_FEE_ADDRESS`/`ARIA_TAX_REMITTANCE_ADDRESS`/
+> `DEMO_HOST_ADDRESS`, Vercel `NEXT_PUBLIC_ESCROW_PACKAGE_ID`). A real booking
+> signed the two-escrow PTB and confirmed; the Seal guest-PII encrypt→host-decrypt
+> round-trip worked in-browser. Suites green (63 JS / 43 Move). Three live bugs
+> fixed: consolidated-SplitCoins deposit decode, Seal package-id hybrid
+> (encrypt/SessionKey = original id, `seal_approve` call = v4), missing
+> `DEMO_HOST_ADDRESS` (see HANDOFF Sui Integration Lessons §12–13). Railway build
+> switched npm→pnpm (was timing out). Still open: flip `REQUIRE_GUEST_VERIFICATION`,
+> abandoned-booking sweep, reconciler, gas monitoring, mainnet Seal key server.
+>
 > **June 23, 2026 (Phase 2 — Seal/Walrus guest PII BUILT):** The full guest-PII
 > system landed (see Phase 2 build order). `seal_approve` added to `escrow.move`
 > (+3 Move tests) — gates PII decrypt on `sender == escrow.host` and the identity

@@ -393,12 +393,17 @@ Larger surface; deferred.
 
 ## 11. Definition of done (Phase 1h.5)
 
-> **Build status — June 23, 2026.** Backend + contract code landed this session
-> (see §14). Tests are written but COULD NOT be executed in the build sandbox
-> (the `@mysten/sui` pnpm symlink is unreadable there and no `sui` binary is
-> installed) — the operator must run `node escrow.test.mjs` and `sui move test`
-> to get the green baseline. Frontend, the v4 on-chain publish, the
-> abandoned-booking sweep, the reconciler, and gas-monitoring remain open.
+> **Build status — June 23, 2026.** Backend + contract + frontend landed this
+> session (see §14). **Test suites green** (`node escrow.test.mjs` 63,
+> `sui move test` 43) and **SMOKE-TESTED LIVE end-to-end** on Vercel + Railway
+> with the **v4 contract published** (`0xf68a874f…`): a real booking signed the
+> two-escrow PTB and confirmed "Payment escrowed", and the full Seal guest-PII
+> encrypt→decrypt round-trip worked in-browser. Three bugs were found and fixed
+> live — the consolidated-SplitCoins deposit decode, the Seal package-id hybrid,
+> and a missing `DEMO_HOST_ADDRESS` (see `ARIA_HANDOFF.md` Sui Integration
+> Lessons §12–13). **Still open:** flip `REQUIRE_GUEST_VERIFICATION=true`, the
+> abandoned-booking sweep, the reconciler, gas-monitoring, and (mainnet) a paid
+> Seal key-server provider + decrypt audit logging.
 
 - [x] `BookingPaymentEscrow` + `create_payment_escrow`/`release_payment`/`refund_payment` **+ `refund_deposit`** in `escrow.move`, with Move tests (12 added). Zero-amount legs handled (§7). **Code done; still needs the v4 on-chain publish (bundled with `seal_approve`) via the cold UpgradeCap key, and `sui move test` run.**
 - [x] `buildBookingPaymentTransaction` (two-escrow PTB) + `verifyBookingPaymentTransaction`; shared scaling via `dollarsToUnits()`.
