@@ -142,7 +142,8 @@ a `BookingEscrow<SUI>` shared object that holds the deposit on-chain.
 
 | Item | Value |
 |---|---|
-| Package ID (current, **v3**) | `0xec0d6bd45d6bbf3aad04778ace4aacef33c071a30d79090532ba1697644d8fa1` |
+| Package ID (current, **v4**) | `0xf68a874fbdd3e5aa328f6754bd757edc6c2690510284fa39d5088e44b4cd9e77` |
+| Package ID (prior, v3) | `0xec0d6bd45d6bbf3aad04778ace4aacef33c071a30d79090532ba1697644d8fa1` |
 | Package ID (type-defining / original) | `0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe` |
 | Module | `escrow` |
 | Network | Sui testnet |
@@ -661,7 +662,10 @@ Railway runs **Node 22** (`nixpacks.toml`: `nodejs_22`). Required by
 ```
 DATABASE_URL, GOOGLE_CLIENT_ID, GOOGLE_CALLBACK_URL, FRONTEND_URL
 HOST_ADDRESSES, SESSION_SECRET, XAI_API_KEY, RESEND_API_KEY, STRIPE_SECRET_KEY
-ESCROW_PACKAGE_ID       = 0xec0d6bd45d6bbf3aad04778ace4aacef33c071a30d79090532ba1697644d8fa1
+ESCROW_PACKAGE_ID       = 0xf68a874fbdd3e5aa328f6754bd757edc6c2690510284fa39d5088e44b4cd9e77
+                          (v4 — published June 23, 2026; adds the fee functions +
+                          seal_approve. Upgrade tx x7LUYvjszivxAouFYchPnLLVFSUGzhowYuhVQBArB2v.
+                          Prior v3: 0xec0d6bd45d6bbf3aad04778ace4aacef33c071a30d79090532ba1697644d8fa1)
                            (LIVE in Railway since June 18, 2026 — v3 upgrade adding
                            finalize_claim; redeploy confirmed clean via deploy logs
                            (deploy db4f1425, both keypairs loaded, DB initialized).

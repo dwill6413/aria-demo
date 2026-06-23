@@ -17,7 +17,7 @@ load) in Railway environment variables.
 | Signs | Nothing currently. Originally deployed `escrow.move` and (before P0b, June 16, 2026) signed `create_escrow` directly. |
 | Why it's powerful | Owns the `UpgradeCap` (`0x41f043cf28d0bb77ef6031c5208b611bdd673992afa9e27763b41033e4a327eb`) — can upgrade the deployed package. This is the highest-privilege key in the system. |
 | When you'd need it | Only to upgrade the Move contract, or to formally burn the UpgradeCap (planned pre-mainnet step, once an independent audit passes). |
-| Recent use | Signed the P3 upgrade (June 17, 2026, tx `JCA8daJ9mSByY6x51ZhEc6Ubfrv1LEbf3nsVccEFtJZK`), publishing package v2 at `0x98e712692f22f308bb6d097d2d8a2743ed0c01058135d71436b4abcd34264f26`. The original package ID above stays the type-defining ID for existing `BookingEscrow` objects regardless of how many upgrades happen. |
+| Recent use | Signed the **v4 upgrade** (June 23, 2026, tx `x7LUYvjszivxAouFYchPnLLVFSUGzhowYuhVQBArB2v`), publishing package **v4** at `0xf68a874fbdd3e5aa328f6754bd757edc6c2690510284fa39d5088e44b4cd9e77` — adds the Phase 1h.5 fee functions + Phase 2 `seal_approve` in one bundled upgrade. (Earlier: v3 `0xec0d6bd4…644d8fa1` finalize_claim June 18; v2 `0x98e712…4264f26` June 17, tx `JCA8da…FtJZK`.) The original package ID above stays the type-defining ID for existing `BookingEscrow` objects — and anchors Seal's identity namespace — regardless of how many upgrades happen. |
 
 ## 2. Auto-release key (`ARIA_AUTO_RELEASE_KEY` / `autoReleaseKeypair`)
 
@@ -55,8 +55,8 @@ load) in Railway environment variables.
 
 | | |
 |---|---|
-| `ARIA_FEE_ADDRESS` | **TBD — not yet generated/set.** Destination for ARIA's 3% booking fee leg of `release_payment` at check-in. |
-| `ARIA_TAX_REMITTANCE_ADDRESS` | **TBD — not yet generated/set.** Destination for the tax leg of `release_payment`. |
+| `ARIA_FEE_ADDRESS` | `0xcc27c579f88e82d0e78f159435675fecf4b1029405eb6f380553132f760ac6de` (alias `aria-fee`, generated June 23, 2026; recovery phrase in KeePass). Destination for ARIA's 3% booking fee leg of `release_payment` at check-in. |
+| `ARIA_TAX_REMITTANCE_ADDRESS` | `0xc75ae8270ca15de2ab0c10a8269d5b42459f813a125ac3cd29ba4a76a008637c` (alias `aria-tax`, generated June 23, 2026; recovery phrase in KeePass). Destination for the tax leg of `release_payment`. |
 | Status | **Receive-only — NOT signing keys.** The backend never loads a private key for either; they only ever appear as the `aria_addr` / `tax_addr` fields baked into a `BookingPaymentEscrow`, and as destinations of the on-chain split. |
 | Why low-risk | Nothing the backend does requires their private keys. A leak of the *address* is harmless (it only receives funds); secure the receiving wallet's keys in KeePass like any treasury. |
 | Verification role | `verifyBookingPaymentTransaction` rejects any booking PTB whose fee/tax legs don't point at exactly these addresses (destination-authority check), so a tampered transaction can't redirect ARIA's fee or the tax remittance. |

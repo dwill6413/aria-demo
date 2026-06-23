@@ -759,7 +759,10 @@ Follow-up: one-time authorization code exchange.
 ```
 DATABASE_URL, GOOGLE_CLIENT_ID, GOOGLE_CALLBACK_URL, FRONTEND_URL
 HOST_ADDRESSES, SESSION_SECRET, XAI_API_KEY, RESEND_API_KEY, STRIPE_SECRET_KEY
-ESCROW_PACKAGE_ID       = 0xec0d6bd45d6bbf3aad04778ace4aacef33c071a30d79090532ba1697644d8fa1
+ESCROW_PACKAGE_ID       = 0xf68a874fbdd3e5aa328f6754bd757edc6c2690510284fa39d5088e44b4cd9e77
+                          (v4, June 23 2026 — fee functions + seal_approve; prior v3
+                          0xec0d6bd45d6bbf3aad04778ace4aacef33c071a30d79090532ba1697644d8fa1)
+# Vercel also needs NEXT_PUBLIC_ESCROW_PACKAGE_ID = 0xf68a874f...77 (seal_approve CALL target)
                            (LIVE in Railway since June 18, 2026 — v3 upgrade adding
                            finalize_claim; redeploy confirmed clean (deploy db4f1425).
                            Prior v2: 0x98e712692f22f308bb6d097d2d8a2743ed0c01058135d71436b4abcd34264f26.
