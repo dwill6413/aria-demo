@@ -11,7 +11,8 @@
 import {
   extractCreatedObjectId, verifyEscrowTransaction, suiClient,
   isObjectMutated, verifyClaimDamageTransaction, verifyDisputeClaimTransaction,
-  depositToMist, BookingEscrowBcs, decodeCreateEscrowArgs, decodeClaimDamageAmountMist
+  depositToMist, BookingEscrowBcs, decodeCreateEscrowArgs, decodeClaimDamageAmountMist,
+  dollarsToUnits, decodeCreatePaymentEscrowArgs, verifyBookingPaymentTransaction
 } from './escrow.mjs';
 import { bcs } from '@mysten/sui/bcs';
 import { toBase64 } from '@mysten/sui/utils';
@@ -578,6 +579,174 @@ await test('decodeClaimDamageAmountMist: wrong module — returns null', () => {
 await test('decodeClaimDamageAmountMist: malformed transaction — returns null (no throw)', () => {
   assertEqual(decodeClaimDamageAmountMist({}, 'escrow'), null);
   assertEqual(decodeClaimDamageAmountMist(null, 'escrow'), null);
+});
+
+// ─── Phase 1h.5: payment escrow (rental + ARIA fee + tax) ───────────────────
+// dollarsToUnits scaling, the lag-free create_payment_escrow arg decoder, and
+// the verifier's adversarial matrix (§12) — all network-free via mocks.
+
+await test('dollarsToUnits: ×1000 scaling, zero leg, and cents', () => {
+  assertEqual(dollarsToUnits(1000).toString(), '1000000');
+  assertEqual(dollarsToUnits(0).toString(), '0');          // tax-exempt leg
+  assertEqual(dollarsToUnits(661.5).toString(), '661500'); // cents round-trip
+});
+
+// Treasury + party addresses for the payment-escrow tests.
+const P_ARIA = '0x' + 'a'.repeat(64);
+const P_TAX  = '0x' + 'b'.repeat(64);
+// create_payment_escrow(ref, guest, host, aria_addr, tax_addr, arbitrator,
+//   host_amount, aria_amount, tax_amount, release_ms, coin, clock)  +  the
+// deposit create_escrow in the SAME tx. Builds the parsed-tx (inputs/commands)
+// shape getTransaction carries under Transaction.transaction.
+function combinedTxData(o = {}) {
+  const {
+    ref = 'ARIA-2-x', guest = GUEST, host = HOST,
+    ariaAddr = P_ARIA, taxAddr = P_TAX, arb = ARB,
+    hostUnits = 1000000, ariaUnits = 30000, taxUnits = 130000,
+    releaseMs = 9999, depUnits = depositToMist(232).toString(),
+  } = o;
+  return {
+    sender: o.sender || guest,
+    inputs: [
+      _pure(bcs.string().serialize(ref)),                  // 0 booking_ref
+      _pure(bcs.Address.serialize(guest)),                 // 1 guest
+      _pure(bcs.Address.serialize(host)),                  // 2 host
+      _pure(bcs.Address.serialize(ariaAddr)),              // 3 aria_addr
+      _pure(bcs.Address.serialize(taxAddr)),               // 4 tax_addr
+      _pure(bcs.Address.serialize(arb)),                   // 5 arbitrator
+      _pure(bcs.u64().serialize(BigInt(hostUnits))),       // 6 host_amount
+      _pure(bcs.u64().serialize(BigInt(ariaUnits))),       // 7 aria_amount
+      _pure(bcs.u64().serialize(BigInt(taxUnits))),        // 8 tax_amount
+      _pure(bcs.u64().serialize(BigInt(releaseMs))),       // 9 release_time_ms
+      _pure(bcs.u64().serialize(1n)),                      // 10 deposit expiry_ms
+      _pure(bcs.u64().serialize(BigInt(depUnits))),        // 11 deposit split amount
+      _pure(bcs.u64().serialize(BigInt(hostUnits) + BigInt(ariaUnits) + BigInt(taxUnits))), // 12 payment split amount
+      { Object: { SharedObject: {} } },                    // 13 clock
+    ],
+    commands: [
+      { SplitCoins: { coin: { GasCoin: true }, amounts: [{ Input: 12 }] } }, // cmd 0 -> payment coin
+      { SplitCoins: { coin: { GasCoin: true }, amounts: [{ Input: 11 }] } }, // cmd 1 -> deposit coin
+      { MoveCall: { module: 'escrow', function: 'create_payment_escrow', typeArguments: ['0x2::sui::SUI'],
+        arguments: [{ Input: 0 }, { Input: 1 }, { Input: 2 }, { Input: 3 }, { Input: 4 }, { Input: 5 },
+          { Input: 6 }, { Input: 7 }, { Input: 8 }, { Input: 9 }, { NestedResult: [0, 0] }, { Input: 13 }] } },
+      { MoveCall: { module: 'escrow', function: 'create_escrow', typeArguments: ['0x2::sui::SUI'],
+        arguments: [{ Input: 0 }, { Input: 1 }, { Input: 2 }, { Input: 5 }, { Input: 10 }, { NestedResult: [1, 0] }, { Input: 13 }] } },
+    ],
+  };
+}
+
+await test('decodeCreatePaymentEscrowArgs: decodes all legs/destinations lag-free', () => {
+  const d = decodeCreatePaymentEscrowArgs(combinedTxData(), 'escrow');
+  assertEqual(d.bookingRef, 'ARIA-2-x');
+  assertEqual(d.guest, GUEST);
+  assertEqual(d.host, HOST);
+  assertEqual(d.ariaAddr, P_ARIA);
+  assertEqual(d.taxAddr, P_TAX);
+  assertEqual(d.arbitrator, ARB);
+  assertEqual(d.hostAmount, '1000000');
+  assertEqual(d.ariaAmount, '30000');
+  assertEqual(d.taxAmount, '130000');
+  assertEqual(d.releaseMs, '9999');
+  assertEqual(d.typeArg, '0x2::sui::SUI');
+});
+
+await test('decodeCreatePaymentEscrowArgs: wrong module / malformed — returns null', () => {
+  assertEqual(decodeCreatePaymentEscrowArgs(combinedTxData(), 'nope'), null);
+  assertEqual(decodeCreatePaymentEscrowArgs({}, 'escrow'), null);
+  assertEqual(decodeCreatePaymentEscrowArgs(null, 'escrow'), null);
+});
+
+// Wire the env the verifier reads, and a mock getTransaction returning a
+// combined booking tx with both escrow object types present lag-free.
+process.env.ESCROW_MODULE_NAME = 'escrow';
+process.env.ARIA_FEE_ADDRESS = P_ARIA;
+process.env.ARIA_TAX_REMITTANCE_ADDRESS = P_TAX;
+process.env.ARIA_ARBITRATOR_ADDRESS = ARB;
+const PAY_ID = '0x' + '7'.repeat(64);
+const DEP_ID = '0x' + '8'.repeat(64);
+function mockPaymentChain(o = {}) {
+  const tx = combinedTxData(o);
+  suiClient.core.getTransaction = async () => ({
+    $kind: 'Transaction',
+    Transaction: {
+      transaction: tx,
+      effects: { changedObjects: [] },
+      objectTypes: {
+        [PAY_ID]: '0xpkg::escrow::BookingPaymentEscrow<0x2::sui::SUI>',
+        [DEP_ID]: '0xpkg::escrow::BookingEscrow<0x2::sui::SUI>',
+      },
+    },
+  });
+}
+// Server-authoritative expected values matching the happy-path tx.
+const EXPECTED = {
+  sender: GUEST, host: HOST, bookingRef: 'ARIA-2-x',
+  subtotal: 1000, ariaFee: 30, taxes: 130, depositAmount: 232, releaseMs: 9999,
+};
+
+await test('verifyBookingPaymentTransaction: happy path returns both escrow ids', async () => {
+  mockPaymentChain();
+  const r = await verifyBookingPaymentTransaction('digest', EXPECTED);
+  assertEqual(r.ok, true);
+  assertEqual(r.paymentEscrowId, PAY_ID);
+  assertEqual(r.depositEscrowId, DEP_ID);
+});
+
+await test('verify §12 T1: tampered ARIA-fee destination is rejected', async () => {
+  mockPaymentChain({ ariaAddr: '0x' + 'c'.repeat(64) }); // attacker wallet
+  const r = await verifyBookingPaymentTransaction('digest', EXPECTED);
+  assertEqual(r.ok, false);
+});
+
+await test('verify §12 T1: tampered host (rental) destination is rejected', async () => {
+  mockPaymentChain({ host: '0x' + 'd'.repeat(64) });
+  const r = await verifyBookingPaymentTransaction('digest', EXPECTED);
+  assertEqual(r.ok, false);
+});
+
+await test('verify §12: under-funded rental leg is rejected', async () => {
+  mockPaymentChain({ hostUnits: 1 });
+  const r = await verifyBookingPaymentTransaction('digest', EXPECTED);
+  assertEqual(r.ok, false);
+});
+
+await test('verify §12: wrong ARIA-fee leg amount is rejected', async () => {
+  mockPaymentChain({ ariaUnits: 1 });
+  const r = await verifyBookingPaymentTransaction('digest', EXPECTED);
+  assertEqual(r.ok, false);
+});
+
+await test('verify: wrong release time (check-in) is rejected', async () => {
+  mockPaymentChain({ releaseMs: 5 });
+  const r = await verifyBookingPaymentTransaction('digest', EXPECTED);
+  assertEqual(r.ok, false);
+});
+
+await test('verify: booking_ref mismatch is rejected', async () => {
+  mockPaymentChain({ ref: 'ARIA-9-evil' });
+  const r = await verifyBookingPaymentTransaction('digest', EXPECTED);
+  assertEqual(r.ok, false);
+});
+
+await test('verify: sender not the booking guest is rejected', async () => {
+  mockPaymentChain({ sender: '0x' + 'e'.repeat(64) });
+  const r = await verifyBookingPaymentTransaction('digest', EXPECTED);
+  assertEqual(r.ok, false);
+});
+
+await test('verify: under-funded deposit escrow in same tx is rejected', async () => {
+  mockPaymentChain({ depUnits: '1' });
+  const r = await verifyBookingPaymentTransaction('digest', EXPECTED);
+  assertEqual(r.ok, false);
+});
+
+await test('verify: failed on-chain tx is rejected', async () => {
+  suiClient.core.getTransaction = async () => ({
+    $kind: 'FailedTransaction',
+    FailedTransaction: { status: { error: { message: 'boom' } } },
+  });
+  const r = await verifyBookingPaymentTransaction('digest', EXPECTED);
+  assertEqual(r.ok, false);
 });
 
 // ─── Summary ──────────────────────────────────────────────────────────────────

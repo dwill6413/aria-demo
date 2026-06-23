@@ -579,4 +579,276 @@ module aria_escrow::escrow_tests {
         };
         ts::end(s);
     }
+
+    // ── Payment Escrow Tests (rental + ARIA fee + tax) ──────────────────────────
+    //
+    // Industry-standard "fee follows refund": before check-in a cancel refunds
+    // rental + fee + tax to the guest; at check-in the funds split three ways to
+    // host / ARIA / tax remittance. release_time_ms (check-in) is T_EXPIRY here.
+
+    const ARIA_ADDR: address = @0x400; // ARIA fee wallet
+    const TAX_ADDR:  address = @0x500; // tax remittance wallet
+
+    const P_HOST:  u64 = 600_000_000; // rental subtotal -> host
+    const P_ARIA:  u64 =  60_000_000; // ARIA fee
+    const P_TAX:   u64 =  40_000_000; // taxes
+    const P_TOTAL: u64 = 700_000_000; // == P_HOST + P_ARIA + P_TAX
+
+    /// Create a payment escrow funded with P_TOTAL, release_time = T_EXPIRY,
+    /// at now = T_BEFORE (so release_time is in the future).
+    fun setup_payment_escrow(scenario: &mut ts::Scenario) {
+        ts::next_tx(scenario, GUEST);
+        {
+            let mut clock = clock::create_for_testing(ts::ctx(scenario));
+            clock::set_for_testing(&mut clock, T_BEFORE);
+            let coin = coin::mint_for_testing<SUI>(P_TOTAL, ts::ctx(scenario));
+            escrow::create_payment_escrow<SUI>(
+                ref_str(), GUEST, HOST, ARIA_ADDR, TAX_ADDR, ARBITRATOR,
+                P_HOST, P_ARIA, P_TAX, T_EXPIRY, coin, &clock, ts::ctx(scenario)
+            );
+            clock::destroy_for_testing(clock);
+        };
+    }
+
+    /// Assert `addr` holds exactly one Coin<SUI> of `expected` value, then burn it.
+    fun assert_received(scenario: &mut ts::Scenario, addr: address, expected: u64) {
+        ts::next_tx(scenario, addr);
+        let c = ts::take_from_address<coin::Coin<SUI>>(scenario, addr);
+        assert!(coin::value(&c) == expected, 0);
+        coin::burn_for_testing(c);
+    }
+
+    /// Create records all three legs, both treasury addresses, and ACTIVE status.
+    #[test]
+    fun test_create_payment_escrow_succeeds() {
+        let mut s = ts::begin(GUEST);
+        setup_payment_escrow(&mut s);
+
+        ts::next_tx(&mut s, GUEST);
+        {
+            let e = ts::take_shared<escrow::BookingPaymentEscrow<SUI>>(&s);
+            assert!(escrow::payment_status(&e)          == escrow::status_active(), 0);
+            assert!(escrow::payment_host_amount(&e)     == P_HOST, 1);
+            assert!(escrow::payment_aria_amount(&e)     == P_ARIA, 2);
+            assert!(escrow::payment_tax_amount(&e)      == P_TAX,  3);
+            assert!(escrow::payment_host(&e)            == HOST,      4);
+            assert!(escrow::payment_aria_addr(&e)       == ARIA_ADDR, 5);
+            assert!(escrow::payment_tax_addr(&e)        == TAX_ADDR,  6);
+            assert!(escrow::payment_arbitrator(&e)      == ARBITRATOR, 7);
+            assert!(escrow::payment_release_time_ms(&e) == T_EXPIRY,  8);
+            ts::return_shared(e);
+        };
+        ts::end(s);
+    }
+
+    /// At check-in, release_payment splits exactly to host / ARIA / tax.
+    #[test]
+    fun test_release_payment_splits_three_ways() {
+        let mut s = ts::begin(GUEST);
+        setup_payment_escrow(&mut s);
+
+        ts::next_tx(&mut s, STRANGER); // permissionless caller
+        {
+            let mut clock = clock::create_for_testing(ts::ctx(&mut s));
+            clock::set_for_testing(&mut clock, T_AFTER); // at/after check-in
+            let e = ts::take_shared<escrow::BookingPaymentEscrow<SUI>>(&s);
+            escrow::release_payment<SUI>(e, &clock, ts::ctx(&mut s));
+            clock::destroy_for_testing(clock);
+        };
+
+        assert_received(&mut s, HOST,      P_HOST);
+        assert_received(&mut s, ARIA_ADDR, P_ARIA);
+        assert_received(&mut s, TAX_ADDR,  P_TAX);
+        ts::end(s);
+    }
+
+    /// release_payment is permissionless — exercised above via STRANGER; this also
+    /// confirms it works exactly at the release_time boundary (now == release_time).
+    #[test]
+    fun test_release_payment_at_boundary_succeeds() {
+        let mut s = ts::begin(GUEST);
+        setup_payment_escrow(&mut s);
+
+        ts::next_tx(&mut s, STRANGER);
+        {
+            let mut clock = clock::create_for_testing(ts::ctx(&mut s));
+            clock::set_for_testing(&mut clock, T_EXPIRY); // exactly check-in
+            let e = ts::take_shared<escrow::BookingPaymentEscrow<SUI>>(&s);
+            escrow::release_payment<SUI>(e, &clock, ts::ctx(&mut s));
+            clock::destroy_for_testing(clock);
+        };
+        assert_received(&mut s, HOST, P_HOST);
+        assert_received(&mut s, ARIA_ADDR, P_ARIA);
+        assert_received(&mut s, TAX_ADDR, P_TAX);
+        ts::end(s);
+    }
+
+    /// release_payment before check-in must fail — funds aren't releasable yet.
+    #[test, expected_failure(abort_code = aria_escrow::escrow::ENotReleaseTime)]
+    fun test_release_payment_before_checkin_fails() {
+        let mut s = ts::begin(GUEST);
+        setup_payment_escrow(&mut s);
+
+        ts::next_tx(&mut s, STRANGER);
+        {
+            let mut clock = clock::create_for_testing(ts::ctx(&mut s));
+            clock::set_for_testing(&mut clock, T_BEFORE); // before check-in
+            let e = ts::take_shared<escrow::BookingPaymentEscrow<SUI>>(&s);
+            escrow::release_payment<SUI>(e, &clock, ts::ctx(&mut s));
+            clock::destroy_for_testing(clock);
+        };
+        ts::end(s);
+    }
+
+    /// Zero-tax booking: tax leg is skipped, host + ARIA still paid, no dust coin.
+    #[test]
+    fun test_release_payment_zero_tax_leg() {
+        let mut s = ts::begin(GUEST);
+        ts::next_tx(&mut s, GUEST);
+        {
+            let mut clock = clock::create_for_testing(ts::ctx(&mut s));
+            clock::set_for_testing(&mut clock, T_BEFORE);
+            // host + aria == total, tax == 0
+            let coin = coin::mint_for_testing<SUI>(P_HOST + P_ARIA, ts::ctx(&mut s));
+            escrow::create_payment_escrow<SUI>(
+                ref_str(), GUEST, HOST, ARIA_ADDR, TAX_ADDR, ARBITRATOR,
+                P_HOST, P_ARIA, 0, T_EXPIRY, coin, &clock, ts::ctx(&mut s)
+            );
+            clock::destroy_for_testing(clock);
+        };
+
+        ts::next_tx(&mut s, STRANGER);
+        {
+            let mut clock = clock::create_for_testing(ts::ctx(&mut s));
+            clock::set_for_testing(&mut clock, T_AFTER);
+            let e = ts::take_shared<escrow::BookingPaymentEscrow<SUI>>(&s);
+            escrow::release_payment<SUI>(e, &clock, ts::ctx(&mut s));
+            clock::destroy_for_testing(clock);
+        };
+        assert_received(&mut s, HOST, P_HOST);
+        assert_received(&mut s, ARIA_ADDR, P_ARIA);
+        ts::end(s);
+    }
+
+    /// Cancel before check-in: arbitrator refunds the WHOLE payment to the guest
+    /// (rental + fee + tax), matching Airbnb/Vrbo "fee follows refund".
+    #[test]
+    fun test_refund_payment_full_to_guest() {
+        let mut s = ts::begin(GUEST);
+        setup_payment_escrow(&mut s);
+
+        ts::next_tx(&mut s, ARBITRATOR);
+        {
+            let mut clock = clock::create_for_testing(ts::ctx(&mut s));
+            clock::set_for_testing(&mut clock, T_BEFORE); // before check-in
+            let e = ts::take_shared<escrow::BookingPaymentEscrow<SUI>>(&s);
+            escrow::refund_payment<SUI>(e, &clock, ts::ctx(&mut s));
+            clock::destroy_for_testing(clock);
+        };
+        assert_received(&mut s, GUEST, P_TOTAL); // guest gets everything back
+        ts::end(s);
+    }
+
+    /// Only the arbitrator may refund — a stranger cannot.
+    #[test, expected_failure(abort_code = aria_escrow::escrow::ENotArbitrator)]
+    fun test_refund_payment_non_arbitrator_fails() {
+        let mut s = ts::begin(GUEST);
+        setup_payment_escrow(&mut s);
+
+        ts::next_tx(&mut s, STRANGER);
+        {
+            let mut clock = clock::create_for_testing(ts::ctx(&mut s));
+            clock::set_for_testing(&mut clock, T_BEFORE);
+            let e = ts::take_shared<escrow::BookingPaymentEscrow<SUI>>(&s);
+            escrow::refund_payment<SUI>(e, &clock, ts::ctx(&mut s));
+            clock::destroy_for_testing(clock);
+        };
+        ts::end(s);
+    }
+
+    /// Refund is hard-blocked once check-in is reached — only release_payment is
+    /// valid from then on (the two are mutually exclusive at release_time_ms).
+    #[test, expected_failure(abort_code = aria_escrow::escrow::ERefundTooLate)]
+    fun test_refund_payment_after_checkin_fails() {
+        let mut s = ts::begin(GUEST);
+        setup_payment_escrow(&mut s);
+
+        ts::next_tx(&mut s, ARBITRATOR);
+        {
+            let mut clock = clock::create_for_testing(ts::ctx(&mut s));
+            clock::set_for_testing(&mut clock, T_AFTER); // at/after check-in
+            let e = ts::take_shared<escrow::BookingPaymentEscrow<SUI>>(&s);
+            escrow::refund_payment<SUI>(e, &clock, ts::ctx(&mut s));
+            clock::destroy_for_testing(clock);
+        };
+        ts::end(s);
+    }
+
+    /// The three legs must sum to the funded coin — under/over-funding is rejected.
+    #[test, expected_failure(abort_code = aria_escrow::escrow::ESplitMismatch)]
+    fun test_create_payment_escrow_sum_mismatch_fails() {
+        let mut s = ts::begin(GUEST);
+        ts::next_tx(&mut s, GUEST);
+        {
+            let mut clock = clock::create_for_testing(ts::ctx(&mut s));
+            clock::set_for_testing(&mut clock, T_BEFORE);
+            // coin is 1 MIST short of the declared legs
+            let coin = coin::mint_for_testing<SUI>(P_TOTAL - 1, ts::ctx(&mut s));
+            escrow::create_payment_escrow<SUI>(
+                ref_str(), GUEST, HOST, ARIA_ADDR, TAX_ADDR, ARBITRATOR,
+                P_HOST, P_ARIA, P_TAX, T_EXPIRY, coin, &clock, ts::ctx(&mut s)
+            );
+            clock::destroy_for_testing(clock);
+        };
+        ts::end(s);
+    }
+
+    /// A release_time in the past is rejected at creation.
+    #[test, expected_failure(abort_code = aria_escrow::escrow::EReleaseTimeInPast)]
+    fun test_create_payment_escrow_past_release_fails() {
+        let mut s = ts::begin(GUEST);
+        ts::next_tx(&mut s, GUEST);
+        {
+            let mut clock = clock::create_for_testing(ts::ctx(&mut s));
+            clock::set_for_testing(&mut clock, T_AFTER); // now is AFTER release_time
+            let coin = coin::mint_for_testing<SUI>(P_TOTAL, ts::ctx(&mut s));
+            escrow::create_payment_escrow<SUI>(
+                ref_str(), GUEST, HOST, ARIA_ADDR, TAX_ADDR, ARBITRATOR,
+                P_HOST, P_ARIA, P_TAX, T_EXPIRY, coin, &clock, ts::ctx(&mut s)
+            );
+            clock::destroy_for_testing(clock);
+        };
+        ts::end(s);
+    }
+
+    /// refund_deposit: arbitrator returns the security deposit to the guest
+    /// instantly on cancel (instead of waiting for auto_release at expiry).
+    #[test]
+    fun test_refund_deposit_to_guest() {
+        let mut s = ts::begin(GUEST);
+        setup_escrow(&mut s); // deposit escrow of DEPOSIT, guest = GUEST
+
+        ts::next_tx(&mut s, ARBITRATOR);
+        {
+            let e = ts::take_shared<BookingEscrow<SUI>>(&s);
+            assert!(escrow::status(&e) == escrow::status_active(), 0);
+            escrow::refund_deposit<SUI>(e, ts::ctx(&mut s));
+        };
+        assert_received(&mut s, GUEST, DEPOSIT);
+        ts::end(s);
+    }
+
+    /// Only the arbitrator may refund the deposit early.
+    #[test, expected_failure(abort_code = aria_escrow::escrow::ENotArbitrator)]
+    fun test_refund_deposit_non_arbitrator_fails() {
+        let mut s = ts::begin(GUEST);
+        setup_escrow(&mut s);
+
+        ts::next_tx(&mut s, STRANGER);
+        {
+            let e = ts::take_shared<BookingEscrow<SUI>>(&s);
+            escrow::refund_deposit<SUI>(e, ts::ctx(&mut s));
+        };
+        ts::end(s);
+    }
 }

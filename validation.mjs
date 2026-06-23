@@ -80,6 +80,15 @@ export const resolveDisputeSchema = z.object({
   hostAmount: z.union([z.string(), z.number()])
 });
 
+// Phase 1h.5: the guest reports the combined booking PTB digest (one tx that
+// created both the payment and deposit escrows) to the confirm route. No amounts
+// are accepted here — every leg/destination is decoded from the on-chain tx and
+// checked against server-authoritative values (verifyBookingPaymentTransaction).
+export const bookingPaymentConfirmSchema = z.object({
+  bookingRef: z.string().min(1, 'bookingRef is required'),
+  digest: z.string().min(1, 'digest is required')
+});
+
 // Runs a zod schema against request.body and sends a 400 with a readable
 // message if it fails. Returns true if validation failed (caller should
 // `return` immediately after calling this), false if the body is valid.

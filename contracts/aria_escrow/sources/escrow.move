@@ -15,6 +15,9 @@ module aria_escrow::escrow {
     const STATUS_RELEASED: u8 = 1;
     const STATUS_CLAIMED:  u8 = 2;
     const STATUS_DISPUTED: u8 = 3;
+    // (value 4 was the retired STATUS_RESOLVED — see status_resolved() below)
+    // Payment-escrow terminal state: guest was fully refunded before check-in.
+    const STATUS_REFUNDED: u8 = 5;
 
     // === Error Codes ===
     const ENotGuest:            u64 = 0;
@@ -28,6 +31,10 @@ module aria_escrow::escrow {
     const ESplitMismatch:       u64 = 8;
     const EExpiryInPast:        u64 = 9;
     const EExpiryTooFar:        u64 = 10;
+    // Payment-escrow error codes
+    const ENotReleaseTime:      u64 = 11; // release_payment called before check-in
+    const ERefundTooLate:       u64 = 12; // refund_payment called at/after check-in
+    const EReleaseTimeInPast:   u64 = 13; // create_payment_escrow with past release time
 
     // 5 days in milliseconds
     const FIVE_DAYS_MS: u64 = 432_000_000;
@@ -51,6 +58,31 @@ module aria_escrow::escrow {
         expiry_ms:    u64,
         status:       u8,
         claim_amount: u64,
+    }
+
+    // Holds the guest's actual payment (rental + ARIA fee + tax) for a booking,
+    // kept SEPARATE from the security deposit's BookingEscrow so the deposit's
+    // claim/dispute state machine is untouched. The three destination addresses
+    // and the three split amounts are baked in at creation, so release is fully
+    // deterministic and trustlessly verifiable — no caller supplies amounts at
+    // release time. Industry-standard "fee follows refund": a full refund before
+    // check-in returns rental + fee + tax to the guest; at check-in the funds
+    // split to host / ARIA / tax remittance.
+    #[allow(lint(coin_field))]
+    public struct BookingPaymentEscrow<phantom T> has key {
+        id:              UID,
+        booking_ref:     String,
+        guest:           address,
+        host:            address,
+        aria_addr:       address, // ARIA fee wallet
+        tax_addr:        address, // tax remittance wallet
+        arbitrator:      address,
+        host_amount:     u64,     // rental subtotal -> host at check-in
+        aria_amount:     u64,     // ARIA booking fee -> aria_addr at check-in
+        tax_amount:      u64,     // taxes -> tax_addr at check-in
+        coin:            Coin<T>, // value == host_amount + aria_amount + tax_amount
+        release_time_ms: u64,     // check-in (optionally + grace)
+        status:          u8,      // STATUS_ACTIVE | STATUS_RELEASED | STATUS_REFUNDED
     }
 
     // === Events ===
@@ -90,6 +122,32 @@ module aria_escrow::escrow {
         booking_ref:  String,
         guest_amount: u64,
         host_amount:  u64,
+    }
+
+    public struct PaymentEscrowCreated has copy, drop {
+        escrow_id:       ID,
+        booking_ref:     String,
+        guest:           address,
+        host:            address,
+        host_amount:     u64,
+        aria_amount:     u64,
+        tax_amount:      u64,
+        release_time_ms: u64,
+    }
+
+    public struct PaymentReleased has copy, drop {
+        escrow_id:   ID,
+        booking_ref: String,
+        host_amount: u64,
+        aria_amount: u64,
+        tax_amount:  u64,
+    }
+
+    public struct PaymentRefunded has copy, drop {
+        escrow_id:   ID,
+        booking_ref: String,
+        guest:       address,
+        amount:      u64,
     }
 
     // === Public Functions ===
@@ -362,6 +420,195 @@ module aria_escrow::escrow {
         });
     }
 
+    /// Arbitrator-gated full refund of the security DEPOSIT to the guest, used by
+    /// ARIA's /booking/cancel route so a cancelling guest gets their deposit back
+    /// immediately instead of waiting for auto_release at expiry. Bounded blast
+    /// radius: it can only ever pay the guest (the deposit's rightful recipient),
+    /// never a third address, so it carries no risk beyond what auto_release would
+    /// eventually do anyway. Only valid while the escrow is still ACTIVE.
+    public fun refund_deposit<T>(
+        escrow: BookingEscrow<T>,
+        ctx:    &mut TxContext,
+    ) {
+        assert!(escrow.status == STATUS_ACTIVE, EWrongStatus);
+        assert!(tx_context::sender(ctx) == escrow.arbitrator, ENotArbitrator);
+
+        let guest       = escrow.guest;
+        let amount      = escrow.amount;
+        let booking_ref = escrow.booking_ref;
+
+        let BookingEscrow {
+            id, booking_ref: _, guest: _, host: _, arbitrator: _,
+            amount: _, coin, expiry_ms: _, status: _, claim_amount: _,
+        } = escrow;
+
+        let escrow_id = object::uid_to_inner(&id);
+        object::delete(id);
+
+        event::emit(DepositReleased {
+            escrow_id,
+            booking_ref,
+            guest,
+            guest_amount: amount,
+            host_amount:  0,
+        });
+
+        transfer::public_transfer(coin, guest);
+    }
+
+    // === Payment Escrow (rental + ARIA fee + tax) ===
+
+    /// Guest funds the payment escrow at booking (their own wallet signs, in the
+    /// same atomic PTB that creates the deposit escrow). The coin MUST equal the
+    /// sum of the three legs, and release_time_ms (check-in) must be in the future.
+    /// The destination addresses and amounts are recorded immutably so that
+    /// release_payment is fully deterministic.
+    public fun create_payment_escrow<T>(
+        booking_ref:     String,
+        guest_addr:      address,
+        host:            address,
+        aria_addr:       address,
+        tax_addr:        address,
+        arbitrator:      address,
+        host_amount:     u64,
+        aria_amount:     u64,
+        tax_amount:      u64,
+        release_time_ms: u64,
+        coin:            Coin<T>,
+        clock:           &Clock,
+        ctx:             &mut TxContext,
+    ) {
+        let total = coin::value(&coin);
+        assert!(total > 0, EZeroAmount);
+        assert!(host_amount + aria_amount + tax_amount == total, ESplitMismatch);
+        assert!(release_time_ms > clock::timestamp_ms(clock), EReleaseTimeInPast);
+
+        let escrow = BookingPaymentEscrow<T> {
+            id:              object::new(ctx),
+            booking_ref,
+            guest:           guest_addr,
+            host,
+            aria_addr,
+            tax_addr,
+            arbitrator,
+            host_amount,
+            aria_amount,
+            tax_amount,
+            coin,
+            release_time_ms,
+            status:          STATUS_ACTIVE,
+        };
+
+        let escrow_id = object::id(&escrow);
+
+        event::emit(PaymentEscrowCreated {
+            escrow_id,
+            booking_ref:     escrow.booking_ref,
+            guest:           escrow.guest,
+            host:            escrow.host,
+            host_amount:     escrow.host_amount,
+            aria_amount:     escrow.aria_amount,
+            tax_amount:      escrow.tax_amount,
+            release_time_ms: escrow.release_time_ms,
+        });
+
+        transfer::share_object(escrow);
+    }
+
+    /// Release the payment at check-in as a 3-way split to the baked-in
+    /// destinations. Permissionless — callable by anyone once release_time_ms is
+    /// reached (exactly like auto_release); the worst any caller can do is pay the
+    /// three parties exactly what the guest already committed. ARIA's check-in
+    /// sweep signs this with the zero-privilege auto-release key. Zero-amount legs
+    /// (e.g. a tax-exempt booking) are skipped so no dust coins are created.
+    public fun release_payment<T>(
+        escrow: BookingPaymentEscrow<T>,
+        clock:  &Clock,
+        ctx:    &mut TxContext,
+    ) {
+        assert!(escrow.status == STATUS_ACTIVE, EWrongStatus);
+        assert!(clock::timestamp_ms(clock) >= escrow.release_time_ms, ENotReleaseTime);
+
+        let booking_ref = escrow.booking_ref;
+        let host        = escrow.host;
+        let aria_addr   = escrow.aria_addr;
+        let tax_addr    = escrow.tax_addr;
+        let host_amount = escrow.host_amount;
+        let aria_amount = escrow.aria_amount;
+        let tax_amount  = escrow.tax_amount;
+
+        let BookingPaymentEscrow {
+            id, booking_ref: _, guest: _, host: _, aria_addr: _, tax_addr: _,
+            arbitrator: _, host_amount: _, aria_amount: _, tax_amount: _,
+            coin, release_time_ms: _, status: _,
+        } = escrow;
+
+        let escrow_id = object::uid_to_inner(&id);
+        object::delete(id);
+
+        let mut coin = coin;
+        if (host_amount > 0) {
+            transfer::public_transfer(coin::split(&mut coin, host_amount, ctx), host);
+        };
+        if (aria_amount > 0) {
+            transfer::public_transfer(coin::split(&mut coin, aria_amount, ctx), aria_addr);
+        };
+        // Whatever remains is exactly tax_amount (sum invariant enforced at creation).
+        if (coin::value(&coin) > 0) {
+            transfer::public_transfer(coin, tax_addr);
+        } else {
+            coin::destroy_zero(coin);
+        };
+
+        event::emit(PaymentReleased {
+            escrow_id,
+            booking_ref,
+            host_amount,
+            aria_amount,
+            tax_amount,
+        });
+    }
+
+    /// Full refund of the payment to the guest before check-in (binary policy:
+    /// fee follows refund, matching Airbnb/Vrbo). Arbitrator-gated so the on-chain
+    /// refund happens through ARIA's /booking/cancel route, keeping the DB status
+    /// and calendar release atomic with the chain. Bounded blast radius: can only
+    /// ever pay the guest. Hard-blocked once check-in is reached, after which only
+    /// release_payment (to host/ARIA/tax) is valid — the two are mutually
+    /// exclusive in time at release_time_ms.
+    public fun refund_payment<T>(
+        escrow: BookingPaymentEscrow<T>,
+        clock:  &Clock,
+        ctx:    &mut TxContext,
+    ) {
+        assert!(escrow.status == STATUS_ACTIVE, EWrongStatus);
+        assert!(tx_context::sender(ctx) == escrow.arbitrator, ENotArbitrator);
+        assert!(clock::timestamp_ms(clock) < escrow.release_time_ms, ERefundTooLate);
+
+        let guest       = escrow.guest;
+        let booking_ref = escrow.booking_ref;
+
+        let BookingPaymentEscrow {
+            id, booking_ref: _, guest: _, host: _, aria_addr: _, tax_addr: _,
+            arbitrator: _, host_amount: _, aria_amount: _, tax_amount: _,
+            coin, release_time_ms: _, status: _,
+        } = escrow;
+
+        let escrow_id = object::uid_to_inner(&id);
+        object::delete(id);
+
+        let amount = coin::value(&coin);
+
+        event::emit(PaymentRefunded {
+            escrow_id,
+            booking_ref,
+            guest,
+            amount,
+        });
+
+        transfer::public_transfer(coin, guest);
+    }
+
     // === Read-Only Accessors ===
 
     public fun status<T>(e: &BookingEscrow<T>): u8        { e.status }
@@ -372,12 +619,26 @@ module aria_escrow::escrow {
     public fun claim_amount<T>(e: &BookingEscrow<T>): u64 { e.claim_amount }
     public fun booking_ref<T>(e: &BookingEscrow<T>): String { e.booking_ref }
 
+    // Payment-escrow accessors
+    public fun payment_status<T>(e: &BookingPaymentEscrow<T>): u8          { e.status }
+    public fun payment_guest<T>(e: &BookingPaymentEscrow<T>): address      { e.guest }
+    public fun payment_host<T>(e: &BookingPaymentEscrow<T>): address       { e.host }
+    public fun payment_aria_addr<T>(e: &BookingPaymentEscrow<T>): address  { e.aria_addr }
+    public fun payment_tax_addr<T>(e: &BookingPaymentEscrow<T>): address   { e.tax_addr }
+    public fun payment_arbitrator<T>(e: &BookingPaymentEscrow<T>): address { e.arbitrator }
+    public fun payment_host_amount<T>(e: &BookingPaymentEscrow<T>): u64    { e.host_amount }
+    public fun payment_aria_amount<T>(e: &BookingPaymentEscrow<T>): u64    { e.aria_amount }
+    public fun payment_tax_amount<T>(e: &BookingPaymentEscrow<T>): u64     { e.tax_amount }
+    public fun payment_release_time_ms<T>(e: &BookingPaymentEscrow<T>): u64 { e.release_time_ms }
+    public fun payment_booking_ref<T>(e: &BookingPaymentEscrow<T>): String { e.booking_ref }
+
     public fun five_days_ms():    u64 { FIVE_DAYS_MS    }
     public fun max_expiry_ms():   u64 { MAX_EXPIRY_MS   }
     public fun status_active():   u8  { STATUS_ACTIVE   }
     public fun status_released(): u8  { STATUS_RELEASED }
     public fun status_claimed():  u8  { STATUS_CLAIMED  }
     public fun status_disputed(): u8  { STATUS_DISPUTED }
+    public fun status_refunded(): u8  { STATUS_REFUNDED }
 
     /// Kept only for upgrade compatibility — Sui's "compatible" upgrade policy
     /// (the default, and the most permissive one available) forbids removing a

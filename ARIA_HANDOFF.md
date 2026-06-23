@@ -1,6 +1,36 @@
 # ARIA — Technical Handoff Document
-**Version:** 4.21 | **Updated:** June 22, 2026
+**Version:** 4.23 | **Updated:** June 23, 2026
 
+> **June 23, 2026 (Phase 1h.5 — payment escrow backend + contract BUILT):**
+> Fee collection / payment routing landed on the backend and contract — full
+> file-by-file log in `ARIA_FEE_DESIGN.md` §14. Summary: a new
+> `BookingPaymentEscrow<T>` (separate from the deposit's `BookingEscrow`) holds
+> rental + ARIA fee + tax, created in the SAME guest-signed PTB as the deposit
+> (one signature, two shared objects, atomic). `release_payment` does the 3-way
+> split at check-in (permissionless, auto-release key, via `runCheckInReleaseSweep`);
+> `refund_payment` gives a full guest refund before check-in (arbitrator-gated);
+> `refund_deposit` returns the deposit early on cancel. Policy: **fee follows
+> refund** (full refund incl. fee before check-in, none after) — matches
+> Airbnb/Vrbo. Verification is lag-free PTB-arg decoding with a
+> **destination-authority** check (rental/fee/tax legs must point at the
+> authoritative host / `ARIA_FEE_ADDRESS` / `ARIA_TAX_REMITTANCE_ADDRESS`), plus
+> replay protection via a unique `settlement_digest`. **Tests written (12 Move +
+> 14 JS, incl. the adversarial matrix) but NOT run in the build sandbox** (the
+> `@mysten/sui` pnpm symlink is unreadable there and no `sui` binary) — run
+> `node escrow.test.mjs` + `sui move test`. Frontend wired too (June 23):
+> `pages/index.jsx` review-then-sign disclosure (combined path no longer
+> auto-signs), `pages/ai.jsx` chat disclosure, `ai_route.mjs` field forwarding,
+> cancellation copy corrected — still needs an in-browser smoke test. **Open:**
+> generate/set the two treasury addresses, the v4 on-chain publish (bundle with
+> Phase 2a `seal_approve`). The combined path only activates when
+> both treasury env vars are set; otherwise it falls back to the deposit-only
+> P0b build, so existing behavior is unchanged until you opt in.
+>
+> **June 22, 2026 (Assessment of Codebase Evaluation):**
+> - An external codebase evaluation was fully assessed. It was confirmed that all highlighted items are either already resolved, praised as architecture strengths, or already tracked in the technical debt backlog or roadmap.
+> - Specifically, the noted "frontend fetch duplication" was confirmed to already be fully consolidated under `lib/authFetch.js` (all 6 authenticated pages import from it; none define it inline).
+> - No code or doc changes are warranted, as the evaluation independently confirmed our current priority order (Phase 1h.5 first).
+>
 > **June 22, 2026 (Codex review fixes):**
 > - **Cross-tenant cancellation fixed:** `cancelBooking()` no longer bypasses the
 >   ownership check for hosts. New `hostManagesBooking(session, booking)` in
@@ -642,6 +672,14 @@ DEMO_HOST_ADDRESS       = <optional, June 18, 2026 — a real Sui address to act
                            exercised end-to-end. If unset, escrow host falls back
                            to ARIA_AUTO_RELEASE_KEY's address. NOT YET SET in Railway.>
 AUTO_RELEASE_SWEEP_INTERVAL_MS = <optional, default 3600000 (1 hour)>
+ARIA_FEE_ADDRESS        = <Phase 1h.5 — receive-only Sui address for ARIA's 3%
+                           booking fee. NOT a signing key. NOT yet set. The
+                           combined payment+deposit booking PTB activates only
+                           when this AND ARIA_TAX_REMITTANCE_ADDRESS are set.>
+ARIA_TAX_REMITTANCE_ADDRESS = <Phase 1h.5 — receive-only Sui address for collected
+                           taxes. NOT a signing key. NOT yet set.>
+PAYMENT_COIN_TYPE       = <optional, default 0x2::sui::SUI (testnet); SuiUSD type on mainnet>
+CHECKIN_RELEASE_SWEEP_INTERVAL_MS = <optional, defaults to AUTO_RELEASE_SWEEP_INTERVAL_MS>
 
 REMOVED June 18, 2026:
 - ARIA_DEPLOYER_KEY  — deleted from Railway (P1b ops complete). The original

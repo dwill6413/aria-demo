@@ -151,6 +151,22 @@ export async function initDB() {
   // "column does not exist" on release. Idempotent for existing deployments.
   await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS deposit_release_walrus_blob_id TEXT`);
 
+  // ── Phase 1h.5: payment escrow (rental + ARIA fee + tax) ──────────────────
+  // The payment escrow is SEPARATE from the deposit escrow (escrow_object_id).
+  // Its lifecycle: pending -> held (verified on-chain at booking) -> released
+  // (3-way split at check-in) | refunded (full guest refund on pre-check-in
+  // cancel). payment_release_ms is the check-in timestamp baked into the
+  // on-chain object, used by the check-in sweep and by the confirm route's
+  // authoritative comparison. settlement_digest is the booking PTB digest;
+  // a partial-unique index (below) enforces one booking per on-chain tx so a
+  // digest can't be replayed to confirm a second booking.
+  await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_escrow_object_id TEXT`);
+  await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_escrow_status TEXT DEFAULT 'pending'`);
+  await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_release_ms BIGINT`);
+  await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS settlement_digest TEXT`);
+  await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_released_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_refunded_at TIMESTAMPTZ`);
+
   // ── Indexes (Phase 3 / Finding #13) ───────────────────────────────────────
   // bookings.booking_ref already has an implicit unique index from its UNIQUE
   // NOT NULL column constraint above — no separate index needed there.
@@ -161,6 +177,11 @@ export async function initDB() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_bookings_wallet_address ON bookings(wallet_address)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_bookings_property_id ON bookings(property_id)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_messages_booking_ref ON messages(booking_ref)`);
+  // Replay/idempotency: one booking per on-chain settlement tx. Partial unique
+  // so the many rows with a NULL digest (pre-confirm) don't collide.
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_bookings_settlement_digest ON bookings(settlement_digest) WHERE settlement_digest IS NOT NULL`);
+  // Check-in sweep scans for held payment escrows past their release time.
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_bookings_payment_escrow ON bookings(payment_escrow_status, payment_release_ms)`);
 
   console.log('Database initialized');
 }

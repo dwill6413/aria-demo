@@ -393,21 +393,28 @@ Larger surface; deferred.
 
 ## 11. Definition of done (Phase 1h.5)
 
-- [ ] `BookingPaymentEscrow` + `create_payment_escrow`/`release_payment`/`refund_payment` **+ `refund_deposit`** in `escrow.move`, with Move tests; shipped in the v4 upgrade (with `seal_approve`). Zero-amount legs handled (§7).
-- [ ] `buildBookingPaymentTransaction` (two-escrow PTB) + `verifyBookingPaymentTransaction`; shared `toUnits()`.
+> **Build status — June 23, 2026.** Backend + contract code landed this session
+> (see §14). Tests are written but COULD NOT be executed in the build sandbox
+> (the `@mysten/sui` pnpm symlink is unreadable there and no `sui` binary is
+> installed) — the operator must run `node escrow.test.mjs` and `sui move test`
+> to get the green baseline. Frontend, the v4 on-chain publish, the
+> abandoned-booking sweep, the reconciler, and gas-monitoring remain open.
+
+- [x] `BookingPaymentEscrow` + `create_payment_escrow`/`release_payment`/`refund_payment` **+ `refund_deposit`** in `escrow.move`, with Move tests (12 added). Zero-amount legs handled (§7). **Code done; still needs the v4 on-chain publish (bundled with `seal_approve`) via the cold UpgradeCap key, and `sui move test` run.**
+- [x] `buildBookingPaymentTransaction` (two-escrow PTB) + `verifyBookingPaymentTransaction`; shared scaling via `dollarsToUnits()`.
 - [x] `calculateHostPayout` double-count removed (host gets full `subtotal`). **DONE — commit `5783260` (June 22, 2026); same fix applied to AI `get_revenue_summary`.**
-- [ ] **Lag-free verification (§6): decode `create_payment_escrow` + `create_escrow` PTB args** to verify amounts, **destination authority** (ARIA fee/tax wallets + authoritative host address), `booking_ref`, guest sender, arbitrator, type arg, and `release_time_ms`. No acceptance on type+sender alone; object reads are secondary only. Applies to the deposit path too (closes the existing `escrow.mjs` lag gap).
-- [ ] **Replay/idempotency:** `settlement_digest` unique; one tx confirms one booking; confirm route idempotent.
-- [ ] `runCheckInReleaseSweep` cron releases the 3-way split at check-in; `/booking/cancel` refunds **payment + deposit** before check-in; both race-guarded on `settlement_status`. Host-triggered self-release path exposed (permissionless backstop).
+- [x] **Lag-free verification (§6): decode `create_payment_escrow` + `create_escrow` PTB args** to verify amounts, **destination authority** (ARIA fee/tax wallets + authoritative host address), `booking_ref`, guest sender, arbitrator, type arg, and `release_time_ms`. No acceptance on type+sender alone; object reads are secondary only. Deposit path re-verified in the same tx (closes the `escrow.mjs` lag gap).
+- [x] **Replay/idempotency:** `settlement_digest` UNIQUE (partial index); one tx confirms one booking (PG `23505` → 409); confirm route idempotent (returns `alreadyConfirmed`).
+- [x] `runCheckInReleaseSweep` cron releases the 3-way split at check-in; `/booking/cancel` refunds **payment + deposit** before check-in (arbitrator-signed `refund_payment` + `refund_deposit`), and after check-in leaves the payment for the check-in sweep to release. *(Host self-release backstop: still open.)*
 - [ ] **Abandoned-booking sweep:** `pending`/`held` bookings past a short TTL auto-cancel and free the calendar (anti-griefing).
-- [ ] **Reconciler:** periodic DB↔chain `settlement_status` vs on-chain `status` repair; chain is source of truth.
-- [ ] `payment_escrow_object_id` / `settlement_status` / `settlement_digest` columns added idempotently.
+- [ ] **Reconciler:** periodic DB↔chain status repair; chain is source of truth.
+- [x] `payment_escrow_object_id` / `payment_escrow_status` / `payment_release_ms` / `settlement_digest` columns added idempotently (`db.mjs`).
 - [ ] **Signing-key gas monitoring/alerting** for auto-release + arbitrator keys.
-- [ ] Frontend: one signature; **pre-sign confirmation shows exact amounts, each destination, release schedule, and cancellation policy** before the guest signs; held→released routing visible afterwards.
-- [ ] `ARIA_FEE_ADDRESS` + `ARIA_TAX_REMITTANCE_ADDRESS` generated, set in Railway, added to `ARIA_KEY_INVENTORY.md`. No new signing key.
-- [ ] Unit + Move tests incl. **adversarial matrix (§12):** tampered destination, under-funded leg, sum mismatch, replayed digest, double-confirm, refund-after-release blocked, release-before-check-in blocked, zero-tax leg, abandoned-booking cleanup, cron-down host self-release, rounding/scaling edges. Full suite green.
-- [ ] Cancellation-policy copy: full refund (payment + deposit) before check-in, none after.
-- [ ] `ARIA_ROADMAP.md` / `ARIA_HANDOFF.md` updated; Phase 1h.5 bundled with the v4 upgrade.
+- [x] Frontend: one signature; **pre-sign confirmation shows exact amounts, each destination, release schedule, and cancellation policy** before the guest signs; held→released routing visible afterwards. **Done in `pages/index.jsx` (review-then-sign panel; the combined path no longer auto-signs) and `pages/ai.jsx` (chat disclosure + button), with `ai_route.mjs` forwarding the leg fields. Cancellation copy corrected to the binary policy. Still needs an in-browser smoke test (no build in the sandbox).**
+- [ ] `ARIA_FEE_ADDRESS` + `ARIA_TAX_REMITTANCE_ADDRESS` generated, set in Railway, added to `ARIA_KEY_INVENTORY.md`. No new signing key. **(Code reads both env vars; addresses still need to be generated + set. The combined build only activates once both are present — otherwise it falls back to the deposit-only P0b path.)**
+- [x] Unit + Move tests incl. **adversarial matrix (§12):** tampered fee/host destination, under-funded leg, leg-amount mismatch, replay/double-confirm (settlement_digest), refund-after-check-in blocked, release-before-check-in blocked, zero-tax leg, deposit under-funding, sender mismatch, failed tx. **Written (14 JS + 12 Move); not yet executed (see build-status note).** Abandoned-booking/reconciler cases pending those features.
+- [x] Cancellation-policy copy: full refund (payment + deposit) before check-in, none after. *(Backend message + frontend copy both updated, June 23, 2026.)*
+- [x] `ARIA_ROADMAP.md` / `ARIA_HANDOFF.md` updated; Phase 1h.5 still to be bundled with the v4 upgrade.
 
 ---
 
@@ -567,6 +574,61 @@ sum == the split coin amount, `aria_addr == ARIA_FEE_ADDRESS`,
 the existing deposit `verifyEscrowTransaction` independently (no v4 needed) — this
 is the recommended **first** build step, since it closes the current
 under-funding-under-lag gap and proves the exact pattern the payment escrow reuses.
+
+---
+
+## 14. Build log — June 23, 2026 (backend + contract landed)
+
+Implemented this session. **Tests written, not run in-sandbox** (see §11 note);
+operator runs `node escrow.test.mjs` + `sui move test`.
+
+- **`contracts/aria_escrow/sources/escrow.move`** — `BookingPaymentEscrow<T>`
+  struct; `create_payment_escrow` (asserts coin == sum of legs, release in
+  future), permissionless `release_payment` (3-way split, zero-legs skipped, no
+  dust), arbitrator-gated `refund_payment` (full guest refund, hard-blocked at
+  check-in), and `refund_deposit` (arbitrator early deposit refund). New status
+  `STATUS_REFUNDED=5`; error codes `ENotReleaseTime/ERefundTooLate/EReleaseTimeInPast`;
+  `PaymentEscrowCreated/PaymentReleased/PaymentRefunded` events; payment accessors.
+- **`contracts/aria_escrow/tests/escrow_tests.move`** — 12 tests (create, 3-way
+  release, permissionless, boundary, before-check-in block, zero-tax, full
+  refund, non-arbitrator block, after-check-in block, sum mismatch, past-release,
+  deposit refund). Move suite 28 → 40.
+- **`escrow.mjs`** — `dollarsToUnits`, `BookingPaymentEscrowBcs`,
+  `buildBookingPaymentTransaction` (one guest signature → payment + deposit
+  escrows), `decodeCreatePaymentEscrowArgs` (lag-free), `verifyBookingPaymentTransaction`
+  (destination-authority + leg amounts + ref + arbitrator + release-time, plus
+  re-verifies the deposit leg in the same tx), `releasePaymentEscrow`,
+  `refundPaymentEscrow`, `refundDepositEscrow`.
+- **`db.mjs`** — `payment_escrow_object_id`, `payment_escrow_status` (default
+  `pending`), `payment_release_ms`, `settlement_digest`, `payment_released_at`,
+  `payment_refunded_at`; partial-unique index on `settlement_digest`; sweep index.
+- **`bookings.mjs`** — `createBooking` builds the combined PTB when
+  `ARIA_FEE_ADDRESS` + `ARIA_TAX_REMITTANCE_ADDRESS` are set (else falls back to
+  the deposit-only P0b build), persists `payment_release_ms`, returns
+  `paymentEscrowBuilt`. `cancelBooking` refunds payment + deposit before check-in.
+- **`server.mjs`** — `/booking/:ref/escrow/confirm` verifies both escrows on the
+  combined path (replay-guarded via `settlement_digest`, `23505`→409, idempotent);
+  new `runCheckInReleaseSweep` cron (auto-release key signs `release_payment`),
+  interval + 35s startup, mirroring the deposit sweep.
+- **`validation.mjs`** — `bookingPaymentConfirmSchema`.
+- **`escrow.test.mjs`** — 14 tests: `dollarsToUnits`, `decodeCreatePaymentEscrowArgs`,
+  and the `verifyBookingPaymentTransaction` adversarial matrix (§12).
+- **`pages/index.jsx`** — combined path no longer auto-signs; a review panel shows
+  each leg (rental→host, fee→ARIA, tax→remittance, deposit→escrow), the release
+  schedule, the total, and the cancellation policy before an explicit "Approve &
+  sign in wallet"; status messages are payment-aware. Cancellation copy corrected
+  to the binary policy.
+- **`pages/ai.jsx`** + **`ai_route.mjs`** — the AI chat booking card shows the same
+  payment disclosure (route now forwards `paymentEscrowBuilt`/`subtotal`/`ariaFee`/
+  `taxes`/`chargeAmount`); the sign button gates on an explicit click as before.
+
+**Open:** generate/set the two treasury addresses; the v4 on-chain publish (bundle
+with Phase 2a `seal_approve`); abandoned-booking sweep; reconciler; gas
+monitoring; an in-browser smoke test of the new signing UI; run both test suites.
+
+**Testnet note:** `releaseMs` is set to `now + 5 min` (mirrors the deposit's
+testnet expiry) so the check-in sweep is exercisable without waiting for the real
+check-in date. Mainnet: set it to the actual check-in timestamp [+ optional grace].
 
 > **Live check — PASSED (June 22, 2026).** Ran `check-escrow-decode.mjs` against a
 > real testnet `create_escrow` digest (`35D3UZ8GB7duuHR79UjXAcP9E3vnRjT1gi8aMwYX5tg1`).

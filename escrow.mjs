@@ -715,3 +715,369 @@ export async function resolveDisputeEscrow(escrowObjectId, guestAmount, hostAmou
     return false;
   }
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// Phase 1h.5 — Payment escrow (rental + ARIA fee + tax)
+// ════════════════════════════════════════════════════════════════════════════
+//
+// The deposit escrow above only holds the guest's refundable security deposit.
+// The actual PAYMENT (rental subtotal -> host, ARIA fee -> fee wallet, tax ->
+// remittance wallet) is held in a SEPARATE BookingPaymentEscrow, created in the
+// SAME guest-signed PTB as the deposit escrow (one signature, two shared
+// objects, atomic). Industry-standard "fee follows refund" (Airbnb/Vrbo): a
+// cancel before check-in refunds the whole payment to the guest; at check-in the
+// funds split three ways. The destination addresses + leg amounts are baked into
+// the object at creation, so release is deterministic and trustlessly verified.
+//
+// Same non-custodial profile as the deposit path: the backend only assembles
+// unsigned bytes; the guest signs/submits from their own browser; nothing is
+// written to the DB until verifyBookingPaymentTransaction re-proves the on-chain
+// reality by decoding the tx's own arguments (lag-free).
+
+const COIN_TYPE = () => process.env.PAYMENT_COIN_TYPE || '0x2::sui::SUI';
+
+// Dollar -> on-chain units. Same ×1000 testnet scaling as depositToMist so the
+// payment legs and the deposit never drift. Allows 0 (e.g. a tax-exempt leg);
+// depositToMist keeps its floor-at-1 for the deposit itself.
+export function dollarsToUnits(amount) {
+  return BigInt(Math.round(Number(amount) * 1000));
+}
+
+// BCS layout of BookingPaymentEscrow<T> (escrow.move), used only for the
+// best-effort secondary object-content read — primary verification is the
+// lag-free argument decode below. Field order/types mirror the Move struct.
+export const BookingPaymentEscrowBcs = bcs.struct('BookingPaymentEscrow', {
+  id:              bcs.Address,
+  booking_ref:     bcs.string(),
+  guest:           bcs.Address,
+  host:            bcs.Address,
+  aria_addr:       bcs.Address,
+  tax_addr:        bcs.Address,
+  arbitrator:      bcs.Address,
+  host_amount:     bcs.u64(),
+  aria_amount:     bcs.u64(),
+  tax_amount:      bcs.u64(),
+  coin:            CoinBcs,
+  release_time_ms: bcs.u64(),
+  status:          bcs.u8(),
+});
+
+// Builds (but does NOT sign/execute) the single PTB that creates BOTH the
+// payment escrow and the deposit escrow with the GUEST as sender. The guest's
+// own wallet funds both from its balance via coinWithBalance — the backend never
+// holds a key that can move guest funds. Returns { txBytes, releaseMs, expiryMs }
+// (the time values are echoed so the caller can persist them for the confirm
+// route's authoritative comparison) or null if unconfigured.
+//
+// amounts: { subtotal, ariaFee, taxes, depositAmount, releaseMs }
+//   releaseMs = check-in (mainnet: checkInMs [+grace]; testnet: a short window so
+//   release_payment is exercisable without waiting — caller decides).
+export async function buildBookingPaymentTransaction(bookingRef, guestAddr, hostAddr, amounts, logger = console) {
+  const { subtotal, ariaFee, taxes, depositAmount, releaseMs } = amounts || {};
+  if (!guestAddr || !hostAddr || !process.env.ESCROW_PACKAGE_ID) return null;
+  const ariaAddr = process.env.ARIA_FEE_ADDRESS;
+  const taxAddr  = process.env.ARIA_TAX_REMITTANCE_ADDRESS;
+  if (!ariaAddr || !taxAddr) {
+    logger?.warn?.('buildBookingPaymentTransaction: ARIA_FEE_ADDRESS / ARIA_TAX_REMITTANCE_ADDRESS not set');
+    return null;
+  }
+  // Same fallback rationale as buildEscrowTransaction: never silently hand
+  // arbitrator authority to the low-privilege signer just because the env var
+  // is unset — fall back to hostAddr instead.
+  const arbitrator = process.env.ARIA_ARBITRATOR_ADDRESS || hostAddr;
+  const PKG = process.env.ESCROW_PACKAGE_ID;
+  const MOD = process.env.ESCROW_MODULE_NAME || 'escrow';
+  try {
+    const hostUnits = dollarsToUnits(subtotal);
+    const ariaUnits = dollarsToUnits(ariaFee);
+    const taxUnits  = dollarsToUnits(taxes);
+    const releaseMsBig = BigInt(releaseMs);
+    const expiryMs  = BigInt(Date.now()) + 300_000n; // deposit: 5-min testnet window
+
+    const tx = new Transaction();
+    tx.setSender(guestAddr);
+
+    // ── Payment escrow (new v4) ──
+    const paymentCoin = coinWithBalance({ balance: hostUnits + ariaUnits + taxUnits });
+    tx.moveCall({
+      target: `${PKG}::${MOD}::create_payment_escrow`,
+      typeArguments: [COIN_TYPE()],
+      arguments: [
+        tx.pure.string(bookingRef),
+        tx.pure.address(guestAddr),
+        tx.pure.address(hostAddr),
+        tx.pure.address(ariaAddr),
+        tx.pure.address(taxAddr),
+        tx.pure.address(arbitrator),
+        tx.pure.u64(hostUnits),
+        tx.pure.u64(ariaUnits),
+        tx.pure.u64(taxUnits),
+        tx.pure.u64(releaseMsBig),
+        paymentCoin,
+        tx.object('0x6'),
+      ],
+    });
+
+    // ── Deposit escrow (existing v3) ──
+    const depositCoin = coinWithBalance({ balance: depositToMist(depositAmount) });
+    tx.moveCall({
+      target: `${PKG}::${MOD}::create_escrow`,
+      typeArguments: [COIN_TYPE()],
+      arguments: [
+        tx.pure.string(bookingRef),
+        tx.pure.address(guestAddr),
+        tx.pure.address(hostAddr),
+        tx.pure.address(arbitrator),
+        tx.pure.u64(expiryMs),
+        depositCoin,
+        tx.object('0x6'),
+      ],
+    });
+
+    const txBytes = await tx.build({ client: suiClient });
+    return { txBytes: toBase64(txBytes), releaseMs: releaseMsBig.toString(), expiryMs: expiryMs.toString() };
+  } catch (err) {
+    logger?.error?.({ message: err.message, name: err.name, stack: err.stack?.split('\n').slice(0, 4).join(' | ') }, 'buildBookingPaymentTransaction error');
+    return null;
+  }
+}
+
+// Decode create_payment_escrow's args straight from the parsed transaction —
+// lag-free (they live in tx.inputs, readable immediately), so this is the
+// PRIMARY verification source, not a fallback. Maps args to inputs BY INDEX.
+// Signature: create_payment_escrow(booking_ref, guest, host, aria_addr,
+//   tax_addr, arbitrator, host_amount, aria_amount, tax_amount,
+//   release_time_ms, coin, clock)
+export function decodeCreatePaymentEscrowArgs(transaction, moduleName) {
+  try {
+    const inputs = transaction?.inputs;
+    const commands = transaction?.commands;
+    if (!Array.isArray(inputs) || !Array.isArray(commands)) return null;
+
+    const call = commands.find(
+      (c) => c?.MoveCall && c.MoveCall.module === moduleName && c.MoveCall.function === 'create_payment_escrow',
+    )?.MoveCall;
+    if (!call || !Array.isArray(call.arguments)) return null;
+
+    const a = call.arguments;
+    const inAddr = (arg) => (arg?.Input != null ? _asAddr(inputs[arg.Input]) : null);
+    const inU64  = (arg) => (arg?.Input != null ? _asU64(inputs[arg.Input]) : null);
+    const inStr  = (arg) => (arg?.Input != null ? _asStr(inputs[arg.Input]) : null);
+
+    return {
+      bookingRef:  inStr(a[0]),
+      guest:       inAddr(a[1]),
+      host:        inAddr(a[2]),
+      ariaAddr:    inAddr(a[3]),
+      taxAddr:     inAddr(a[4]),
+      arbitrator:  inAddr(a[5]),
+      hostAmount:  inU64(a[6]),
+      ariaAmount:  inU64(a[7]),
+      taxAmount:   inU64(a[8]),
+      releaseMs:   inU64(a[9]),
+      typeArg:     call.typeArguments?.[0] ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// Re-queries Sui by digest after the guest signs+submits the combined booking
+// PTB and verifies BOTH escrows against the booking's server-authoritative
+// values — never trusting the client's reported digest. Primary checks are the
+// lag-free argument decodes (independent of the laggy getObjects read); the
+// most security-critical of these is DESTINATION AUTHORITY: the rental/fee/tax
+// legs must point at the authoritative host / ARIA / remittance wallets, not
+// any address echoed by the client, so a tampered PTB that redirects a leg is
+// rejected even while object reads lag.
+//
+// expected: { sender, host, bookingRef, subtotal, ariaFee, taxes, depositAmount,
+//             releaseMs }
+// Returns { ok:true, paymentEscrowId, depositEscrowId, sender } on success;
+// { ok:false, reason } on a real mismatch (hard reject); or
+// { ok:false, retryable:true, reason } when the tx isn't yet decodable.
+export async function verifyBookingPaymentTransaction(digest, expected = {}) {
+  const {
+    sender: expectedSender, host: expectedHost, bookingRef: expectedRef,
+    subtotal, ariaFee, taxes, depositAmount, releaseMs,
+  } = expected;
+
+  const ariaAddr = process.env.ARIA_FEE_ADDRESS;
+  const taxAddr  = process.env.ARIA_TAX_REMITTANCE_ADDRESS;
+  const expectedArbitrator = process.env.ARIA_ARBITRATOR_ADDRESS || expectedHost;
+  const mod = process.env.ESCROW_MODULE_NAME || 'escrow';
+
+  const result = await suiClient.core.getTransaction({
+    digest,
+    include: { transaction: true, effects: true, objectTypes: true },
+  });
+
+  if (result?.$kind !== 'Transaction') {
+    const errMsg = result?.FailedTransaction?.status?.error?.message;
+    return { ok: false, reason: errMsg || 'Transaction did not succeed on-chain' };
+  }
+
+  const txn = result.Transaction;
+  const actualSender = txn?.transaction?.sender;
+  if (expectedSender && actualSender && normalizeAddr(actualSender) !== normalizeAddr(expectedSender)) {
+    return { ok: false, reason: 'Transaction sender does not match the booking guest' };
+  }
+
+  // Locate both objects' ids lag-free from the objectTypes map.
+  const isPaymentType = (t) => typeof t === 'string' && new RegExp(`::${mod}::BookingPaymentEscrow<`).test(t);
+  const isDepositType = (t) => typeof t === 'string' && new RegExp(`::${mod}::BookingEscrow<`).test(t);
+  const objectTypes = txn?.objectTypes || {};
+  let paymentEscrowId = null, depositEscrowId = null;
+  for (const [oid, t] of Object.entries(objectTypes)) {
+    if (!paymentEscrowId && isPaymentType(t)) paymentEscrowId = oid;
+    else if (!depositEscrowId && isDepositType(t)) depositEscrowId = oid;
+  }
+
+  // PRIMARY: decode both calls' arguments and assert every authoritative value.
+  const pay = decodeCreatePaymentEscrowArgs(txn?.transaction, mod);
+  const dep = decodeCreateEscrowArgs(txn?.transaction, mod);
+  if (!pay || pay.hostAmount == null) {
+    return { ok: false, retryable: true, paymentEscrowId, depositEscrowId, reason: 'Payment escrow not yet verifiable on-chain — please retry in a moment.' };
+  }
+
+  const eq = (a, b) => normalizeAddr(a) === normalizeAddr(b);
+
+  // Destination authority — the security-critical check.
+  if (ariaAddr && pay.ariaAddr && !eq(pay.ariaAddr, ariaAddr)) {
+    return { ok: false, reason: 'Payment ARIA-fee destination does not match the authoritative fee wallet' };
+  }
+  if (taxAddr && pay.taxAddr && !eq(pay.taxAddr, taxAddr)) {
+    return { ok: false, reason: 'Payment tax destination does not match the authoritative remittance wallet' };
+  }
+  if (expectedHost && pay.host && !eq(pay.host, expectedHost)) {
+    return { ok: false, reason: 'Payment host destination does not match the authoritative host payout address' };
+  }
+  if (expectedArbitrator && pay.arbitrator && !eq(pay.arbitrator, expectedArbitrator)) {
+    return { ok: false, reason: 'Payment arbitrator does not match the configured arbitrator' };
+  }
+  if (expectedSender && pay.guest && !eq(pay.guest, expectedSender)) {
+    return { ok: false, reason: 'Payment guest does not match the booking guest' };
+  }
+  if (expectedRef && pay.bookingRef && pay.bookingRef !== expectedRef) {
+    return { ok: false, reason: 'Payment booking_ref does not match this booking' };
+  }
+  if (pay.typeArg && normalizeAddr(pay.typeArg.split('::')[0]) !== normalizeAddr(COIN_TYPE().split('::')[0])
+      && pay.typeArg !== COIN_TYPE()) {
+    return { ok: false, reason: `Payment coin type is not ${COIN_TYPE()}` };
+  }
+
+  // Leg amounts.
+  if (subtotal != null && String(pay.hostAmount) !== dollarsToUnits(subtotal).toString()) {
+    return { ok: false, reason: 'Payment rental leg is not the authoritative subtotal' };
+  }
+  if (ariaFee != null && String(pay.ariaAmount) !== dollarsToUnits(ariaFee).toString()) {
+    return { ok: false, reason: 'Payment ARIA-fee leg is not the authoritative fee' };
+  }
+  if (taxes != null && String(pay.taxAmount) !== dollarsToUnits(taxes).toString()) {
+    return { ok: false, reason: 'Payment tax leg is not the authoritative tax' };
+  }
+  if (releaseMs != null && pay.releaseMs != null && String(pay.releaseMs) !== String(releaseMs)) {
+    return { ok: false, reason: 'Payment release time does not match this booking check-in' };
+  }
+
+  // The same tx must also create the matching DEPOSIT escrow (closes the
+  // deposit-path amount gap lag-free too). If the deposit decode isn't yet
+  // available, retry rather than accept a half-verified booking.
+  if (!dep || dep.amountMist == null) {
+    return { ok: false, retryable: true, paymentEscrowId, depositEscrowId, reason: 'Deposit escrow not yet verifiable on-chain — please retry in a moment.' };
+  }
+  if (depositAmount != null && String(dep.amountMist) !== depositToMist(depositAmount).toString()) {
+    return { ok: false, reason: 'Deposit escrow is not funded with the expected deposit amount' };
+  }
+  if (expectedHost && dep.host && !eq(dep.host, expectedHost)) {
+    return { ok: false, reason: 'Deposit escrow host does not match the authoritative host' };
+  }
+  if (expectedRef && dep.bookingRef && dep.bookingRef !== expectedRef) {
+    return { ok: false, reason: 'Deposit escrow booking_ref does not match this booking' };
+  }
+
+  return { ok: true, paymentEscrowId, depositEscrowId, sender: actualSender };
+}
+
+// Permissionless release at check-in — signed by the zero-privilege auto-release
+// key (same trust profile as autoReleaseEscrow; release_payment has no sender
+// check). Splits the held payment to host / ARIA / tax. Returns false on any
+// failure so the check-in sweep can simply retry.
+export async function releasePaymentEscrow(paymentEscrowObjectId) {
+  if (!autoReleaseKeypair || !paymentEscrowObjectId || !process.env.ESCROW_PACKAGE_ID) return false;
+  try {
+    const tx = new Transaction();
+    tx.setSender(autoReleaseKeypair.toSuiAddress());
+    tx.moveCall({
+      target: `${process.env.ESCROW_PACKAGE_ID}::${process.env.ESCROW_MODULE_NAME || 'escrow'}::release_payment`,
+      typeArguments: [COIN_TYPE()],
+      arguments: [tx.object(paymentEscrowObjectId), tx.object('0x6')],
+    });
+    const result = await autoReleaseKeypair.signAndExecuteTransaction({
+      transaction: tx, client: suiClient, include: { effects: true },
+    });
+    if (result?.$kind === 'FailedTransaction') {
+      console.warn('releasePayment failed on-chain:', result.FailedTransaction?.status?.error?.message);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn('releasePaymentEscrow failed:', err.message);
+    return false;
+  }
+}
+
+// Arbitrator-gated full refund of the payment to the guest, before check-in
+// only (the contract asserts now < release_time_ms). Signed by the arbitrator
+// key — same key/scope as resolveDisputeEscrow. Used by /booking/cancel.
+export async function refundPaymentEscrow(paymentEscrowObjectId) {
+  if (!arbitratorKeypair || !paymentEscrowObjectId || !process.env.ESCROW_PACKAGE_ID) return false;
+  try {
+    const tx = new Transaction();
+    tx.setSender(arbitratorKeypair.toSuiAddress());
+    tx.moveCall({
+      target: `${process.env.ESCROW_PACKAGE_ID}::${process.env.ESCROW_MODULE_NAME || 'escrow'}::refund_payment`,
+      typeArguments: [COIN_TYPE()],
+      arguments: [tx.object(paymentEscrowObjectId), tx.object('0x6')],
+    });
+    const result = await arbitratorKeypair.signAndExecuteTransaction({
+      transaction: tx, client: suiClient, include: { effects: true },
+    });
+    if (result?.$kind === 'FailedTransaction') {
+      console.warn('refundPayment failed on-chain:', result.FailedTransaction?.status?.error?.message);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn('refundPaymentEscrow failed:', err.message);
+    return false;
+  }
+}
+
+// Arbitrator-gated early refund of the security DEPOSIT to the guest on cancel,
+// instead of waiting for auto_release at expiry. Signed by the arbitrator key
+// (refund_deposit asserts sender == escrow.arbitrator). Used by /booking/cancel
+// so a cancelling guest gets deposit + payment back together.
+export async function refundDepositEscrow(depositEscrowObjectId) {
+  if (!arbitratorKeypair || !depositEscrowObjectId || !process.env.ESCROW_PACKAGE_ID) return false;
+  try {
+    const tx = new Transaction();
+    tx.setSender(arbitratorKeypair.toSuiAddress());
+    tx.moveCall({
+      target: `${process.env.ESCROW_PACKAGE_ID}::${process.env.ESCROW_MODULE_NAME || 'escrow'}::refund_deposit`,
+      typeArguments: [COIN_TYPE()],
+      arguments: [tx.object(depositEscrowObjectId)],
+    });
+    const result = await arbitratorKeypair.signAndExecuteTransaction({
+      transaction: tx, client: suiClient, include: { effects: true },
+    });
+    if (result?.$kind === 'FailedTransaction') {
+      console.warn('refundDeposit failed on-chain:', result.FailedTransaction?.status?.error?.message);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn('refundDepositEscrow failed:', err.message);
+    return false;
+  }
+}

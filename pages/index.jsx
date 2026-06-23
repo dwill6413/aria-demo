@@ -207,12 +207,20 @@ export default function Home() {
     if (data.error === 'Property not available for selected dates') { alert('Sorry — those dates are already booked. Please select different dates.'); setBookingLoading(false); return; }
     setBooking(data);
     setBookingLoading(false);
-    // Non-custodial P0b: the backend only built an unsigned PTB
-    // (data.escrowTxBytes) with the guest as sender. The guest's own browser
-    // must sign and submit it — ARIA's backend never holds a key that could
-    // move this deposit.
+    // Non-custodial: the backend only built an unsigned PTB (data.escrowTxBytes)
+    // with the guest as sender. The guest's own browser must sign and submit it —
+    // ARIA's backend never holds a key that could move these funds.
     if (data.escrowTxBytes) {
-      handleEscrowSign(data.bookingRef, data.escrowTxBytes);
+      if (data.paymentEscrowBuilt) {
+        // Phase 1h.5: the combined PTB moves real money (rental + fee + tax),
+        // not just a refundable deposit. Show the guest exactly where each leg
+        // goes, the release schedule, and the cancellation policy, and require
+        // an explicit approval before signing (DoD §11).
+        setEscrowStatus('review');
+      } else {
+        // Legacy deposit-only path: just a refundable deposit — auto-sign as before.
+        handleEscrowSign(data.bookingRef, data.escrowTxBytes);
+      }
     }
   };
 
@@ -638,9 +646,9 @@ export default function Home() {
                   <div style={{ background: '#111', border: '1px solid #222', borderRadius: '8px', padding: '12px', marginBottom: '20px', fontSize: '12px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
                       <span style={{ color: '#00ff44', fontSize: '14px' }}>🛡️</span>
-                      <span style={{ color: '#fff', fontWeight: '600', fontSize: '13px' }}>Flexible Cancellation</span>
+                      <span style={{ color: '#fff', fontWeight: '600', fontSize: '13px' }}>Cancellation Policy</span>
                     </div>
-                    <p style={{ color: '#888', margin: 0, lineHeight: '1.5' }}>Full refund if cancelled at least 24 hours before check-in. Cancel within 24 hours for a 50% refund.</p>
+                    <p style={{ color: '#888', margin: 0, lineHeight: '1.5' }}>Cancel any time <strong style={{ color: '#fff' }}>before check-in</strong> for a full refund of your stay payment <em>and</em> deposit — ARIA's fee included. After check-in the stay payment is non-refundable.</p>
                   </div>
                 </>
               )}
@@ -668,18 +676,53 @@ export default function Home() {
               {booking && (
                 <div style={{ marginTop: '16px', background: '#0a1a0a', border: '1px solid #00ff44', borderRadius: '8px', padding: '16px', fontSize: '12px', color: '#00ff44', textAlign: 'center' }}>
                   ✅ Booking confirmed! Ref: {booking.bookingRef}
-                  {booking.depositAmount && booking.escrowTxBytes && (
+
+                  {/* Phase 1h.5: pre-sign disclosure for the combined payment+deposit PTB */}
+                  {escrowStatus === 'review' && booking.paymentEscrowBuilt && (
+                    <div style={{ marginTop: '12px', textAlign: 'left', background: '#091018', border: '1px solid #1d3a55', borderRadius: '8px', padding: '12px' }}>
+                      <div style={{ color: '#4a9eff', fontWeight: 700, fontSize: '12px', marginBottom: '6px' }}>Review before you sign</div>
+                      <div style={{ fontSize: '11px', color: '#8aa3b8', marginBottom: '10px', lineHeight: 1.5 }}>
+                        One wallet signature funds two on-chain escrows from your own balance. Here's exactly where your money goes — and when:
+                      </div>
+                      {[
+                        ['Rental → host', `$${booking.subtotal}`, 'released to your host at check-in'],
+                        ['ARIA fee (3%) → ARIA', `$${booking.ariaFee}`, 'released at check-in'],
+                        ['Taxes → tax remittance', `$${booking.taxes}`, 'released at check-in'],
+                        ['Refundable deposit → escrow', `$${booking.depositAmount}`, 'returned after checkout'],
+                      ].map(([label, amt, note], i) => (
+                        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', padding: '5px 0', borderBottom: i < 3 ? '1px solid #12202e' : 'none' }}>
+                          <div><div style={{ color: '#cfe3f2', fontSize: '12px' }}>{label}</div><div style={{ color: '#566b7d', fontSize: '10px' }}>{note}</div></div>
+                          <div style={{ color: '#fff', fontSize: '12px', fontWeight: 700, whiteSpace: 'nowrap', paddingLeft: '10px' }}>{amt}</div>
+                        </div>
+                      ))}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '8px', paddingTop: '8px', borderTop: '1px solid #1d3a55' }}>
+                        <span style={{ color: '#fff', fontSize: '12px', fontWeight: 700 }}>Total you sign for</span>
+                        <span style={{ color: '#00ff44', fontSize: '13px', fontWeight: 800 }}>${booking.chargeAmount} SuiUSD</span>
+                      </div>
+                      <p style={{ color: '#789', fontSize: '10px', lineHeight: 1.5, margin: '8px 0 10px' }}>
+                        Cancel <strong style={{ color: '#9bb' }}>before check-in</strong> for a full refund of everything above, ARIA's fee included. After check-in the rental, fee, and tax are non-refundable; your deposit still returns after checkout. Funds sit in smart-contract escrow — never in an ARIA wallet.
+                      </p>
+                      <button onClick={() => handleEscrowSign(booking.bookingRef, booking.escrowTxBytes)}
+                        style={{ width: '100%', background: '#00ff44', color: '#000', border: 'none', borderRadius: '6px', padding: '11px', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}>
+                        Approve & sign in wallet
+                      </button>
+                    </div>
+                  )}
+
+                  {booking.depositAmount && booking.escrowTxBytes && escrowStatus !== 'review' && (
                     <div style={{ marginTop: '8px', color: '#4a9eff', fontSize: '11px' }}>
-                      {escrowStatus === 'signing' && '🔏 Sign the escrow transaction in your wallet…'}
-                      {escrowStatus === 'submitting' && '📡 Submitting your deposit to Sui…'}
-                      {escrowStatus === 'confirming' && '⏳ Confirming escrow on-chain…'}
-                      {escrowStatus === 'done' && `🔒 $${booking.depositAmount} deposit held in Sui escrow — you control release`}
+                      {escrowStatus === 'signing' && '🔏 Sign the transaction in your wallet…'}
+                      {escrowStatus === 'submitting' && (booking.paymentEscrowBuilt ? '📡 Submitting your payment + deposit to Sui…' : '📡 Submitting your deposit to Sui…')}
+                      {escrowStatus === 'confirming' && '⏳ Confirming on-chain…'}
+                      {escrowStatus === 'done' && (booking.paymentEscrowBuilt
+                        ? `🔒 Payment escrowed ($${booking.chargeAmount}) — rental released to your host at check-in, $${booking.depositAmount} deposit returned after checkout`
+                        : `🔒 $${booking.depositAmount} deposit held in Sui escrow — you control release`)}
                       {escrowStatus === 'error' && (
                         <>
-                          <div style={{ color: '#ff5555' }}>⚠️ Deposit escrow not completed: {escrowError}</div>
+                          <div style={{ color: '#ff5555' }}>⚠️ {booking.paymentEscrowBuilt ? 'Payment escrow' : 'Deposit escrow'} not completed: {escrowError}</div>
                           <button onClick={() => handleEscrowSign(booking.bookingRef, booking.escrowTxBytes)}
                             style={{ marginTop: '6px', background: 'transparent', color: '#4a9eff', border: '1px solid #4a9eff', borderRadius: '6px', padding: '6px 10px', fontSize: '11px', cursor: 'pointer' }}>
-                            Retry escrow deposit
+                            Retry
                           </button>
                         </>
                       )}

@@ -16,7 +16,10 @@ import crypto from 'node:crypto';
 import { pool } from './db.mjs';
 import { PROPERTIES, JURISDICTION_TAX_RATES } from './catalog.mjs';
 import { calculateHostPayout } from './deepbook.mjs';
-import { buildEscrowTransaction, autoReleaseKeypair, autoReleaseEscrow } from './escrow.mjs';
+import {
+  buildEscrowTransaction, autoReleaseKeypair, autoReleaseEscrow,
+  buildBookingPaymentTransaction, refundPaymentEscrow, refundDepositEscrow,
+} from './escrow.mjs';
 import { Resend } from 'resend';
 import { pushToWalrus } from './walrus.mjs';
 import { escapeHtml } from './emails.mjs';
@@ -167,29 +170,59 @@ export async function cancelBooking({ bookingRef, session, logger = console }) {
   const beforeCheckIn = today < new Date(booking.check_in);
   const cancelledAt = new Date().toISOString();
 
-  // M1: release the on-chain escrow if one is actually held.
+  // M1: release the on-chain DEPOSIT escrow if one is actually held.
   let depositStatus = booking.deposit_status;
   let escrowReleased = false;
   if (booking.escrow_object_id && booking.deposit_status === 'held') {
-    escrowReleased = await autoReleaseEscrow(booking.escrow_object_id);
+    // Phase 1h.5: before check-in the arbitrator can refund the deposit
+    // instantly via refund_deposit (v4), instead of stranding it until expiry.
+    // Otherwise fall back to the permissionless auto_release (post-expiry only).
+    if (beforeCheckIn) {
+      escrowReleased = await refundDepositEscrow(booking.escrow_object_id);
+      if (escrowReleased) logger?.info?.({ bookingRef }, 'cancelBooking: deposit refunded on-chain (pre-check-in)');
+    }
+    if (!escrowReleased) {
+      escrowReleased = await autoReleaseEscrow(booking.escrow_object_id);
+      if (escrowReleased) logger?.info?.({ bookingRef }, 'cancelBooking: escrow released on-chain');
+    }
     if (escrowReleased) {
       depositStatus = 'released';
-      logger?.info?.({ bookingRef }, 'cancelBooking: escrow released on-chain');
     } else {
       // Keep 'held' (NOT 'released') so the auto-release sweep picks it up once
       // the on-chain expiry passes — flipping to 'released' would make the sweep
       // skip it and strand the coin (the bug this fixes).
-      logger?.warn?.({ bookingRef }, 'cancelBooking: on-chain release not yet possible (pre-expiry) — left held for the sweep');
+      logger?.warn?.({ bookingRef }, 'cancelBooking: on-chain release not yet possible — left held for the sweep');
     }
   } else if (!booking.escrow_object_id && beforeCheckIn) {
     // No escrow was ever funded/confirmed — nothing is locked on-chain.
     depositStatus = 'released';
   }
 
+  // Phase 1h.5: refund the PAYMENT escrow (rental + ARIA fee + tax). Industry
+  // standard "fee follows refund": a full refund is only owed before check-in.
+  // After check-in the payment is no longer refundable — the check-in sweep
+  // releases it to host/ARIA/tax instead.
+  let paymentEscrowStatus = booking.payment_escrow_status;
+  let paymentRefunded = false;
+  if (booking.payment_escrow_object_id && booking.payment_escrow_status === 'held') {
+    if (beforeCheckIn) {
+      paymentRefunded = await refundPaymentEscrow(booking.payment_escrow_object_id);
+      if (paymentRefunded) {
+        paymentEscrowStatus = 'refunded';
+        logger?.info?.({ bookingRef }, 'cancelBooking: payment refunded on-chain (pre-check-in)');
+      } else {
+        logger?.warn?.({ bookingRef }, 'cancelBooking: payment refund not possible — left held');
+      }
+    } else {
+      logger?.info?.({ bookingRef }, 'cancelBooking: past check-in — payment not refundable, will release to host/ARIA/tax');
+    }
+  }
+
   try {
     await pool.query(
-      `UPDATE bookings SET payment_status='cancelled', cancelled_at=$1, deposit_status=$2 WHERE booking_ref=$3`,
-      [cancelledAt, depositStatus, bookingRef]
+      `UPDATE bookings SET payment_status='cancelled', cancelled_at=$1, deposit_status=$2,
+        payment_escrow_status=$3, payment_refunded_at=$4 WHERE booking_ref=$5`,
+      [cancelledAt, depositStatus, paymentEscrowStatus, paymentRefunded ? cancelledAt : null, bookingRef]
     );
   } catch (err) {
     logger?.error?.({ err, bookingRef }, 'cancelBooking: DB update failed');
@@ -222,9 +255,13 @@ export async function cancelBooking({ bookingRef, session, logger = console }) {
     depositAutoReleased: depositReleasedNow,
     escrowReleased,
     depositStatus,
+    paymentRefunded,
+    paymentEscrowStatus,
     cancellationWalrusBlobId,
     message: depositReleasedNow
-      ? 'Booking cancelled. Deposit released.'
+      ? (paymentRefunded
+          ? 'Booking cancelled. Payment and deposit refunded in full.'
+          : 'Booking cancelled. Deposit released.')
       : 'Booking cancelled. Deposit will be released after the inspection window.'
   };
 }
@@ -392,22 +429,45 @@ export async function createBooking({ propertyId, checkIn, checkOut, session, lo
   // Still falls back to that same placeholder when a demo property has no
   // configured host, so testnet behavior is unchanged until real hosts are
   // wired into catalog.mjs.
+  // Phase 1h.5: when the ARIA treasury addresses are configured, build the
+  // COMBINED PTB (payment escrow + deposit escrow, one guest signature). The
+  // guest funds rental+fee+tax AND the deposit from their own wallet in a single
+  // atomic tx. Falls back to the deposit-only build (P0b) when the fee/tax
+  // wallets aren't set, so existing deployments keep working unchanged.
   let escrowTxBytes = null;
+  let paymentEscrowBuilt = false;
+  // Testnet: settle ~5 min out so the check-in release sweep is exercisable
+  // without waiting for the real check-in date (mirrors the deposit's 5-min
+  // testnet expiry window). MAINNET: set releaseMs to the real check-in
+  // timestamp, e.g. Date.parse(checkInStr) [+ optional grace].
+  const releaseMs = Date.now() + 300_000;
   try {
     const hostAddr = await getPropertyHostAddress(propertyId, logger);
     if (hostAddr) {
-      const built = await buildEscrowTransaction(bookingRef, session.suiAddress, hostAddr, depositAmount, logger);
+      const useCombined = !!(process.env.ARIA_FEE_ADDRESS && process.env.ARIA_TAX_REMITTANCE_ADDRESS);
+      const built = useCombined
+        ? await buildBookingPaymentTransaction(bookingRef, session.suiAddress, hostAddr,
+            { subtotal, ariaFee, taxes, depositAmount, releaseMs }, logger)
+        : await buildEscrowTransaction(bookingRef, session.suiAddress, hostAddr, depositAmount, logger);
       if (built?.txBytes) {
         escrowTxBytes = built.txBytes;
-        // Recorded so /booking/claim-damage can verify the caller is really
-        // this booking's host without re-deriving the lookup (and so the
-        // record reflects the address actually baked into the on-chain
-        // escrow object, even if catalog.mjs's mapping changes later).
+        paymentEscrowBuilt = useCombined;
+        // Persist the host address baked into the escrow object(s) (so
+        // /booking/claim-damage can verify the caller is this booking's host),
+        // and — for the combined path — the check-in release time the confirm
+        // route compares against and the sweep releases on.
         try {
-          await pool.query('UPDATE bookings SET host_sui_address = $1 WHERE booking_ref = $2', [hostAddr, bookingRef]);
-        } catch (err) { logger?.warn?.({ err, bookingRef }, 'Failed to persist host_sui_address'); }
+          if (useCombined) {
+            await pool.query(
+              'UPDATE bookings SET host_sui_address=$1, payment_release_ms=$2 WHERE booking_ref=$3',
+              [hostAddr, String(releaseMs), bookingRef]
+            );
+          } else {
+            await pool.query('UPDATE bookings SET host_sui_address=$1 WHERE booking_ref=$2', [hostAddr, bookingRef]);
+          }
+        } catch (err) { logger?.warn?.({ err, bookingRef }, 'Failed to persist host_sui_address/payment_release_ms'); }
       } else {
-        logger?.warn?.({ bookingRef }, 'buildEscrowTransaction returned null');
+        logger?.warn?.({ bookingRef, useCombined }, 'Escrow tx build returned null');
       }
     }
   } catch (err) { logger?.warn?.({ err }, 'Escrow tx build failed (non-blocking)'); }
@@ -434,6 +494,10 @@ export async function createBooking({ propertyId, checkIn, checkOut, session, lo
       : 'Refundable security deposit will be held in Sui escrow — no ARIA fee charged on deposit',
     walletAddress: session.suiAddress, network: 'sui:testnet',
     message: 'Booking confirmed on Sui testnet', walrusBlobId,
-    escrowTxBytes
+    escrowTxBytes,
+    // True when escrowTxBytes is the COMBINED payment+deposit PTB (Phase 1h.5);
+    // the frontend reports its digest to the same /escrow/confirm route, which
+    // verifies both escrows. False = deposit-only legacy build.
+    paymentEscrowBuilt
   };
 }

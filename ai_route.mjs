@@ -560,7 +560,15 @@ export async function registerAIRoute(fastify) {
           try {
             const parsed = JSON.parse(result);
             if (parsed.success && parsed.escrowTxBytes) {
-              booking = { bookingRef: parsed.bookingRef, escrowTxBytes: parsed.escrowTxBytes, property: parsed.property, depositAmount: parsed.depositAmount };
+              booking = {
+                bookingRef: parsed.bookingRef, escrowTxBytes: parsed.escrowTxBytes,
+                property: parsed.property, depositAmount: parsed.depositAmount,
+                // Phase 1h.5: forward the payment-escrow fields so the chat's
+                // pre-sign disclosure can show each leg/destination + total.
+                paymentEscrowBuilt: parsed.paymentEscrowBuilt,
+                subtotal: parsed.subtotal, ariaFee: parsed.ariaFee,
+                taxes: parsed.taxes, chargeAmount: parsed.chargeAmount,
+              };
             }
           } catch {}
         }

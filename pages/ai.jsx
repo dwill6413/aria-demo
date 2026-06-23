@@ -241,11 +241,23 @@ export default function AI() {
             <MessageBubble message={m} isHost={isHost} />
             {m.booking && (
               <div style={{ marginTop: '8px', background: '#0a1a0a', border: '1px solid #1a3a1a', borderRadius: '10px', padding: '12px 14px', maxWidth: '85%' }}>
-                <div style={{ fontSize: '12px', color: '#888', marginBottom: '8px' }}>
-                  🔒 Refundable deposit for <strong style={{ color: '#fff' }}>{m.booking.property}</strong>: ${m.booking.depositAmount} SuiUSD
-                </div>
+                {m.booking.paymentEscrowBuilt ? (
+                  <div style={{ fontSize: '12px', color: '#888', marginBottom: '8px' }}>
+                    <div style={{ color: '#fff', fontWeight: 600, marginBottom: '4px' }}>{m.booking.property} — review before you sign</div>
+                    <div style={{ color: '#9bb', fontSize: '11px', lineHeight: 1.6 }}>
+                      Rental → host ${m.booking.subtotal} · ARIA fee → ARIA ${m.booking.ariaFee} · taxes → remittance ${m.booking.taxes}, all released to those destinations at check-in. Refundable deposit ${m.booking.depositAmount} returned after checkout. One signature funds it all from your own wallet (${m.booking.chargeAmount} SuiUSD total).
+                    </div>
+                    <div style={{ color: '#789', fontSize: '10px', marginTop: '4px' }}>
+                      Cancel before check-in for a full refund (fee included); non-refundable after check-in.
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: '12px', color: '#888', marginBottom: '8px' }}>
+                    🔒 Refundable deposit for <strong style={{ color: '#fff' }}>{m.booking.property}</strong>: ${m.booking.depositAmount} SuiUSD
+                  </div>
+                )}
                 {m.booking.status === 'done' ? (
-                  <div style={{ color: '#00ff44', fontSize: '13px', fontWeight: '600' }}>✅ Escrow deposit confirmed on-chain</div>
+                  <div style={{ color: '#00ff44', fontSize: '13px', fontWeight: '600' }}>{m.booking.paymentEscrowBuilt ? '✅ Payment + deposit escrowed on-chain' : '✅ Escrow deposit confirmed on-chain'}</div>
                 ) : (
                   <>
                     <button
@@ -257,7 +269,7 @@ export default function AI() {
                         border: 'none', borderRadius: '6px', padding: '8px 16px', fontWeight: '700', fontSize: '13px',
                         cursor: ['signing', 'submitting', 'confirming'].includes(m.booking.status) ? 'not-allowed' : 'pointer'
                       }}>
-                      {m.booking.status === 'signing' ? 'Signing...' : m.booking.status === 'submitting' ? 'Submitting...' : m.booking.status === 'confirming' ? 'Confirming...' : 'Sign to lock deposit in escrow'}
+                      {m.booking.status === 'signing' ? 'Signing...' : m.booking.status === 'submitting' ? 'Submitting...' : m.booking.status === 'confirming' ? 'Confirming...' : (m.booking.paymentEscrowBuilt ? 'Approve & sign in wallet' : 'Sign to lock deposit in escrow')}
                     </button>
                     {m.booking.status === 'error' && (
                       <div style={{ color: '#ff4444', fontSize: '12px', marginTop: '6px' }}>{m.booking.error}</div>

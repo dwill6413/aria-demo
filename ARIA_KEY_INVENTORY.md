@@ -51,6 +51,19 @@ load) in Railway environment variables.
 
 ---
 
+## 5. Treasury addresses — receive-only (Phase 1h.5, payment escrow)
+
+| | |
+|---|---|
+| `ARIA_FEE_ADDRESS` | **TBD — not yet generated/set.** Destination for ARIA's 3% booking fee leg of `release_payment` at check-in. |
+| `ARIA_TAX_REMITTANCE_ADDRESS` | **TBD — not yet generated/set.** Destination for the tax leg of `release_payment`. |
+| Status | **Receive-only — NOT signing keys.** The backend never loads a private key for either; they only ever appear as the `aria_addr` / `tax_addr` fields baked into a `BookingPaymentEscrow`, and as destinations of the on-chain split. |
+| Why low-risk | Nothing the backend does requires their private keys. A leak of the *address* is harmless (it only receives funds); secure the receiving wallet's keys in KeePass like any treasury. |
+| Verification role | `verifyBookingPaymentTransaction` rejects any booking PTB whose fee/tax legs don't point at exactly these addresses (destination-authority check), so a tampered transaction can't redirect ARIA's fee or the tax remittance. |
+| When to set | Generate two receiving wallets, set both as Railway env vars. Until BOTH are set, `createBooking` falls back to the deposit-only P0b build and no payment escrow is created. |
+
+---
+
 ## Not ARIA-controlled keys (for context, not in your vault)
 
 - **Guest wallets** — each guest signs `create_escrow` with their own zkLogin-derived wallet. ARIA never holds or sees their private key.

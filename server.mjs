@@ -16,7 +16,8 @@ import {
   verifyEscrowTransaction, autoReleaseEscrow,
   buildClaimDamageTransaction, buildDisputeClaimTransaction,
   verifyClaimDamageTransaction, verifyDisputeClaimTransaction,
-  resolveDisputeEscrow, finalizeClaimEscrow
+  resolveDisputeEscrow, finalizeClaimEscrow,
+  verifyBookingPaymentTransaction, releasePaymentEscrow
 } from './escrow.mjs';
 import { createBooking, releaseDepositForBooking, cancelBooking } from './bookings.mjs';
 import { pushToWalrus } from './walrus.mjs';
@@ -309,8 +310,54 @@ fastify.post('/booking/:bookingRef/escrow/confirm', {
   if (booking.wallet_address !== session.suiAddress) {
     return reply.code(403).send({ error: 'This booking does not belong to your account' });
   }
-  if (booking.deposit_status === 'held') {
-    return reply.code(200).send({ success: true, escrowObjectId: booking.escrow_object_id, alreadyConfirmed: true });
+  // Phase 1h.5: a booking built with the combined payment+deposit PTB carries a
+  // payment_release_ms; its confirm verifies BOTH escrows. Legacy deposit-only
+  // bookings (no payment escrow) keep the original single-escrow path below.
+  const isCombined = booking.payment_release_ms != null;
+
+  if (booking.deposit_status === 'held' && (!isCombined || booking.payment_escrow_status === 'held')) {
+    return reply.code(200).send({ success: true, escrowObjectId: booking.escrow_object_id, paymentEscrowObjectId: booking.payment_escrow_object_id, alreadyConfirmed: true });
+  }
+
+  if (isCombined) {
+    let v;
+    try {
+      v = await verifyBookingPaymentTransaction(digest, {
+        sender: session.suiAddress,
+        host: booking.host_sui_address || undefined,
+        bookingRef,
+        subtotal: booking.subtotal,
+        ariaFee: booking.aria_fee,
+        taxes: booking.taxes,
+        depositAmount: booking.deposit_amount,
+        releaseMs: String(booking.payment_release_ms),
+      });
+    } catch (err) {
+      fastify.log.error({ err, digest, bookingRef }, 'On-chain booking-payment verification failed');
+      return reply.code(502).send({ error: 'Could not verify the transaction on-chain. It may still be processing — try again shortly.' });
+    }
+    if (!v.ok) {
+      fastify.log.warn({ bookingRef, digest, reason: v.reason, retryable: !!v.retryable }, 'Booking-payment verification rejected');
+      return reply.code(v.retryable ? 503 : 400).send({ error: v.reason || 'Booking transaction could not be verified', retryable: !!v.retryable });
+    }
+    try {
+      // settlement_digest is UNIQUE (partial index) — a duplicate means this
+      // on-chain tx already confirmed another booking (replay) → PG 23505.
+      await pool.query(
+        `UPDATE bookings SET escrow_object_id=$1, deposit_status='held',
+           payment_escrow_object_id=$2, payment_escrow_status='held', settlement_digest=$3
+         WHERE booking_ref=$4 AND wallet_address=$5`,
+        [v.depositEscrowId, v.paymentEscrowId, digest, bookingRef, session.suiAddress]
+      );
+    } catch (err) {
+      if (err?.code === '23505') {
+        return reply.code(409).send({ error: 'This transaction has already been used to confirm a booking.' });
+      }
+      fastify.log.error({ err, bookingRef }, 'Failed to persist verified escrow ids');
+      return reply.code(500).send({ error: 'Verified on-chain but failed to save — contact support' });
+    }
+    fastify.log.info({ bookingRef, paymentEscrowId: v.paymentEscrowId, depositEscrowId: v.depositEscrowId, digest }, 'Booking payment + deposit verified on-chain and recorded');
+    return { success: true, escrowObjectId: v.depositEscrowId, paymentEscrowObjectId: v.paymentEscrowId };
   }
 
   let verification;
@@ -1189,10 +1236,55 @@ async function runAutoReleaseSweep() {
   }
 }
 
+// Phase 1h.5: check-in release sweep. Sui has no native cron, so a keeper must
+// submit time-based settlement (same pattern as the deposit's auto-release
+// sweep above). Once a booking's payment escrow reaches its baked-in check-in
+// time (payment_release_ms), release_payment splits the held funds to
+// host / ARIA / tax. Permissionless on-chain, signed by the zero-privilege
+// auto-release key. Cancelled-before-check-in bookings are already 'refunded',
+// so only genuinely-due payments are swept.
+async function runCheckInReleaseSweep() {
+  let due;
+  try {
+    const result = await pool.query(
+      `SELECT booking_ref, payment_escrow_object_id FROM bookings
+       WHERE payment_escrow_status = 'held' AND payment_escrow_object_id IS NOT NULL
+       AND payment_release_ms IS NOT NULL AND payment_release_ms <= $1`,
+      [String(Date.now())]
+    );
+    due = result.rows;
+  } catch (err) {
+    fastify.log.error({ err }, 'Check-in release sweep query failed');
+    return;
+  }
+
+  for (const booking of due) {
+    try {
+      const released = await releasePaymentEscrow(booking.payment_escrow_object_id);
+      if (released) {
+        await pool.query(
+          `UPDATE bookings SET payment_escrow_status='released', payment_released_at=NOW() WHERE booking_ref=$1`,
+          [booking.booking_ref]
+        );
+        fastify.log.info({ bookingRef: booking.booking_ref }, 'Check-in release sweep: payment released (host/ARIA/tax)');
+      } else {
+        fastify.log.warn({ bookingRef: booking.booking_ref }, 'Check-in release sweep: on-chain release failed, will retry next sweep');
+      }
+    } catch (err) {
+      fastify.log.error({ err, bookingRef: booking.booking_ref }, 'Check-in release sweep: error releasing payment');
+    }
+  }
+}
+
 const AUTO_RELEASE_SWEEP_INTERVAL_MS = Number(process.env.AUTO_RELEASE_SWEEP_INTERVAL_MS || 60 * 60 * 1000); // hourly by default
 setInterval(() => { runAutoReleaseSweep().catch(err => fastify.log.error({ err }, 'Auto-release sweep crashed')); }, AUTO_RELEASE_SWEEP_INTERVAL_MS);
 // Run once shortly after boot too, rather than waiting a full interval for the first sweep.
 setTimeout(() => { runAutoReleaseSweep().catch(err => fastify.log.error({ err }, 'Auto-release sweep crashed')); }, 30_000);
+
+// Phase 1h.5: check-in release runs on the same cadence as the deposit sweep.
+const CHECKIN_RELEASE_SWEEP_INTERVAL_MS = Number(process.env.CHECKIN_RELEASE_SWEEP_INTERVAL_MS || AUTO_RELEASE_SWEEP_INTERVAL_MS);
+setInterval(() => { runCheckInReleaseSweep().catch(err => fastify.log.error({ err }, 'Check-in release sweep crashed')); }, CHECKIN_RELEASE_SWEEP_INTERVAL_MS);
+setTimeout(() => { runCheckInReleaseSweep().catch(err => fastify.log.error({ err }, 'Check-in release sweep crashed')); }, 35_000);
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 const port = parseInt(process.env.PORT || '3001');

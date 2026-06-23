@@ -1,8 +1,34 @@
 # ARIA — Product Roadmap & AI Handoff Document
-**Version:** 2.20 | **Updated:** June 22, 2026
+**Version:** 2.22 | **Updated:** June 23, 2026
 **Purpose:** Complete handoff for an AI assistant continuing ARIA development.
 Read this entire document before writing any code.
 
+> **June 23, 2026 (Phase 1h.5 — backend + contract BUILT):** Fee collection /
+> payment routing was implemented on the backend and contract (file-by-file log
+> in `ARIA_FEE_DESIGN.md` §14). New `BookingPaymentEscrow` +
+> `create_payment_escrow`/`release_payment`/`refund_payment`/`refund_deposit` in
+> `escrow.move` (+12 Move tests); `buildBookingPaymentTransaction` /
+> `verifyBookingPaymentTransaction` (lag-free destination-authority verification)
+> + release/refund signers in `escrow.mjs`; combined one-signature booking PTB in
+> `bookings.mjs`; two-escrow confirm + `runCheckInReleaseSweep` cron +
+> payment/deposit refund-on-cancel in `server.mjs`; payment columns + unique
+> `settlement_digest` in `db.mjs`; +14 JS unit tests (adversarial matrix). Policy
+> locked: **fee follows refund** (full refund incl. ARIA fee before check-in,
+> 3-way split at check-in) — matches Airbnb/Vrbo. Frontend done too (June 23):
+> `pages/index.jsx` review-then-sign disclosure + `pages/ai.jsx` chat disclosure
+> (+ `ai_route.mjs` field forwarding), cancellation copy corrected. **NOT yet:**
+> the two treasury addresses, the v4 on-chain publish (bundle with 2a
+> `seal_approve`), an in-browser smoke test of the signing UI, and running the
+> suites (build sandbox can't — operator runs `node escrow.test.mjs` +
+> `sui move test`). The combined path only activates once
+> `ARIA_FEE_ADDRESS` + `ARIA_TAX_REMITTANCE_ADDRESS` are set; until then it falls
+> back to the deposit-only P0b build.
+>
+> **June 22, 2026 (Assessment of Codebase Evaluation):**
+> - An external codebase evaluation was fully assessed. It was confirmed that all highlighted items are either already resolved, praised as architecture strengths, or already tracked in the technical debt backlog or roadmap.
+> - Specifically, the noted "frontend fetch duplication" was confirmed to already be fully consolidated under `lib/authFetch.js` (all 6 authenticated pages import from it; none define it inline).
+> - No code or doc changes are warranted, as the evaluation independently confirmed our current priority order (Phase 1h.5 first).
+>
 > **June 22, 2026 (later still):** Fourth external review (Codex) evaluated — see
 > **§5e**. Fixed two new verified issues: **cross-tenant booking cancellation**
 > (any host could cancel any booking — now scoped to managed properties via
@@ -478,10 +504,16 @@ original package ID (`0x538262...7fdbe`); no separate contract deployment.
    (June 18, 2026, package v3 at 0xec0d6bd4...644d8fa1); Railway ESCROW_PACKAGE_ID
    updated to v3 and redeployed clean. NOTE: this consumed the "v3" upgrade slot —
    Phase 2a's seal_approve will be the NEXT upgrade (package v4).
-⬜ Phase 1h.5: Fee collection/routing — TOP remaining build item. DESIGN COMPLETE
-   (ARIA_FEE_DESIGN.md v2.1). Its BookingPaymentEscrow + release_payment/
-   refund_payment contract functions ship in the SAME v4 upgrade as 2a's
-   seal_approve — coordinate the two so there is one v4 publish, not two.
+🟨 Phase 1h.5: Fee collection/routing — BACKEND + CONTRACT BUILT June 23, 2026
+   (ARIA_FEE_DESIGN.md §14). BookingPaymentEscrow + create_payment_escrow/
+   release_payment/refund_payment/refund_deposit in escrow.move (+12 Move tests);
+   escrow.mjs build/verify/release/refund; combined booking PTB; two-escrow
+   confirm + runCheckInReleaseSweep cron + refund-on-cancel; db columns + unique
+   settlement_digest; +14 JS tests. Frontend done (index.jsx review-then-sign
+   disclosure + ai.jsx chat disclosure + ai_route.mjs field forwarding).
+   REMAINING: generate/set ARIA_FEE_ADDRESS + ARIA_TAX_REMITTANCE_ADDRESS, run
+   both test suites + an in-browser smoke test, and the v4 on-chain publish —
+   still bundled with 2a's seal_approve so there is ONE v4 publish, not two.
 ⬜ Phase 2a: Add seal_approve() AND BookingPaymentEscrow/release_payment/
    refund_payment (Phase 1h.5) to escrow.move, publish ONE upgrade (package **v4**)
 ⬜ Phase 2b: Pick testnet key servers + threshold (no contract deploy — see Phase 2 above)
@@ -726,6 +758,18 @@ key is cold KeePass-only, never loaded by the backend) and ANTHROPIC_API_KEY
 (@anthropic-ai/sdk removed from the codebase; old sk-ant-... key should be revoked).
 AUTO_RELEASE_SWEEP_INTERVAL_MS = <optional, default 3600000 (1 hour) — sweep cadence
                            for runAutoReleaseSweep()>
+
+# Phase 1h.5 (June 23, 2026) — payment escrow. The combined payment+deposit
+# booking PTB only activates when BOTH treasury addresses below are set;
+# otherwise createBooking falls back to the deposit-only P0b build.
+ARIA_FEE_ADDRESS           = <receive-only Sui address for ARIA's 3% booking fee.
+                           NOT a signing key. NOT yet generated/set.>
+ARIA_TAX_REMITTANCE_ADDRESS = <receive-only Sui address for collected taxes.
+                           NOT a signing key. NOT yet generated/set.>
+PAYMENT_COIN_TYPE          = <optional, default 0x2::sui::SUI (testnet). Set to the
+                           SuiUSD coin type on mainnet.>
+CHECKIN_RELEASE_SWEEP_INTERVAL_MS = <optional, defaults to AUTO_RELEASE_SWEEP_INTERVAL_MS
+                           — cadence for runCheckInReleaseSweep()>
 ```
 
 **To add for Phase 2:** *(none)* — the revised Seal design (above) adds
