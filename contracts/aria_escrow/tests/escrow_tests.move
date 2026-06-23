@@ -851,4 +851,55 @@ module aria_escrow::escrow_tests {
         };
         ts::end(s);
     }
+
+    // ── Seal access control (Phase 2 — guest PII) ───────────────────────────────
+    // seal_approve gates PII decryption: it must pass for this booking's host with
+    // the guest's address as the Seal identity, and abort otherwise.
+
+    /// The booking's host, with the correct guest-address identity, is authorized.
+    #[test]
+    fun test_seal_approve_authorized_host() {
+        let mut s = ts::begin(GUEST);
+        setup_escrow(&mut s);
+
+        ts::next_tx(&mut s, HOST);
+        {
+            let e = ts::take_shared<BookingEscrow<SUI>>(&s);
+            escrow::seal_approve<SUI>(sui::address::to_bytes(GUEST), &e, ts::ctx(&mut s));
+            ts::return_shared(e);
+        };
+        ts::end(s);
+    }
+
+    /// A non-host (here, the guest) cannot unlock the host-only PII.
+    #[test, expected_failure(abort_code = aria_escrow::escrow::ENotHost)]
+    fun test_seal_approve_non_host_fails() {
+        let mut s = ts::begin(GUEST);
+        setup_escrow(&mut s);
+
+        ts::next_tx(&mut s, GUEST); // guest is not the host
+        {
+            let e = ts::take_shared<BookingEscrow<SUI>>(&s);
+            escrow::seal_approve<SUI>(sui::address::to_bytes(GUEST), &e, ts::ctx(&mut s));
+            ts::return_shared(e);
+        };
+        ts::end(s);
+    }
+
+    /// The host cannot use this escrow to unlock a DIFFERENT guest's blob — the
+    /// identity bytes must equal this escrow's guest address.
+    #[test, expected_failure(abort_code = aria_escrow::escrow::ENotGuest)]
+    fun test_seal_approve_wrong_identity_fails() {
+        let mut s = ts::begin(GUEST);
+        setup_escrow(&mut s);
+
+        ts::next_tx(&mut s, HOST);
+        {
+            let e = ts::take_shared<BookingEscrow<SUI>>(&s);
+            // STRANGER's address, not this escrow's guest — must abort.
+            escrow::seal_approve<SUI>(sui::address::to_bytes(STRANGER), &e, ts::ctx(&mut s));
+            ts::return_shared(e);
+        };
+        ts::end(s);
+    }
 }

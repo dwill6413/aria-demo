@@ -8,6 +8,7 @@ module aria_escrow::escrow {
     use sui::object::{Self, ID, UID};
     use sui::transfer;
     use sui::tx_context::{Self, TxContext};
+    use sui::address;
     use std::string::String;
 
     // === Status Constants ===
@@ -607,6 +608,33 @@ module aria_escrow::escrow {
         });
 
         transfer::public_transfer(coin, guest);
+    }
+
+    // === Seal access control (Phase 2 — guest PII) ===
+
+    /// Seal key-server gate for decrypting a guest's PII blob. Seal key servers
+    /// call this via a DRY RUN (never a real transaction) when a host requests
+    /// the decryption keys; if it doesn't abort, the keys are released.
+    ///
+    /// The Seal identity is `[original_package_id][guest_address_bytes]`; the key
+    /// server passes the inner id (the guest's 32-byte address) here as `id`. We
+    /// authorize the decrypt only when BOTH hold:
+    ///   1. `id` is exactly this escrow's guest address (so a host can't use one
+    ///      booking's escrow to unlock a different guest's blob), and
+    ///   2. the caller is this escrow's host.
+    ///
+    /// No revoke is needed: `auto_release`/`accept_claim`/`resolve_dispute`/
+    /// `finalize_claim`/`refund_deposit` all `object::delete` the escrow when the
+    /// booking finalizes. Seal resolves object refs to current on-chain state on
+    /// every dry run, so once the escrow object is gone this can never be
+    /// satisfied — decryption access disappears automatically with the booking.
+    public entry fun seal_approve<T>(
+        id:     vector<u8>,
+        escrow: &BookingEscrow<T>,
+        ctx:    &TxContext,
+    ) {
+        assert!(id == address::to_bytes(escrow.guest), ENotGuest);
+        assert!(tx_context::sender(ctx) == escrow.host, ENotHost);
     }
 
     // === Read-Only Accessors ===

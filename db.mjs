@@ -167,6 +167,21 @@ export async function initDB() {
   await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_released_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_refunded_at TIMESTAMPTZ`);
 
+  // ── Phase 2: guest PII verification (Walrus + Seal) ───────────────────────
+  // Holds only a POINTER to the guest's Seal-encrypted PII blob on Walrus — no
+  // PII columns ever live in Postgres. The blob is encrypted client-side under
+  // the guest's Sui address as the Seal identity; only the host of an active
+  // booking can decrypt it (gated on-chain by escrow.move's seal_approve), and
+  // access disappears automatically when the booking's escrow object is deleted.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS guest_verifications (
+      sui_address    TEXT PRIMARY KEY,
+      walrus_blob_id TEXT NOT NULL,
+      phone_verified BOOLEAN DEFAULT false,
+      created_at     TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
   // ── Indexes (Phase 3 / Finding #13) ───────────────────────────────────────
   // bookings.booking_ref already has an implicit unique index from its UNIQUE
   // NOT NULL column constraint above — no separate index needed there.

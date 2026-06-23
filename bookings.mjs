@@ -316,6 +316,24 @@ export async function createBooking({ propertyId, checkIn, checkOut, session, lo
     return { error: 'checkOut must be after checkIn' };
   }
 
+  // Phase 2e: identity-verification gate. Require the guest to have completed
+  // PII verification (a guest_verifications row, written by /guest/profile after
+  // they Seal-encrypt + Walrus-store their identity) before they can book.
+  // Gated behind REQUIRE_GUEST_VERIFICATION so it stays dormant until the
+  // profile UI is live and tested — flipping it on with no profiles would block
+  // every booking. Applies to BOTH the REST and AI paths (both call this fn).
+  if (process.env.REQUIRE_GUEST_VERIFICATION === 'true') {
+    try {
+      const v = await pool.query('SELECT 1 FROM guest_verifications WHERE sui_address = $1', [session.suiAddress]);
+      if (!v.rows.length) {
+        return { error: 'Complete identity verification first', status: 400, needsVerification: true };
+      }
+    } catch (err) {
+      logger?.error?.({ err }, 'createBooking: guest verification check failed');
+      return { error: 'Could not verify your identity status. Please try again.', status: 503 };
+    }
+  }
+
   const checkInStr  = new Date(checkIn).toISOString().split('T')[0];
   const checkOutStr = new Date(checkOut).toISOString().split('T')[0];
 

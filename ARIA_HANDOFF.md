@@ -1,6 +1,23 @@
 # ARIA — Technical Handoff Document
 **Version:** 4.23 | **Updated:** June 23, 2026
 
+> **June 23, 2026 (Phase 2 — Seal/Walrus guest PII BUILT):** Full guest-PII
+> system (see `ARIA_ROADMAP.md` Phase 2). `escrow.move` gains
+> `public entry fun seal_approve<T>(id, escrow, ctx)` — Seal key servers dry-run
+> it to authorize a host decrypting a guest's PII; asserts the identity bytes are
+> the escrow's guest AND `sender == escrow.host` (+3 Move tests, suite 40→43).
+> Ships in the SAME v4 publish as the fee functions. Backend: `guest_verifications`
+> table (Walrus pointer only — no PII in Postgres), `/guest/profile` (POST/GET),
+> `/host/guest-identity/:bookingRef` (host-gated), `hasGuestProfile` in `/auth/me`,
+> and a `REQUIRE_GUEST_VERIFICATION`-gated booking gate in `createBooking`.
+> Frontend: `lib/seal.js` (encrypt + Seal-decrypt; 2-of-2 Mysten testnet key
+> servers; identity = guest address; encrypt uses the ORIGINAL package id,
+> seal_approve CALL uses the current/v4 id), `pages/profile.jsx` (guest encrypt →
+> Walrus), host "View Guest Identity" modal in `pages/host.jsx`, and
+> `signPersonalMessageWithZkLogin` in `lib/zklogin.js` for Seal's SessionKey.
+> NEEDS `@mysten/seal` installed, the v4 publish + `NEXT_PUBLIC_ESCROW_PACKAGE_ID`,
+> and an in-browser smoke test (zkLogin↔SessionKey signing is untested).
+>
 > **June 23, 2026 (Phase 1h.5 — payment escrow backend + contract BUILT):**
 > Fee collection / payment routing landed on the backend and contract — full
 > file-by-file log in `ARIA_FEE_DESIGN.md` §14. Summary: a new
@@ -680,6 +697,21 @@ ARIA_TAX_REMITTANCE_ADDRESS = <Phase 1h.5 — receive-only Sui address for colle
                            taxes. NOT a signing key. NOT yet set.>
 PAYMENT_COIN_TYPE       = <optional, default 0x2::sui::SUI (testnet); SuiUSD type on mainnet>
 CHECKIN_RELEASE_SWEEP_INTERVAL_MS = <optional, defaults to AUTO_RELEASE_SWEEP_INTERVAL_MS>
+REQUIRE_GUEST_VERIFICATION = <Phase 2e — 'true' to require a guest_verifications
+                           row before booking (both REST + AI). Default off so it
+                           stays dormant until the /profile UI is live + tested.>
+
+Vercel (frontend), Phase 2:
+NEXT_PUBLIC_ESCROW_PACKAGE_ID = <the v4 package id once published — used by
+                           lib/seal.js as the seal_approve CALL target. Falls back
+                           to the original/type-defining id if unset, but
+                           seal_approve only EXISTS in v4, so decrypt won't work
+                           until this points at v4.>
+NEXT_PUBLIC_PAYMENT_COIN_TYPE = <optional, default 0x2::sui::SUI; the type arg for
+                           the seal_approve<T> call (SuiUSD on mainnet)>
+# Frontend dep: run `pnpm add @mysten/seal` (NOT yet installed). lib/seal.js and
+# the two pages dynamic-import it, so the app builds without it until a user
+# actually hits the encrypt/decrypt path.
 
 REMOVED June 18, 2026:
 - ARIA_DEPLOYER_KEY  — deleted from Railway (P1b ops complete). The original

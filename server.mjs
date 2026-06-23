@@ -19,12 +19,13 @@ import {
   resolveDisputeEscrow, finalizeClaimEscrow,
   verifyBookingPaymentTransaction, releasePaymentEscrow
 } from './escrow.mjs';
-import { createBooking, releaseDepositForBooking, cancelBooking } from './bookings.mjs';
+import { createBooking, releaseDepositForBooking, cancelBooking, hostManagesBooking } from './bookings.mjs';
 import { pushToWalrus } from './walrus.mjs';
 import { escapeHtml } from './emails.mjs';
 import {
   bookingCreateSchema, paymentCreateIntentSchema, hostApplySchema, validateBody,
-  claimDamageSchema, claimDamageConfirmSchema, disputeClaimSchema, disputeClaimConfirmSchema, resolveDisputeSchema
+  claimDamageSchema, claimDamageConfirmSchema, disputeClaimSchema, disputeClaimConfirmSchema, resolveDisputeSchema,
+  guestProfileSchema
 } from './validation.mjs';
 
 dotenvConfig();
@@ -190,12 +191,107 @@ fastify.get('/auth/me', async (request, reply) => {
     if (hp.rows.length > 0) hostStatus = hp.rows[0].status;
   } catch {}
 
+  // Phase 2f: whether this guest has completed identity verification (a
+  // guest_verifications row), so the frontend can gate booking + prompt /profile.
+  let hasGuestProfile = false;
+  try {
+    const gv = await pool.query('SELECT 1 FROM guest_verifications WHERE sui_address = $1', [session.suiAddress]);
+    hasGuestProfile = gv.rows.length > 0;
+  } catch {}
+
   return {
     address: session.suiAddress,
     email: session.email,
     name: session.name,
     isHost: isHost(session),
-    hostStatus
+    hostStatus,
+    hasGuestProfile
+  };
+});
+
+// ─── Phase 2: guest PII (Walrus + Seal) ──────────────────────────────────────
+// The guest encrypts their PII client-side with Seal (identity = their Sui
+// address) and stores the ciphertext on Walrus; only the blob POINTER is sent
+// here. No PII ever touches the backend.
+fastify.post('/guest/profile', async (request, reply) => {
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
+  if (validateBody(guestProfileSchema, request, reply)) return;
+  const { walrusBlobId, phoneVerified } = request.body;
+  try {
+    await pool.query(
+      `INSERT INTO guest_verifications (sui_address, walrus_blob_id, phone_verified)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (sui_address)
+       DO UPDATE SET walrus_blob_id = EXCLUDED.walrus_blob_id,
+                     phone_verified = EXCLUDED.phone_verified`,
+      [session.suiAddress, walrusBlobId, phoneVerified === true]
+    );
+  } catch (err) {
+    fastify.log.error({ err }, '/guest/profile: save failed');
+    return reply.code(500).send({ error: 'Could not save your verification' });
+  }
+  return { success: true, verified: true, walrusBlobId };
+});
+
+fastify.get('/guest/profile', async (request, reply) => {
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
+  try {
+    const r = await pool.query(
+      'SELECT walrus_blob_id, phone_verified FROM guest_verifications WHERE sui_address = $1',
+      [session.suiAddress]
+    );
+    if (r.rows.length === 0) return { verified: false, walrusBlobId: null };
+    return { verified: true, walrusBlobId: r.rows[0].walrus_blob_id, phoneVerified: r.rows[0].phone_verified };
+  } catch (err) {
+    fastify.log.error({ err }, '/guest/profile: lookup failed');
+    return reply.code(500).send({ error: 'Could not load your verification' });
+  }
+});
+
+// Returns the pointer + on-chain handles a host needs to build the seal_approve
+// dry-run PTB and decrypt the guest's PII client-side. The backend NEVER sees
+// plaintext PII or decryption keys — it only confirms the caller is this
+// booking's host and hands back the blob id + escrow object id. On-chain,
+// escrow.move's seal_approve independently enforces sender == escrow.host, so
+// this route is defense-in-depth, not the sole gate.
+fastify.get('/host/guest-identity/:bookingRef', async (request, reply) => {
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
+  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
+
+  const { bookingRef } = request.params;
+  if (!bookingRef || typeof bookingRef !== 'string' || !bookingRef.startsWith('ARIA-'))
+    return reply.code(400).send({ error: 'A valid bookingRef is required' });
+
+  let booking;
+  try {
+    const r = await pool.query('SELECT * FROM bookings WHERE booking_ref = $1', [bookingRef]);
+    booking = r.rows[0];
+  } catch (err) {
+    fastify.log.error({ err }, '/host/guest-identity: lookup failed');
+    return reply.code(500).send({ error: 'Booking lookup failed' });
+  }
+  if (!booking) return reply.code(404).send({ error: 'Booking not found' });
+  if (!(await hostManagesBooking(session, booking)))
+    return reply.code(403).send({ error: 'You do not manage this booking' });
+  if (!booking.escrow_object_id)
+    return reply.code(409).send({ error: 'No active escrow for this booking — identity access requires a live booking' });
+
+  let gv;
+  try {
+    gv = await pool.query('SELECT walrus_blob_id FROM guest_verifications WHERE sui_address = $1', [booking.wallet_address]);
+  } catch (err) {
+    fastify.log.error({ err }, '/host/guest-identity: verification lookup failed');
+    return reply.code(500).send({ error: 'Verification lookup failed' });
+  }
+  if (gv.rows.length === 0) return reply.code(404).send({ error: 'This guest has no stored identity' });
+
+  return {
+    blobId: gv.rows[0].walrus_blob_id,
+    escrowObjectId: booking.escrow_object_id,
+    guestAddress: booking.wallet_address,
   };
 });
 

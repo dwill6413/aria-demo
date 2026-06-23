@@ -3,6 +3,21 @@
 **Purpose:** Complete handoff for an AI assistant continuing ARIA development.
 Read this entire document before writing any code.
 
+> **June 23, 2026 (Phase 2 — Seal/Walrus guest PII BUILT):** The full guest-PII
+> system landed (see Phase 2 build order). `seal_approve` added to `escrow.move`
+> (+3 Move tests) — gates PII decrypt on `sender == escrow.host` and the identity
+> being the escrow's guest; ships in the SAME v4 publish as the fee functions.
+> `guest_verifications` table (pointer only, no PII); `/guest/profile` +
+> `/host/guest-identity` routes; `hasGuestProfile` in `/auth/me`; booking gate in
+> `createBooking` behind `REQUIRE_GUEST_VERIFICATION`; `lib/seal.js` (encrypt +
+> Seal-decrypt helpers, 2-of-2 Mysten testnet key servers); `pages/profile.jsx`
+> (guest encrypt → Walrus) and a host "View Guest Identity" decrypt modal in
+> `pages/host.jsx`; `signPersonalMessageWithZkLogin` for Seal's SessionKey. OPEN
+> (operator/env): `pnpm add @mysten/seal`; the v4 publish (bundles seal_approve +
+> fee fns) then set `NEXT_PUBLIC_ESCROW_PACKAGE_ID`; in-browser Seal smoke test
+> (incl. zkLogin SessionKey signing — untested); flip `REQUIRE_GUEST_VERIFICATION`
+> when ready; mainnet key-server provider + decrypt audit logging.
+>
 > **June 23, 2026 (Phase 1h.5 — backend + contract BUILT):** Fee collection /
 > payment routing was implemented on the backend and contract (file-by-file log
 > in `ARIA_FEE_DESIGN.md` §14). New `BookingPaymentEscrow` +
@@ -514,18 +529,33 @@ original package ID (`0x538262...7fdbe`); no separate contract deployment.
    REMAINING: generate/set ARIA_FEE_ADDRESS + ARIA_TAX_REMITTANCE_ADDRESS, run
    both test suites + an in-browser smoke test, and the v4 on-chain publish —
    still bundled with 2a's seal_approve so there is ONE v4 publish, not two.
-⬜ Phase 2a: Add seal_approve() AND BookingPaymentEscrow/release_payment/
-   refund_payment (Phase 1h.5) to escrow.move, publish ONE upgrade (package **v4**)
-⬜ Phase 2b: Pick testnet key servers + threshold (no contract deploy — see Phase 2 above)
-⬜ Phase 2c: guest_verifications table in db.mjs (no pii_object_id column)
-⬜ Phase 2d: /guest/profile + /host/guest-identity routes (latter returns escrow_object_id too)
-⬜ Phase 2e: Booking gate in /booking/create and AI create_booking
-⬜ Phase 2f: hasGuestProfile in /auth/me
-⬜ Phase 2g: pages/profile.jsx (Seal encrypt + Walrus store)
-⬜ Phase 2h: Host "View Guest Identity" modal in pages/host.jsx — incl. SessionKey
-   create/sign step before decrypt
+🟨 Phase 2a: seal_approve() added to escrow.move (June 23, 2026) — CODE DONE,
+   +3 Move tests. `public entry fun seal_approve<T>(id, escrow, ctx)` asserts
+   id == address::to_bytes(escrow.guest) AND sender == escrow.host. Still needs
+   the v4 publish, which now ships seal_approve AND the Phase 1h.5 fee functions
+   in ONE upgrade (package v4) via the cold UpgradeCap key.
+🟨 Phase 2b: testnet key servers + threshold CHOSEN (lib/seal.js): both Mysten
+   testnet servers, threshold 2-of-2 (drop to 1 for availability). Mainnet needs
+   a paid/third-party key-server provider — still open.
+✅ Phase 2c: guest_verifications table in db.mjs (June 23, 2026)
+✅ Phase 2d: /guest/profile (POST/GET) + /host/guest-identity/:bookingRef routes (June 23, 2026)
+✅ Phase 2e: Booking gate in createBooking() — both REST + AI paths, behind
+   REQUIRE_GUEST_VERIFICATION env flag (dormant until turned on) (June 23, 2026)
+✅ Phase 2f: hasGuestProfile in /auth/me (June 23, 2026)
+✅ Phase 2g: pages/profile.jsx — Seal encrypt + Walrus store (June 23, 2026; lib/seal.js encryptAndStorePII)
+✅ Phase 2h: pages/host.jsx "View Guest Identity" modal — SessionKey sign +
+   seal_approve PTB + decrypt (June 23, 2026; lib/seal.js fetchAndDecryptPII,
+   lib/zklogin.js signPersonalMessageWithZkLogin)
 (Phase 2i eliminated — access revocation is automatic via escrow object
  deletion in auto_release/accept_claim/resolve_dispute; nothing to wire.)
+
+   Phase 2 OPEN ITEMS (operator/env, not code): (1) `pnpm add @mysten/seal`
+   (frontend dep, not yet installed); (2) the v4 on-chain publish (bundles
+   seal_approve + fee functions), then set NEXT_PUBLIC_ESCROW_PACKAGE_ID to the
+   v4 id so the seal_approve CALL targets the right package; (3) in-browser smoke
+   test of the whole Seal flow incl. zkLogin SessionKey personal-message signing
+   (untested — only exercised here); (4) flip REQUIRE_GUEST_VERIFICATION=true once
+   the profile UI is live; (5) mainnet key-server provider + decrypt audit logging.
 
 ⬜ Phase 3: 5-day timing gate + auto-release job + claim/dispute flows
 ```

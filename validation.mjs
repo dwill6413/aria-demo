@@ -89,6 +89,14 @@ export const bookingPaymentConfirmSchema = z.object({
   digest: z.string().min(1, 'digest is required')
 });
 
+// Phase 2: the guest reports the Walrus blob id of their Seal-encrypted PII
+// after encrypting + storing it client-side. No PII is accepted by the backend
+// — only the pointer. phoneVerified is an optional demo flag.
+export const guestProfileSchema = z.object({
+  walrusBlobId: z.string().min(1, 'walrusBlobId is required'),
+  phoneVerified: z.boolean().optional()
+});
+
 // Runs a zod schema against request.body and sends a 400 with a readable
 // message if it fails. Returns true if validation failed (caller should
 // `return` immediately after calling this), false if the body is valid.

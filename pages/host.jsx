@@ -64,6 +64,11 @@ export default function Host() {
   const [applicationsLoading, setApplicationsLoading] = useState(false);
   const [approvingId, setApprovingId] = useState(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  // Phase 2h: guest-identity decrypt modal
+  const [identityModal, setIdentityModal] = useState(null); // booking being viewed
+  const [identityStatus, setIdentityStatus] = useState('idle'); // idle|loading|signing|decrypting|done|error
+  const [identityData, setIdentityData] = useState(null);
+  const [identityError, setIdentityError] = useState('');
 
   useEffect(() => {
     authFetch(`${API}/auth/me`)
@@ -218,6 +223,41 @@ export default function Host() {
     const data = await res.json();
     if (data.success) { const bkRes = await authFetch(`${API}/bookings/all`); const bkData = await bkRes.json(); setBookings(bkData.bookings || []); }
     setReleasingId(null);
+  };
+
+  // Phase 2h: fetch the guest's encrypted PII pointer, then decrypt client-side
+  // via Seal (gated on-chain by escrow.move's seal_approve: only this booking's
+  // host, only while the escrow is live). ARIA's backend never sees plaintext.
+  const handleViewIdentity = async (b) => {
+    setIdentityModal(b);
+    setIdentityData(null);
+    setIdentityError('');
+    setIdentityStatus('loading');
+    try {
+      const res = await authFetch(`${API}/host/guest-identity/${b.bookingRef}`);
+      const meta = await res.json();
+      if (!res.ok) throw new Error(meta.error || 'Could not load guest identity');
+
+      const { fetchAndDecryptPII } = await import('../lib/seal');
+      const { getZkLoginSuiClient, signPersonalMessageWithZkLogin } = await import('../lib/zklogin');
+
+      setIdentityStatus('signing'); // SessionKey personal-message signature
+      const pii = await fetchAndDecryptPII({
+        suiClient: getZkLoginSuiClient(),
+        blobId: meta.blobId,
+        guestAddress: meta.guestAddress,
+        escrowObjectId: meta.escrowObjectId,
+        hostAddress: user.address,
+        signPersonalMessage: signPersonalMessageWithZkLogin,
+      });
+
+      setIdentityData(pii);
+      setIdentityStatus('done');
+    } catch (err) {
+      console.error('View guest identity failed:', err);
+      setIdentityError(err.message || 'Could not decrypt guest identity');
+      setIdentityStatus('error');
+    }
   };
 
   // Finding #9: sum the raw numeric fields (totalAmount/ariaFee/taxes) the
@@ -480,6 +520,12 @@ export default function Host() {
                           <button onClick={() => handleReleaseDeposit(b.bookingRef)} disabled={releasingId === b.bookingRef}
                             style={{ background: '#0a0a1a', border: '1px solid #1a1a3a', color: releasingId === b.bookingRef ? '#555' : '#4a9eff', fontSize: '11px', padding: '4px 10px', borderRadius: '6px', cursor: releasingId === b.bookingRef ? 'not-allowed' : 'pointer', fontWeight: '600' }}>
                             {releasingId === b.bookingRef ? 'Releasing...' : '🔓 Release Deposit'}
+                          </button>
+                        )}
+                        {b.paymentStatus !== 'cancelled' && (
+                          <button onClick={() => handleViewIdentity(b)}
+                            style={{ background: 'transparent', border: '1px solid #2a2a3a', color: '#a98aff', fontSize: '11px', padding: '4px 10px', borderRadius: '6px', cursor: 'pointer', fontWeight: '600' }}>
+                            🪪 View Guest Identity
                           </button>
                         )}
                       </div>
@@ -801,6 +847,59 @@ export default function Host() {
                 style={{ flex: 2, background: remittingId ? '#333' : '#ffaa00', color: remittingId ? '#555' : '#000', border: 'none', borderRadius: '8px', padding: '12px', fontSize: '14px', fontWeight: '700', cursor: remittingId ? 'not-allowed' : 'pointer' }}>
                 {remittingId ? 'Recording...' : `Confirm Remittance — $${remitModal.taxAmount}`}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Phase 2h: Guest Identity (Seal decrypt) Modal */}
+      {identityModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '24px' }}>
+          <div style={{ background: '#111', border: '1px solid #2a2a3a', borderRadius: '16px', width: '100%', maxWidth: '460px', padding: '28px' }}>
+            <h3 style={{ margin: '0 0 4px', fontSize: '19px', fontWeight: '700' }}>🪪 Guest Identity</h3>
+            <p style={{ color: '#666', fontSize: '13px', margin: '0 0 18px' }}>
+              {identityModal.guestName || 'Guest'} · Ref {identityModal.bookingRef}
+            </p>
+
+            {identityStatus !== 'done' && identityStatus !== 'error' && (
+              <div style={{ color: '#a98aff', fontSize: '13px', padding: '16px 0' }}>
+                {identityStatus === 'loading' && '🔎 Loading encrypted record…'}
+                {identityStatus === 'signing' && '🖊️ Approve the decryption request in your wallet…'}
+                {identityStatus === 'decrypting' && '🔐 Decrypting with Seal…'}
+              </div>
+            )}
+
+            {identityStatus === 'error' && (
+              <div style={{ background: '#1a1212', border: '1px solid #2a1a1a', borderRadius: '8px', padding: '12px', color: '#ff6666', fontSize: '12px', lineHeight: 1.5 }}>
+                ⚠️ {identityError}
+              </div>
+            )}
+
+            {identityStatus === 'done' && identityData && (
+              <div style={{ background: '#0a0a14', border: '1px solid #1d1d3a', borderRadius: '8px', padding: '14px' }}>
+                {Object.entries(identityData).map(([k, v]) => (
+                  <div key={k} style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', padding: '5px 0', borderBottom: '1px solid #15152a' }}>
+                    <span style={{ color: '#778', fontSize: '12px', textTransform: 'capitalize' }}>{k.replace(/([A-Z])/g, ' $1')}</span>
+                    <span style={{ color: '#cfe', fontSize: '12px', textAlign: 'right', wordBreak: 'break-word' }}>{String(v)}</span>
+                  </div>
+                ))}
+                <p style={{ color: '#566', fontSize: '10px', margin: '10px 0 0', lineHeight: 1.5 }}>
+                  Decrypted in your browser via Seal. ARIA never sees this data. Access ends automatically when the booking settles.
+                </p>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: '8px', marginTop: '18px' }}>
+              <button onClick={() => { setIdentityModal(null); setIdentityData(null); setIdentityStatus('idle'); setIdentityError(''); }}
+                style={{ flex: 1, background: 'transparent', border: '1px solid #333', color: '#888', borderRadius: '8px', padding: '11px', fontSize: '13px', cursor: 'pointer' }}>
+                Close
+              </button>
+              {identityStatus === 'error' && (
+                <button onClick={() => handleViewIdentity(identityModal)}
+                  style={{ flex: 1, background: '#2a2a3a', border: 'none', color: '#cfc', borderRadius: '8px', padding: '11px', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>
+                  Retry
+                </button>
+              )}
             </div>
           </div>
         </div>
