@@ -1,14 +1,14 @@
 [phases.setup]
 nixPkgs = ["nodejs_22"]
 
-# Use pnpm (matches pnpm-lock.yaml) — faster + reliable vs `npm install`, which
-# did a full fresh resolution of the large Sui/Seal tree every deploy (and once
-# timed out Railway's build heartbeat). Run pnpm via `npx` rather than corepack
-# (Node 22.11's corepack ships stale signing keys → "Cannot find matching keyid")
-# or `npm install -g` (global bin isn't on PATH in the next build layer →
-# "pnpm: command not found"). npx fetches pnpm and runs it directly, in one step.
+# Install deps with pnpm (matches pnpm-lock.yaml), run via `npx` — avoids
+# corepack (Node 22.11's corepack has stale signing keys) and `npm install -g`
+# (global bin not on PATH in the next build layer). Pin pnpm 10, NOT 11: the
+# nixpacks nodejs_22 image is Node 22.11, and pnpm 11 requires Node >= 22.13.
+# pnpm 10 reads the lockfileVersion 9.0 lockfile fine. --frozen-lockfile installs
+# exactly what the committed lockfile pins (much faster than npm's fresh resolve).
 [phases.install]
-cmds = ["npx --yes pnpm@11.1.2 install --frozen-lockfile"]
+cmds = ["npx --yes pnpm@10 install --frozen-lockfile"]
 
 [start]
 cmd = "node server.mjs"
