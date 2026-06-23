@@ -552,6 +552,31 @@ await test('decodeCreateEscrowArgs: malformed transaction — returns null (no t
   assertEqual(decodeCreateEscrowArgs(null, 'escrow'), null);
 });
 
+// Combined payment+deposit PTB: coinWithBalance consolidates both coins into ONE
+// SplitCoins [payment, deposit], so create_escrow's coin is NestedResult[split, 1].
+// The decoder must read amounts[1] (deposit), not amounts[0] (payment) — the bug
+// that rejected the first live combined booking. Regression lock.
+await test('decodeCreateEscrowArgs: consolidated split — reads deposit at the coin result index', () => {
+  const tx = {
+    inputs: [
+      _pure(bcs.string().serialize('ARIA-1-y')),   // 0 ref
+      _pure(bcs.Address.serialize(_DGUEST)),       // 1 guest
+      _pure(bcs.Address.serialize(_DHOST)),        // 2 host
+      _pure(bcs.Address.serialize(_DARB)),         // 3 arbitrator
+      _pure(bcs.u64().serialize(1n)),              // 4 expiry
+      _pure(bcs.u64().serialize(331000n)),         // 5 payment split amount
+      _pure(bcs.u64().serialize(66000n)),          // 6 deposit split amount
+    ],
+    commands: [
+      { SplitCoins: { coin: { GasCoin: true }, amounts: [{ Input: 5 }, { Input: 6 }] } },
+      { MoveCall: { module: 'escrow', function: 'create_escrow', typeArguments: ['0x2::sui::SUI'],
+        arguments: [{ Input: 0 }, { Input: 1 }, { Input: 2 }, { Input: 3 }, { Input: 4 }, { NestedResult: [0, 1] }, { Input: 7 }] } },
+    ],
+  };
+  const d = decodeCreateEscrowArgs(tx, 'escrow');
+  assertEqual(d.amountMist, '66000'); // deposit (result idx 1), not payment (331000)
+});
+
 // ─── decodeClaimDamageAmountMist (P1-2: authoritative claim amount) ──────────
 // claim_damage(escrow, claim_amount, clock) — amount is arguments[1], a pure u64.
 function claimDamageTxData({ claimMist = 50000 } = {}) {

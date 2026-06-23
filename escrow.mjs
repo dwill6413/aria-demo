@@ -290,12 +290,21 @@ export function decodeCreateEscrowArgs(transaction, moduleName) {
     const [refA, guestA, hostA, , , coinA] = call.arguments;
 
     // Deposit amount = the SplitCoins amount whose result feeds the coin arg.
+    // The coin arg is a result of a SplitCoins. In the original single-escrow
+    // PTB that's NestedResult[splitCmd, 0]. In the COMBINED payment+deposit PTB
+    // (Phase 1h.5), coinWithBalance consolidates both coins into ONE SplitCoins
+    // with amounts [payment, deposit], so the deposit coin is a LATER result
+    // index (NestedResult[splitCmd, 1]). Index amounts[] by that result index —
+    // reading amounts[0] unconditionally would mis-read the payment amount as
+    // the deposit. Backward-compatible: single-split → resultIdx 0 → amounts[0].
     let amountMist = null;
-    const splitIdx = coinA?.Result ?? (coinA?.NestedResult ? coinA.NestedResult[0] : null);
+    let splitIdx = null, resultIdx = 0;
+    if (coinA?.NestedResult) { splitIdx = coinA.NestedResult[0]; resultIdx = coinA.NestedResult[1] ?? 0; }
+    else if (coinA?.Result != null) { splitIdx = coinA.Result; resultIdx = 0; }
     if (splitIdx != null) {
       const sc = commands[splitIdx]?.SplitCoins;
-      if (sc && Array.isArray(sc.amounts) && sc.amounts[0]) {
-        amountMist = _asU64(inputOf(sc.amounts[0]));
+      if (sc && Array.isArray(sc.amounts) && sc.amounts[resultIdx] != null) {
+        amountMist = _asU64(inputOf(sc.amounts[resultIdx]));
       }
     }
 
