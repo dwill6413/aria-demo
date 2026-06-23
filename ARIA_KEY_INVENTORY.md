@@ -25,9 +25,9 @@ load) in Railway environment variables.
 |---|---|
 | Address | `0xc0b4e8b46731329fa83a8a5d93b1600b415fe0b050be986bb3f7cffda22e0ff9` |
 | Status | **Active.** Loaded by the backend from the Railway env var. |
-| Signs | Only `auto_release`. |
-| Why it's low-risk | `auto_release` has no sender check in the contract at all ("callable by anyone") — this key carries **zero special on-chain privilege**. It can't touch a coin it isn't already entitled to release. It just needs enough testnet SUI to pay gas. |
-| When you'd need it | Never manually — the backend's `runAutoReleaseSweep()` calls it automatically on an hourly cron (plus a 30s startup sweep) for any escrow past its expiry with no active claim/dispute. |
+| Signs | The permissionless calls: `auto_release`, `finalize_claim` (v3), and `release_payment` (v4 — the check-in 3-way payment split). |
+| Why it's low-risk | All three have **no sender check** in the contract ("callable by anyone") — this key carries **zero special on-chain privilege**. It can't touch a coin it isn't already entitled to release/split; it only triggers the escrow's own baked-in logic. It just needs enough testnet SUI for gas. |
+| When you'd need it | Never manually — driven by two crons: `runAutoReleaseSweep()` (deposit auto-release + claim-finalize, hourly + 30s startup) and `runCheckInReleaseSweep()` (payment release at check-in, same cadence + 35s startup). |
 
 ## 3. Arbitrator key — original / cold (P1a, June 12, 2026)
 
@@ -44,8 +44,8 @@ load) in Railway environment variables.
 | | |
 |---|---|
 | Address | `0xf46527e18f2fd7d3093c9591ded66e3a8711a18de63cd0bede2d88692e6f6a65` |
-| Status | **Generated and funded, not yet wired up.** Private key was delivered to you in chat only (never written to a file) — pending manual step: add it to Railway as `ARIA_ARBITRATOR_KEY`, and update `ARIA_ARBITRATOR_ADDRESS` to this address. |
-| Signs | Only `resolve_dispute` (contract requires `sender == escrow.arbitrator`). |
+| Status | **Active — loaded by the backend.** `ARIA_ARBITRATOR_KEY` set in Railway and `ARIA_ARBITRATOR_ADDRESS` = this address (confirmed in deploy logs June 18 + June 23, 2026: `Sui arbitrator keypair loaded: 0xf46527e1…`). |
+| Signs | `resolve_dispute`, `refund_payment`, and `refund_deposit` — all contract-gated on `sender == escrow.arbitrator`. (Phase 1h.5 added the two refund calls, signed by this same key via `/booking/cancel`.) |
 | Why it's separate from #3 | An automated `/booking/resolve-dispute` route needs a key the backend can actually load and sign with. Key #3 was deliberately built to never be loaded by anything — so this new key fills that operational gap without compromising the "arbitrator key stays cold" design for #3. |
 | When you'd need it | Automatically — once Railway is updated, the backend signs `resolve_dispute` with this key whenever `/booking/resolve-dispute` is called. Applies only to escrows **created after** the Railway update (see #3's caveat). |
 
@@ -64,6 +64,17 @@ load) in Railway environment variables.
 
 ---
 
+## 6. Demo host address (`DEMO_HOST_ADDRESS`)
+
+| | |
+|---|---|
+| Address | `0x1de92e91ad61de63de2db649203164e772f74ff984b0c6870ffa798a7b391c8b` |
+| Status | **Set in Railway (June 23, 2026).** This is the operator's own zkLogin address (the Google demo account), used as the `host` for the 6 demo properties whose `catalog.mjs` `hostAddress` is `null`. |
+| Why it exists | `claim_damage`, `seal_approve`, and the payout all assert `sender == escrow.host`. For the demo to exercise host actions (release deposit, view guest identity, file a claim) end-to-end from one logged-in account, the escrow's host must be an address the operator can sign with — so it's set to this zkLogin address. |
+| Scope | Only affects NEW bookings on demo properties (existing escrows keep their old host baked in immutably). Becomes dead config once real hosts onboard with per-property addresses — see `ARIA_ROADMAP.md` tech-debt "Properties frontend-hardcoded / host onboarding" for the payout-vs-signing-address constraint. |
+
+---
+
 ## Not ARIA-controlled keys (for context, not in your vault)
 
 - **Guest wallets** — each guest signs `create_escrow` with their own zkLogin-derived wallet. ARIA never holds or sees their private key.
@@ -75,13 +86,17 @@ load) in Railway environment variables.
 
 | Question | Answer |
 |---|---|
-| "Which key does the backend use day-to-day?" | #2 (auto-release) today; #4 (new arbitrator) once Railway is updated. |
+| "Which key does the backend use day-to-day?" | #2 (auto-release, signs the permissionless sweeps) and #4 (arbitrator, signs resolve_dispute + the cancel refunds) — both active in Railway. |
 | "Which key should never touch a server?" | #1 (deployer/UpgradeCap) and #3 (original arbitrator) — both cold-storage only. |
-| "Which key resolves a dispute on an old escrow?" | #3, if the escrow was created before the Railway update; #4 otherwise. |
+| "Which key resolves a dispute on an old escrow?" | #3, if the escrow was created before the June 17 Railway update; #4 otherwise. |
 | "Which key has the most power if leaked?" | #1 — it can upgrade the contract. |
 
 ---
 
-*Created June 17, 2026, alongside P2 completion. Update this file whenever a
-key is rotated, retired, or a new one is generated — keep it in sync with the
-Environment Variables sections of `ARIA_HANDOFF.md` and `ARIA_ROADMAP.md`.*
+*Created June 17, 2026 (P2). Last updated June 23, 2026: arbitrator key #4 marked
+active (loaded in Railway, now also signs Phase 1h.5 `refund_payment`/
+`refund_deposit`); auto-release key #2 also signs `finalize_claim` + `release_payment`;
+treasury addresses (#5) and `DEMO_HOST_ADDRESS` (#6) recorded; deployer key #1
+signed the v4 upgrade. Update whenever a key is rotated, retired, or generated —
+keep in sync with the Environment Variables sections of `ARIA_HANDOFF.md` /
+`ARIA_ROADMAP.md` and with `ARIA_PACKAGE_INVENTORY.md`.*
