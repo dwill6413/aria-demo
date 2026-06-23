@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import { authFetch } from '../lib/authFetch';
+import { signTransactionWithZkLogin, submitSignedTransaction } from '../lib/zklogin';
+import { fromBase64 } from '@mysten/sui/utils';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -26,6 +28,10 @@ export default function Bookings() {
   const [reviewedRefs, setReviewedRefs] = useState([]);
   const [menuOpen, setMenuOpen] = useState(false);
   const [addrCopied, setAddrCopied] = useState(false);
+  // Resume-signing for bookings whose escrow was never funded (deposit_status='pending').
+  const [resumeModal, setResumeModal] = useState(null); // rebuild payload for the booking being resumed
+  const [resumeStatus, setResumeStatus] = useState('idle'); // idle|loading|review|signing|submitting|confirming|done|error
+  const [resumeError, setResumeError] = useState('');
 
   const copyAddr = () => {
     navigator.clipboard.writeText(user?.address);
@@ -71,6 +77,60 @@ export default function Bookings() {
       setBookings(updatedData.bookings || []);
     }
     setCancellingId(null);
+  };
+
+  const refreshBookings = async () => {
+    try {
+      const res = await authFetch(`${API}/bookings/history`);
+      const data = await res.json();
+      setBookings(data.bookings || []);
+    } catch {}
+  };
+
+  // Resume an unsigned booking: ask the backend to rebuild the escrow PTB, show
+  // the pre-sign disclosure, then sign+submit+confirm — same path as a fresh
+  // booking, just recovered from My Bookings.
+  const handleResume = async (bookingRef) => {
+    setResumeError('');
+    setResumeStatus('loading');
+    setResumeModal({ bookingRef });
+    try {
+      const res = await authFetch(`${API}/booking/${bookingRef}/escrow/rebuild`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not prepare this booking for signing');
+      if (data.alreadyConfirmed) { await refreshBookings(); setResumeModal(null); setResumeStatus('idle'); return; }
+      setResumeModal({ bookingRef, ...data });
+      setResumeStatus('review');
+    } catch (err) {
+      setResumeError(err.message || 'Could not prepare this booking');
+      setResumeStatus('error');
+    }
+  };
+
+  const handleResumeSign = async () => {
+    const m = resumeModal;
+    if (!m?.escrowTxBytes) return;
+    setResumeError('');
+    try {
+      setResumeStatus('signing');
+      const signature = await signTransactionWithZkLogin(fromBase64(m.escrowTxBytes));
+      setResumeStatus('submitting');
+      const digest = await submitSignedTransaction(m.escrowTxBytes, signature);
+      setResumeStatus('confirming');
+      const confirmRes = await authFetch(`${API}/booking/${m.bookingRef}/escrow/confirm`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ digest }),
+      });
+      const confirmData = await confirmRes.json();
+      if (!confirmRes.ok || !confirmData.success) throw new Error(confirmData.error || 'Escrow could not be verified on-chain');
+      setResumeStatus('done');
+      await refreshBookings();
+      setTimeout(() => { setResumeModal(null); setResumeStatus('idle'); }, 1500);
+    } catch (err) {
+      console.error('Resume signing failed:', err);
+      setResumeError(err.message || 'Could not complete the payment.');
+      setResumeStatus('error');
+    }
   };
 
   useEffect(() => {
@@ -307,6 +367,13 @@ export default function Bookings() {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
                   <div style={{ fontSize: '11px', color: '#555', fontFamily: 'monospace' }}>Ref: {b.bookingRef}</div>
                   <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    {b.paymentStatus !== 'cancelled' && b.depositStatus === 'pending' && (
+                      <button
+                        onClick={() => handleResume(b.bookingRef)}
+                        style={{ background: '#00ff44', border: 'none', color: '#000', fontSize: '12px', padding: '6px 14px', borderRadius: '6px', cursor: 'pointer', fontWeight: '700' }}>
+                        ✍️ Complete payment & sign
+                      </button>
+                    )}
                     {b.paymentStatus !== 'cancelled' && b.walrusBlobId && (
                       <a href={`https://aggregator.walrus-testnet.walrus.space/v1/blobs/${b.walrusBlobId}`}
                         target="_blank" rel="noreferrer"
@@ -388,6 +455,75 @@ export default function Bookings() {
                 style={{ flex: 2, background: reviewSubmitting || !reviewText.trim() ? '#1a1a1a' : '#aa44ff', color: reviewSubmitting || !reviewText.trim() ? '#555' : '#fff', border: 'none', borderRadius: '8px', padding: '12px', fontSize: '14px', fontWeight: '700', cursor: reviewSubmitting || !reviewText.trim() ? 'not-allowed' : 'pointer' }}>
                 {reviewSubmitting ? 'Submitting...' : 'Submit Review'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Resume-signing modal — complete payment for an unsigned booking */}
+      {resumeModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '24px' }}>
+          <div style={{ background: '#0a1410', border: '1px solid #1a3a1a', borderRadius: '16px', width: '100%', maxWidth: '460px', padding: '28px' }}>
+            <h3 style={{ margin: '0 0 4px', fontSize: '19px', fontWeight: '700' }}>Complete your booking</h3>
+            <p style={{ color: '#666', fontSize: '13px', margin: '0 0 16px' }}>{resumeModal.property || ''} · Ref {resumeModal.bookingRef}</p>
+
+            {resumeStatus === 'loading' && (
+              <div style={{ color: '#4a9eff', fontSize: '13px', padding: '12px 0' }}>⏳ Preparing your transaction…</div>
+            )}
+
+            {resumeStatus === 'review' && resumeModal.paymentEscrowBuilt && (
+              <div style={{ background: '#091018', border: '1px solid #1d3a55', borderRadius: '8px', padding: '12px', marginBottom: '14px' }}>
+                <div style={{ color: '#4a9eff', fontWeight: 700, fontSize: '12px', marginBottom: '8px' }}>Review before you sign</div>
+                {[
+                  ['Rental → host', `$${resumeModal.subtotal}`, 'released to your host at check-in'],
+                  ['ARIA fee (3%) → ARIA', `$${resumeModal.ariaFee}`, 'released at check-in'],
+                  ['Taxes → tax remittance', `$${resumeModal.taxes}`, 'released at check-in'],
+                  ['Refundable deposit → escrow', `$${resumeModal.depositAmount}`, 'returned after checkout'],
+                ].map(([label, amt, note], i) => (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', padding: '5px 0', borderBottom: i < 3 ? '1px solid #12202e' : 'none' }}>
+                    <div><div style={{ color: '#cfe3f2', fontSize: '12px' }}>{label}</div><div style={{ color: '#566b7d', fontSize: '10px' }}>{note}</div></div>
+                    <div style={{ color: '#fff', fontSize: '12px', fontWeight: 700, whiteSpace: 'nowrap', paddingLeft: '10px' }}>{amt}</div>
+                  </div>
+                ))}
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '8px', paddingTop: '8px', borderTop: '1px solid #1d3a55' }}>
+                  <span style={{ color: '#fff', fontSize: '12px', fontWeight: 700 }}>Total you sign for</span>
+                  <span style={{ color: '#00ff44', fontSize: '13px', fontWeight: 800 }}>${resumeModal.chargeAmount} SuiUSD</span>
+                </div>
+                <p style={{ color: '#789', fontSize: '10px', lineHeight: 1.5, margin: '8px 0 0' }}>
+                  Cancel before check-in for a full refund of everything above. Funds sit in smart-contract escrow — never in an ARIA wallet.
+                </p>
+              </div>
+            )}
+            {resumeStatus === 'review' && !resumeModal.paymentEscrowBuilt && (
+              <div style={{ color: '#4a9eff', fontSize: '12px', marginBottom: '14px' }}>
+                🔒 Sign to lock your ${resumeModal.depositAmount} refundable deposit in Sui escrow.
+              </div>
+            )}
+
+            {['signing', 'submitting', 'confirming', 'done'].includes(resumeStatus) && (
+              <div style={{ color: '#4a9eff', fontSize: '12px', margin: '8px 0' }}>
+                {resumeStatus === 'signing' && '🔏 Sign the transaction in your wallet…'}
+                {resumeStatus === 'submitting' && '📡 Submitting to Sui…'}
+                {resumeStatus === 'confirming' && '⏳ Confirming on-chain…'}
+                {resumeStatus === 'done' && '✅ Payment escrowed — your booking is fully confirmed!'}
+              </div>
+            )}
+            {resumeStatus === 'error' && (
+              <div style={{ background: '#1a1212', border: '1px solid #2a1a1a', borderRadius: '8px', padding: '10px', color: '#ff6666', fontSize: '12px', marginBottom: '12px' }}>⚠️ {resumeError}</div>
+            )}
+
+            <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
+              <button onClick={() => { setResumeModal(null); setResumeStatus('idle'); setResumeError(''); }}
+                disabled={['signing', 'submitting', 'confirming'].includes(resumeStatus)}
+                style={{ flex: 1, background: 'transparent', border: '1px solid #333', color: '#888', borderRadius: '8px', padding: '11px', fontSize: '13px', cursor: 'pointer' }}>
+                Close
+              </button>
+              {(resumeStatus === 'review' || resumeStatus === 'error') && resumeModal.escrowTxBytes && (
+                <button onClick={handleResumeSign}
+                  style={{ flex: 2, background: '#00ff44', border: 'none', color: '#000', borderRadius: '8px', padding: '11px', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>
+                  {resumeStatus === 'error' ? 'Retry' : 'Approve & sign in wallet'}
+                </button>
+              )}
             </div>
           </div>
         </div>

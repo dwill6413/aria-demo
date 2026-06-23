@@ -584,6 +584,7 @@ original package ID (`0x538262...7fdbe`); no separate contract deployment.
 | Production host address | **Done** | Phase 1i — `getPropertyHostAddress()` in `bookings.mjs`; `catalog.mjs` still needs real per-property `hostAddress` values set once hosts are onboarded |
 | Claim/dispute routes | **Done** | Phase 1j — `/booking/claim-damage`, `/booking/dispute-claim`, `/booking/resolve-dispute` |
 | Properties frontend-hardcoded / host onboarding | Medium | `properties` table empty; `catalog.mjs` carries `hostAddress` per property, hand-maintained. Building real "hosts add their own listings" replaces `DEMO_HOST_ADDRESS` entirely: each property row carries its owner's address and `getPropertyHostAddress` resolves it per-property via `host_profiles.payout_sui_address` (the contract is already multi-host-correct — every escrow bakes in its own host and gates `claim_damage`/`seal_approve`/payout on `sender == escrow.host`). **DESIGN CONSTRAINT (surfaced June 23, 2026):** because `claim_damage` AND `seal_approve` both assert `sender == escrow.host`, a host's `payout_sui_address` must be an address the host can actually SIGN with (their own zkLogin/wallet) — not a receive-only exchange address — or they could receive payouts but never file a damage claim or decrypt a guest's identity. When building host onboarding, either require the payout address to equal the host's signing wallet, or split `host_profiles` into a receive-only `payout_address` and a separate `operator_address` (the one baked into the escrow's `host` field for signing). |
+| **Unsigned-booking trap (UX, found June 23, 2026 via QA)** | 🟨 Fix #1 DONE June 23 | A booking is created (`payment_status='confirmed'`) BEFORE the guest signs the escrow PTB; the "Approve & sign" panel was ephemeral homepage-modal state, so navigating away stranded the booking (no escrow, but it still blocks the dates). **✅ Resume-signing shipped:** `POST /booking/:ref/escrow/rebuild` (guest-owned, `deposit_status='pending'`; recomputes host + a fresh `release_time` and rebuilds the combined PTB via `buildBookingPaymentTransaction`) + a "✍️ Complete payment & sign" button on My Bookings (`pages/bookings.jsx`) that shows the same pre-sign disclosure and runs sign→submit→`/escrow/confirm`. **Still open:** (2) **abandoned-booking sweep** — auto-cancel + free the calendar after a short TTL (a stranded booking still holds the dates until cancelled/signed). |
 | Frontend tax/price duplication | Low | `catalog.mjs` centralizes backend |
 | Stripe webhooks | Medium | Create-intent only |
 | No automated tests | Medium | Backend unit tests in `escrow.test.mjs` — **39 passing** (15 `extractCreatedObjectId`, 8 `verifyEscrowTransaction` incl. object type/amount/host/ref checks, 1 `depositToMist`, 8 `isObjectMutated`, 4 `verifyClaimDamageTransaction`, 3 `verifyDisputeClaimTransaction`). Move suite 28 tests. No frontend tests. |
@@ -748,7 +749,10 @@ needs Node 22.13 but the nixpacks image is 22.11, so we pinned pnpm 10 via npx.
 backend can't observe it; the correct audit point is the `/host/guest-identity`
 route (log host→guest→booking on access *request*).
 
-**TODO June 24 — quick-win batch (confirmed missing, ~1–2h, one commit):**
+**✅ DONE June 23, 2026 (quick-win batch shipped — all 6 below).** Added
+`@fastify/helmet` dep. CSP intentionally deferred (needs a Seal/Walrus/Sui/Google
+origin allowlist validated against the live app, ideally Report-Only first — noted
+in `next.config.mjs`). Everything else live.
 
 | # | Item | Where |
 |---|---|---|

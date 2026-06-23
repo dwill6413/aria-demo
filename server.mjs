@@ -18,9 +18,10 @@ import {
   buildClaimDamageTransaction, buildDisputeClaimTransaction,
   verifyClaimDamageTransaction, verifyDisputeClaimTransaction,
   resolveDisputeEscrow, finalizeClaimEscrow,
-  verifyBookingPaymentTransaction, releasePaymentEscrow
+  verifyBookingPaymentTransaction, releasePaymentEscrow,
+  buildBookingPaymentTransaction, buildEscrowTransaction
 } from './escrow.mjs';
-import { createBooking, releaseDepositForBooking, cancelBooking, hostManagesBooking } from './bookings.mjs';
+import { createBooking, releaseDepositForBooking, cancelBooking, hostManagesBooking, getPropertyHostAddress } from './bookings.mjs';
 import { pushToWalrus } from './walrus.mjs';
 import { escapeHtml } from './emails.mjs';
 import {
@@ -517,6 +518,84 @@ fastify.post('/booking/:bookingRef/escrow/confirm', {
 
   fastify.log.info({ bookingRef, escrowId: verification.escrowId, digest }, 'Escrow verified on-chain and recorded');
   return { success: true, escrowObjectId: verification.escrowId };
+});
+
+// Escrow Rebuild — resume signing a booking whose escrow was never funded.
+// A booking is created (payment_status='confirmed') BEFORE the guest signs the
+// escrow PTB; the original unsigned bytes live only in ephemeral homepage React
+// state, so navigating away strands the booking (deposit_status='pending', no
+// escrow, but it still blocks the dates). This rebuilds the same combined PTB on
+// demand so My Bookings can offer a "Complete payment" action. Guest-owned and
+// only for 'pending' deposits — a fresh release_time is computed since the
+// original 5-min testnet window has likely passed.
+fastify.post('/booking/:bookingRef/escrow/rebuild', {
+  config: {
+    rateLimit: {
+      max: 10, timeWindow: '15 minutes',
+      errorResponseBuilder: () => ({ error: 'Too many attempts. Please wait and try again.' })
+    }
+  }
+}, async (request, reply) => {
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
+
+  const { bookingRef } = request.params;
+  if (!bookingRef || typeof bookingRef !== 'string' || !bookingRef.startsWith('ARIA-'))
+    return reply.code(400).send({ error: 'A valid bookingRef is required' });
+
+  let booking;
+  try {
+    const r = await pool.query('SELECT * FROM bookings WHERE booking_ref = $1', [bookingRef]);
+    booking = r.rows[0];
+  } catch (err) {
+    fastify.log.error({ err, bookingRef }, '/escrow/rebuild: lookup failed');
+    return reply.code(500).send({ error: 'Booking lookup failed' });
+  }
+  if (!booking) return reply.code(404).send({ error: 'Booking not found' });
+  if (booking.wallet_address !== session.suiAddress)
+    return reply.code(403).send({ error: 'This booking does not belong to your account' });
+  if (booking.payment_status === 'cancelled')
+    return reply.code(400).send({ error: 'This booking was cancelled' });
+  if (booking.deposit_status === 'held')
+    return reply.code(200).send({ alreadyConfirmed: true });
+  if (booking.deposit_status !== 'pending')
+    return reply.code(400).send({ error: `Booking is not resumable (status: ${booking.deposit_status})` });
+
+  const hostAddr = await getPropertyHostAddress(booking.property_id, fastify.log);
+  if (!hostAddr) return reply.code(503).send({ error: 'Host address not configured for this property' });
+
+  // Fresh release window — the original (now + 5min testnet) has likely lapsed,
+  // and create_payment_escrow asserts release_time is in the future.
+  const releaseMs = Date.now() + 300_000;
+  const useCombined = !!(process.env.ARIA_FEE_ADDRESS && process.env.ARIA_TAX_REMITTANCE_ADDRESS);
+  let built;
+  try {
+    built = useCombined
+      ? await buildBookingPaymentTransaction(bookingRef, session.suiAddress, hostAddr,
+          { subtotal: booking.subtotal, ariaFee: booking.aria_fee, taxes: booking.taxes, depositAmount: booking.deposit_amount, releaseMs }, fastify.log)
+      : await buildEscrowTransaction(bookingRef, session.suiAddress, hostAddr, booking.deposit_amount, fastify.log);
+  } catch (err) {
+    fastify.log.error({ err, bookingRef }, '/escrow/rebuild: build failed');
+  }
+  if (!built?.txBytes)
+    return reply.code(503).send({ error: 'Could not rebuild the escrow transaction. Please try again.' });
+
+  try {
+    if (useCombined) {
+      await pool.query('UPDATE bookings SET host_sui_address=$1, payment_release_ms=$2 WHERE booking_ref=$3',
+        [hostAddr, String(releaseMs), bookingRef]);
+    } else {
+      await pool.query('UPDATE bookings SET host_sui_address=$1 WHERE booking_ref=$2', [hostAddr, bookingRef]);
+    }
+  } catch (err) { fastify.log.warn({ err, bookingRef }, '/escrow/rebuild: persist failed'); }
+
+  const chargeAmount = (booking.total_amount || 0) + (booking.deposit_amount || 0);
+  return {
+    bookingRef, property: booking.property_title,
+    escrowTxBytes: built.txBytes, paymentEscrowBuilt: useCombined,
+    subtotal: booking.subtotal, ariaFee: booking.aria_fee, taxes: booking.taxes,
+    depositAmount: booking.deposit_amount, chargeAmount,
+  };
 });
 
 // Booking Cancel — delegates to the shared cancelBooking() service (R2 + M1:
