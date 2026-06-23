@@ -28,9 +28,10 @@ ARIA is a full-stack vacation rental platform built natively on Sui blockchain. 
 | Primitive | How ARIA Uses It |
 |---|---|
 | **zkLogin** | Google OAuth creates a Sui wallet automatically — no seed phrase, no friction |
-| **Walrus** | Every booking receipt stored permanently on-chain — tamper-proof and publicly verifiable |
+| **Walrus** | Every booking receipt — and each guest's encrypted identity — stored on Walrus; receipts are tamper-proof and publicly verifiable |
 | **DeepBook** | Host payout calculations run through live on-chain liquidity pools |
-| **Sui Escrow** | Damage deposits held as Sui objects — verifiable by both parties, auto-released on cancellation |
+| **Sui Escrow** | Two non-custodial per-booking escrows: a **deposit escrow** (refundable damage deposit) and a **payment escrow** (rental + ARIA fee + tax), both held as Sui objects and verifiable by both parties |
+| **Seal** | Guests encrypt their identity (KYC-style PII) in-browser; only the host of an active booking can decrypt it, gated on-chain by `seal_approve`. ARIA never sees the plaintext |
 | **SuiUSD** | All guest payments in stable USD — no crypto tax event, no swap volatility |
 
 ---
@@ -39,11 +40,12 @@ ARIA is a full-stack vacation rental platform built natively on Sui blockchain. 
 
 ### Guest Experience
 - 🔐 **zkLogin** — Sign in with Google, Sui wallet created automatically
+- 🪪 **Identity Verification** (`/profile`) — Encrypt KYC-style PII in-browser with Seal, stored on Walrus; only your booking's host can decrypt it. Optional booking gate (`REQUIRE_GUEST_VERIFICATION`)
 - 🏠 **Property Browse** — 6 properties with 5-photo galleries, live ratings, and pricing
-- 📅 **Date Selection** — Live cost breakdown with subtotal, ARIA fee (3%), and occupancy tax (8%)
-- ⚡ **SuiUSD Booking** — Atomic transaction on Sui testnet, settles instantly
+- 📅 **Date Selection** — Live cost breakdown with subtotal, ARIA fee (3%), and occupancy tax
+- ⚡ **One-signature Booking** — A single wallet signature funds **two** on-chain escrows (payment + refundable deposit) atomically; pre-sign panel shows exactly where each leg goes
+- 💸 **Fee follows refund** — Cancel before check-in for a full refund of rental + fee + tax + deposit; at check-in the payment splits to host / ARIA / tax remittance
 - 🧾 **Walrus Receipt** — Permanent on-chain receipt with blob ID in confirmation email
-- ❌ **Cancellation** — Smart cancellation with auto deposit release before check-in
 - 💬 **Secure Messaging** — Per-booking chat with read receipts and unread badges
 - ⭐ **Reviews** — 1–5 star reviews displayed live on property cards
 - 🤖 **AI Agent** — Book, cancel, message hosts, and manage reservations via natural language
@@ -53,6 +55,8 @@ ARIA is a full-stack vacation rental platform built natively on Sui blockchain. 
 - 💰 **Revenue Summary** — Gross → ARIA fee (3%) → taxes (8%) → net earnings, per-property breakdown
 - 📅 **iCal Sync** — Two-way sync with Airbnb and VRBO to prevent double bookings
 - 🔒 **Deposit Management** — Release damage deposits with one click, stored on Walrus
+- 🪪 **View Guest Identity** — Decrypt a booking guest's verified identity in-browser via Seal (only for your own active bookings; logged in `pii_access_log`)
+- 💸 **Automatic check-in payout** — A keeper cron releases each payment escrow's 3-way split (host / ARIA / tax) at check-in; no manual step
 - 💬 **Inbox** — Unread message badges, per-booking threads
 - 🏡 **AI Host Agent** — Revenue summaries, inbox scanning, deposit release via natural language
 
@@ -63,10 +67,14 @@ Every booking lifecycle event generates a permanent Walrus receipt:
 - `depositReleaseWalrusBlobId` — Deposit released
 
 ### Security
-- Global rate limiting — 100 requests/minute per IP
-- Critical route protection — 5 bookings/15min, 10 cancels/hour
-- Input validation on all booking, cancel, and deposit routes
-- Double-booking prevention via receipt-based overlap check with write-first pattern
+- Global rate limiting — 100 requests/minute per IP; per-route limits (5 bookings/15min, 10 cancels/hour); AI chat per-request message/length caps
+- Security headers — `@fastify/helmet` on the API (HSTS, nosniff, frame, referrer) + Next.js headers on the frontend
+- Input validation (Zod) on all booking, cancel, deposit, and verification routes
+- Server-authoritative pricing — subtotal/fee/tax recomputed from `catalog.mjs`; client amounts never trusted
+- Non-custodial escrows — guest signs and submits; backend re-verifies on-chain (lag-free destination-authority checks) before trusting any digest
+- DB integrity — unique index on one-review-per-booking, status CHECK enums, replay-guarded `settlement_digest`
+- Seal PII access logging — every `/host/guest-identity` request recorded in `pii_access_log`
+- Double-booking prevention via atomic insert under a per-property advisory lock
 
 ---
 

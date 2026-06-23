@@ -2,6 +2,7 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
+import helmet from '@fastify/helmet';
 import Stripe from 'stripe';
 import { isValidTransactionDigest } from '@mysten/sui/utils';
 import { dotenvConfig } from './config.mjs';
@@ -136,6 +137,19 @@ await fastify.register(rateLimit, {
   errorResponseBuilder: () => ({
     error: 'Too many requests. Please slow down and try again in a minute.'
   })
+});
+
+// §5f: security headers. This is a JSON API (the HTML/CSP live on the Next
+// frontend — see next.config.mjs), so we disable CSP here and, crucially, keep
+// the cross-origin resource policy OPEN: the Vercel frontend is a different
+// origin and must be able to read API responses. The valuable headers helmet
+// still sets: HSTS, X-Content-Type-Options (nosniff), X-Frame-Options,
+// Referrer-Policy, X-DNS-Prefetch-Control, etc.
+await fastify.register(helmet, {
+  contentSecurityPolicy: false,
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+  crossOriginEmbedderPolicy: false,
+  crossOriginOpenerPolicy: false,
 });
 
 await registerAIRoute(fastify);
@@ -287,6 +301,15 @@ fastify.get('/host/guest-identity/:bookingRef', async (request, reply) => {
     return reply.code(500).send({ error: 'Verification lookup failed' });
   }
   if (gv.rows.length === 0) return reply.code(404).send({ error: 'This guest has no stored identity' });
+
+  // §5f: audit every identity-access request (the decrypt itself is client-side
+  // and unobservable here). Non-blocking — a log failure must not deny access.
+  try {
+    await pool.query(
+      'INSERT INTO pii_access_log (booking_ref, host_address, guest_address) VALUES ($1, $2, $3)',
+      [bookingRef, session.suiAddress, booking.wallet_address]
+    );
+  } catch (err) { fastify.log.warn({ err, bookingRef }, '/host/guest-identity: access-log insert failed'); }
 
   return {
     blobId: gv.rows[0].walrus_blob_id,

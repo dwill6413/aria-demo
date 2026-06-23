@@ -502,6 +502,19 @@ export async function registerAIRoute(fastify) {
     const { messages } = request.body;
     if (!messages || !Array.isArray(messages)) return reply.code(400).send({ error: 'messages array required' });
 
+    // Per-request caps (§5f): the global 100 req/min/IP rate limit doesn't bound
+    // a single request's size, so cap conversation length + total content to keep
+    // a client from spamming a huge messages array and driving up Grok costs.
+    const MAX_AI_MESSAGES = 40;
+    const MAX_AI_CONTENT_CHARS = 24000;
+    if (messages.length > MAX_AI_MESSAGES) {
+      return reply.code(400).send({ error: 'Conversation is too long — please start a new chat.' });
+    }
+    const totalChars = messages.reduce((n, m) => n + (typeof m?.content === 'string' ? m.content.length : 0), 0);
+    if (totalChars > MAX_AI_CONTENT_CHARS) {
+      return reply.code(400).send({ error: 'Message content is too large — please shorten and try again.' });
+    }
+
     // Role is decided here from the verified session — NOT from request.body.mode.
     const isHost = await resolveIsHost(session);
     const tools  = isHost ? HOST_TOOLS : GUEST_TOOLS;

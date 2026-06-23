@@ -8,7 +8,8 @@
         "dev": "next dev",
         "dev:api": "node server.mjs",
         "build": "next build",
-        "start": "next start"
+        "start": "next start",
+        "test": "node escrow.test.mjs"
     },
     "keywords": [],
     "author": "",
@@ -16,6 +17,7 @@
     "dependencies": {
         "@fastify/cookie": "^11.0.2",
         "@fastify/cors": "^11.2.0",
+        "@fastify/helmet": "^13.0.2",
         "@fastify/rate-limit": "^10.3.0",
         "@mysten/deepbook-v3": "^1.3.6",
         "@mysten/seal": "^1.2.1",

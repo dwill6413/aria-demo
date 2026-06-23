@@ -198,6 +198,51 @@ export async function initDB() {
   // Check-in sweep scans for held payment escrows past their release time.
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_bookings_payment_escrow ON bookings(payment_escrow_status, payment_release_ms)`);
 
+  // ── §5f: DB integrity (June 24, 2026) ─────────────────────────────────────
+  // One review per booking — previously only enforced in app code. Guarded so a
+  // pre-existing duplicate (shouldn't exist) logs a notice instead of crashing
+  // startup. Plus an index for the /reviews/:propertyId lookup.
+  await pool.query(`DO $$ BEGIN
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_reviews_booking_ref ON reviews(booking_ref);
+  EXCEPTION WHEN others THEN
+    RAISE NOTICE 'idx_reviews_booking_ref skipped (existing duplicate reviews?): %', SQLERRM;
+  END $$;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_reviews_property_id ON reviews(property_id)`);
+
+  // Status enums as CHECK constraints (catch app bugs at the DB layer). NOT VALID
+  // so existing rows aren't re-checked (no startup failure); enforced on new
+  // writes. Idempotent via pg_constraint lookup.
+  await pool.query(`DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='chk_bookings_payment_status') THEN
+      ALTER TABLE bookings ADD CONSTRAINT chk_bookings_payment_status
+        CHECK (payment_status IN ('confirmed','cancelled')) NOT VALID;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='chk_bookings_deposit_status') THEN
+      ALTER TABLE bookings ADD CONSTRAINT chk_bookings_deposit_status
+        CHECK (deposit_status IN ('pending','held','released','claimed','disputed','forfeited')) NOT VALID;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='chk_bookings_payment_escrow_status') THEN
+      ALTER TABLE bookings ADD CONSTRAINT chk_bookings_payment_escrow_status
+        CHECK (payment_escrow_status IN ('pending','held','released','refunded')) NOT VALID;
+    END IF;
+  END $$;`);
+
+  // ── §5f: Seal PII access audit log (June 24, 2026) ────────────────────────
+  // The actual decrypt happens client-side (lib/seal.js), which the backend
+  // can't observe — so we log every ACCESS REQUEST to /host/guest-identity (who
+  // asked for whose identity, for which booking). Required before real PII on
+  // mainnet (Seal isn't scoped for regulated PII without an audit trail).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS pii_access_log (
+      id            SERIAL PRIMARY KEY,
+      booking_ref   TEXT NOT NULL,
+      host_address  TEXT NOT NULL,
+      guest_address TEXT NOT NULL,
+      accessed_at   TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_pii_access_log_booking_ref ON pii_access_log(booking_ref)`);
+
   console.log('Database initialized');
 }
 
