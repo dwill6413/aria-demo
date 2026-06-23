@@ -1,14 +1,15 @@
 [phases.setup]
 nixPkgs = ["nodejs_22"]
 
-# Use pnpm (matches pnpm-lock.yaml) via corepack — far faster than `npm install`,
-# which was doing a full fresh resolution of the large Sui/Seal dependency tree
-# every deploy and timing out Railway's build heartbeat. --frozen-lockfile
-# installs exactly what the committed lockfile pins.
+# Use pnpm (matches pnpm-lock.yaml) — far faster than `npm install`, which did a
+# full fresh resolution of the large Sui/Seal dependency tree every deploy and
+# timed out Railway's build heartbeat. --frozen-lockfile installs exactly what
+# the committed lockfile pins. We install pnpm via `npm install -g` rather than
+# corepack: the corepack bundled with Node 22.11 ships stale signing keys and
+# fails to verify newer pnpm versions ("Cannot find matching keyid").
 [phases.install]
 cmds = [
-  "corepack enable",
-  "corepack prepare pnpm@11.1.2 --activate",
+  "npm install -g pnpm@11.1.2",
   "pnpm install --frozen-lockfile",
 ]
 
