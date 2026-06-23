@@ -15,6 +15,13 @@
 > STILL OPEN (lower urgency): abandoned-booking sweep (stranded bookings hold
 > dates until cancelled/signed).
 >
+> **Product vision / feature backlog** (brainstorm June 23, 2026) lives in
+> `ARIA_ROADMAP.md` §9 — verifiable reviews, portable on-chain reputation,
+> staked dispute jurors (Theme A); N-way payout split, transferable-booking resale
+> market, host cash-advance (Theme B); Seal-gated smart-lock check-in (Theme C);
+> AI host-ops autopilot + agent-to-agent booking (Theme D). Each is tied to an
+> existing ARIA primitive. Not committed work — the idea bank to pull from next.
+>
 > **June 23, 2026 (Fifth external review — Haiku 4.5):** evaluated; quick-win batch
 > **shipped June 23** (security headers via `@fastify/helmet` + Next headers; DB
 > integrity — `UNIQUE` index on `reviews(booking_ref)` + `reviews(property_id)`

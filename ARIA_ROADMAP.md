@@ -889,7 +889,64 @@ NEXT_PUBLIC_API_URL = https://aria-demo-production-e590.up.railway.app
 
 ---
 
-## 9. Resources
+## 9. Product Vision & Feature Backlog (brainstorm — June 23, 2026)
+
+Future feature directions, each tied to a primitive ARIA already runs (so they're
+buildable, not hand-wavy). ⭐ = highest differentiation / on-brand. Lift is rough.
+These are NOT committed work — they're the idea bank to pull from next.
+
+### Theme A — Trust & reputation (ARIA's real moat vs Airbnb)
+- ⭐ **Verifiable reviews** *(low lift)* — make a review a signed attestation gated
+  on a *settled on-chain booking* (escrow released). Reviews already carry
+  `booking_ref`; tie them to a real completed stay so fake/incentivized reviews
+  become impossible. Reframes ARIA from "cheaper Airbnb" to "the trust layer."
+- ⭐ **Portable on-chain reputation** *(medium)* — a guest's/host's stay history,
+  review record, and dispute record as a Sui object the user OWNS and carries
+  across platforms. Walrus already stores the receipts; make reputation portable
+  and self-sovereign instead of trapped in a platform.
+- **Transparent dispute resolution** *(med-high)* — evolve the existing arbitrator
+  flow into a staked/community-juror system (Kleros-style) for damage disputes,
+  full record on-chain. Replaces the single trusted arbitrator with a credibly
+  neutral one.
+
+### Theme B — New money mechanics (reuse the 3-way payment escrow + DeepBook)
+- ⭐ **N-way payout split** *(low — trivial extension of `BookingPaymentEscrow`)* —
+  generalize rental→host / fee→ARIA / tax→remittance to also auto-pay cleaner,
+  co-host, property manager at check-in. Cheapest big win for real hosts.
+- ⭐ **Booking-as-transferable-object** *(medium)* — a confirmed booking is a Sui
+  object; make it transferable → a legit, escrow-backed reservation resale/transfer
+  market. Airbnb bans this; ARIA can do it safely. Novel + flashy.
+- **Host cash-advance** *(high)* — borrow against confirmed future bookings
+  (receivables as collateral). DeFi × travel.
+
+### Theme C — Physical-world bridge (flashy, demo-winning)
+- ⭐ **Seal-gated smart-lock check-in** *(medium)* — the booking object grants door
+  access only for the stay window, decryptable via the same Seal pattern shipped
+  in Phase 2. Connects the chain to a real lock — the single best live-demo moment.
+
+### Theme D — AI agent depth (reuse the Grok agent)
+- **Host-ops autopilot** *(medium)* — dynamic pricing, auto-draft replies, listing
+  copy, calendar optimization.
+- **Agent-to-agent booking** *(high)* — a guest's AI agent negotiates/books with a
+  host's AI agent. Forward-looking; strong for an "AI + blockchain" track.
+
+### Suggested sequencing (POV, not committed)
+1. **Verifiable reviews + N-way split** — both low lift, both reuse existing
+   structures, both deliver real value fast.
+2. **Portable reputation** — the defensible, can't-be-copied-without-going-on-chain
+   moat; reframes the whole pitch.
+3. **Smart-lock check-in** — build when there's a demo/hackathon to win.
+4. **Booking transfer market**, **dispute jurors**, **agent-to-agent**, **cash-advance**
+   — bigger bets for after product-market signal.
+
+> Prerequisite for most of Theme A/B at scale: real **host onboarding** (the
+> `properties` table is still empty — see Tech Debt "Properties frontend-hardcoded /
+> host onboarding"), since a two-sided marketplace is what makes reputation,
+> splits, and transfers meaningful.
+
+---
+
+## 10. Resources
 
 | Resource | URL |
 |---|---|
