@@ -725,6 +725,50 @@ iCal amplification = §5c/§5d iCal item; package-manager/lockfile drift = §5d.
 
 ---
 
+## 5f. Fifth External Review (Haiku 4.5, June 23, 2026) — Outcomes + TODO
+
+Full security/quality/innovation review evaluated against live code. Overall:
+Security B+, Quality B+, Innovation A. ~A third of its action items were **already
+done** earlier on June 23 (post-snapshot) and a few points were off — see below —
+but it surfaced a clean shortlist of genuine quick wins. **Scheduled for June 24,
+2026** (none are mainnet-blocking on their own; do them as one batch + commit).
+
+**Already done June 23 (review snapshot was stale — do NOT redo):** treasury
+addresses generated + set (`ARIA_FEE_ADDRESS`/`ARIA_TAX_REMITTANCE_ADDRESS`);
+`NEXT_PUBLIC_ESCROW_PACKAGE_ID` set on Vercel; combined payment+deposit PTB **and**
+Seal decrypt (incl. zkLogin SessionKey signing) **smoke-tested live**; both suites
+run green (63 JS / 43 Move); pnpm build switch (`npx pnpm@10 --frozen-lockfile`);
+`ARIA_PACKAGE_INVENTORY.md` updated v2→v4. (= its entire "3.2 Needs Activation" table.)
+
+**Review points that are off (skip):** (1) booking-ref UUID — unnecessary, refs
+already carry a `crypto.randomBytes(3)` suffix AND `bookings.booking_ref` is `UNIQUE`
+(collision prevented twice). (2) `packageManager: pnpm@9` — superseded; pnpm 11
+needs Node 22.13 but the nixpacks image is 22.11, so we pinned pnpm 10 via npx.
+(3) "log every successful Seal **decrypt**" — decrypt is client-side (browser), the
+backend can't observe it; the correct audit point is the `/host/guest-identity`
+route (log host→guest→booking on access *request*).
+
+**TODO June 24 — quick-win batch (confirmed missing, ~1–2h, one commit):**
+
+| # | Item | Where |
+|---|---|---|
+| 1 | **Security headers** — add `@fastify/helmet` (HSTS, CSP, X-Frame-Options, Referrer-Policy, X-Content-Type-Options) + headers in `next.config.mjs`. None present today. | `server.mjs`, `next.config.mjs` |
+| 2 | **DB integrity** — `UNIQUE` index on `reviews(booking_ref)` (1 review/booking, only enforced in code today) + index on `reviews(property_id)` (queried by `/reviews/:propertyId`, unindexed). Optional: `CHECK` enums on `payment_status`/`deposit_status` (one-time data-conformance check first). | `db.mjs` |
+| 3 | **`"test"` script** — `"test": "node escrow.test.mjs"` in `package.json` (prereq for any CI). | `package.json` |
+| 4 | **AI message cap** — `/api/ai/chat` accepts an uncapped `messages` array; add per-request count + total-length cap. | `ai_route.mjs` |
+| 5 | **Guest-identity access log** — small audit table + insert on `/host/guest-identity` (host address, guest address, booking ref, ts). The correctly-framed Seal audit point; needed before real PII on mainnet. | `db.mjs`, `server.mjs` |
+| 6 | **README sync** — add Seal, payment escrow, `/profile` (currently omits all three). | `README.md` |
+
+**Bigger items it (correctly) raised — already on the pre-mainnet gate, own passes:**
+CSRF tokens / strict-Origin + same-site collapse + CSP; DB TLS CA cert (**M4**);
+secrets out of Docker build ARGs (**M7**); numbered SQL migrations; frontend (Jest/RTL)
++ E2E (Playwright) tests + CI automation; independent Move audit + UpgradeCap burn
+decision; per-user zkLogin salt migration (**M3**); `useEscrowSign()` hook to dedupe
+`index.jsx`/`ai.jsx` (~100 lines, **R13**); multi-host scoping for AI tools + dashboards
+(= host-onboarding tech-debt item above).
+
+---
+
 ## 6. Deliberately Deferred
 
 ### zkLogin salt = `'0'`

@@ -1,6 +1,13 @@
 # ARIA — Technical Handoff Document
 **Version:** 4.23 | **Updated:** June 23, 2026
 
+> **June 23, 2026 (Fifth external review — Haiku 4.5):** evaluated; quick-win batch
+> scheduled for June 24 (security headers via `@fastify/helmet` + Next headers; DB
+> integrity — `UNIQUE` index on `reviews(booking_ref)` + `reviews(property_id)`
+> index + optional status CHECK enums; `"test"` script; AI `messages` cap;
+> `/host/guest-identity` access-log table; README sync). Full breakdown + the
+> already-done / off-base items in `ARIA_ROADMAP.md` §5f. None mainnet-blocking.
+>
 > **June 23, 2026 (Phase 2 — Seal/Walrus guest PII BUILT):** Full guest-PII
 > system (see `ARIA_ROADMAP.md` Phase 2). `escrow.move` gains
 > `public entry fun seal_approve<T>(id, escrow, ctx)` — Seal key servers dry-run
