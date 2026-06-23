@@ -1,8 +1,20 @@
 # ARIA — Product Roadmap & AI Handoff Document
-**Version:** 2.22 | **Updated:** June 23, 2026
+**Version:** 2.23 | **Updated:** June 23, 2026
 **Purpose:** Complete handoff for an AI assistant continuing ARIA development.
 Read this entire document before writing any code.
 
+> **June 23, 2026 (LATEST — full E2E QA + §5f quick wins + resume-signing):**
+> Phases 1h.5 + 2 are QA'd end-to-end on live testnet (booking → two-escrow sign →
+> confirm; host PII decrypt works ONLY while live — negative case verified; cancel
+> deletes the escrow → `seal_approve` revokes PII access automatically). §5f
+> quick-win batch shipped (helmet + Next headers, DB integrity indexes/CHECK enums,
+> AI msg cap, `pii_access_log`, test script, README) — see §5f. Resume-signing
+> shipped for the unsigned-booking trap (`/booking/:ref/escrow/rebuild` + "Complete
+> payment & sign" on My Bookings — see Tech Debt "Unsigned-booking trap", fix #1
+> done). Open: abandoned-booking sweep; the bigger §5f items (full CSP/CSRF, Move
+> audit, migrations, frontend tests). Everything green; nothing mainnet-blocking
+> shipped today.
+>
 > **June 23, 2026 (LATE — Phases 1h.5 + 2 SMOKE-TESTED LIVE, PASS):** v4 contract
 > published (`0xf68a874f…`, fee fns + `seal_approve`); env wired (Railway
 > `ESCROW_PACKAGE_ID`/`ARIA_FEE_ADDRESS`/`ARIA_TAX_REMITTANCE_ADDRESS`/

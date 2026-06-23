@@ -1,8 +1,22 @@
 # ARIA — Technical Handoff Document
-**Version:** 4.23 | **Updated:** June 23, 2026
+**Version:** 4.24 | **Updated:** June 23, 2026
 
+> **June 23, 2026 (late — full end-to-end QA + resume-signing):** Phases 1h.5 +
+> 2 are now QA'd end-to-end on live testnet, not just unit-tested:
+> booking → two-escrow signature → confirm; host PII decrypt works ONLY while the
+> booking is live (verified the negative case: no escrow → no decrypt); and on
+> **cancel** the escrow is `object::delete`'d so `seal_approve` can't be satisfied
+> → PII access **auto-revokes** (verified — the elegant no-revoke-call property).
+> Also shipped + QA'd: **resume-signing** for the unsigned-booking trap —
+> `POST /booking/:ref/escrow/rebuild` + a "Complete payment & sign" button on My
+> Bookings rebuild the PTB for a stranded `deposit_status='pending'` booking so a
+> forgotten signature is one-click recoverable instead of a date-blocking zombie.
+> The §5f quick-win batch (below) was completed early (June 23), not June 24.
+> STILL OPEN (lower urgency): abandoned-booking sweep (stranded bookings hold
+> dates until cancelled/signed).
+>
 > **June 23, 2026 (Fifth external review — Haiku 4.5):** evaluated; quick-win batch
-> scheduled for June 24 (security headers via `@fastify/helmet` + Next headers; DB
+> **shipped June 23** (security headers via `@fastify/helmet` + Next headers; DB
 > integrity — `UNIQUE` index on `reviews(booking_ref)` + `reviews(property_id)`
 > index + optional status CHECK enums; `"test"` script; AI `messages` cap;
 > `/host/guest-identity` access-log table; README sync). Full breakdown + the
