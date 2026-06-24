@@ -254,6 +254,50 @@ export async function initDB() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_pii_access_log_booking_ref ON pii_access_log(booking_ref)`);
 
+  // ── Phase 2c: guardrailed resale market ───────────────────────────────────
+  // Host opt-in lives per-listing (Rail 1). transfer_allowed defaults OFF; the
+  // premium cap (Rail 2) is in basis points, 0 = face-value-only. These are read
+  // at booking time and baked into the booking's on-chain ResalePolicy object;
+  // later changes only affect future bookings.
+  await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS transfer_allowed BOOLEAN DEFAULT false`);
+  await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS max_resale_premium_bps INTEGER DEFAULT 0`);
+
+  // Per-booking resale state. resale_policy_object_id points at the on-chain
+  // ResalePolicy; resale_count mirrors its hop counter (Rail 5, max 1);
+  // original_wallet_address preserves provenance across a resale (wallet_address
+  // is reassigned to the buyer on sale). resale_listed / resale_ask_price let the
+  // UI show a listing without reading chain. resale_walrus_blob_id is the
+  // immutable resale receipt.
+  await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS resale_policy_object_id TEXT`);
+  await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS resale_count INTEGER DEFAULT 0`);
+  await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS original_wallet_address TEXT`);
+  await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS resale_listed BOOLEAN DEFAULT false`);
+  await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS resale_ask_price INTEGER`);
+  await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS resale_walrus_blob_id TEXT`);
+
+  // One row per completed resale (provenance + the on-chain split breakdown).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS resales (
+      id              SERIAL PRIMARY KEY,
+      booking_ref     TEXT NOT NULL,
+      seller_address  TEXT NOT NULL,
+      buyer_address   TEXT NOT NULL,
+      face_amount     INTEGER NOT NULL,
+      sale_price      INTEGER NOT NULL,
+      aria_cut        INTEGER NOT NULL,
+      host_cut        INTEGER NOT NULL,
+      seller_cut      INTEGER NOT NULL,
+      tx_digest       TEXT,
+      walrus_blob_id  TEXT,
+      created_at      TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_resales_booking_ref ON resales(booking_ref)`);
+  // Replay guard: one resale row per on-chain tx (partial — NULLs don't collide).
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_resales_tx_digest ON resales(tx_digest) WHERE tx_digest IS NOT NULL`);
+  // Browse the open resale market: listed bookings only.
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_bookings_resale_listed ON bookings(resale_listed) WHERE resale_listed = true`);
+
   console.log('Database initialized');
 }
 
