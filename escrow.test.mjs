@@ -12,7 +12,8 @@ import {
   extractCreatedObjectId, verifyEscrowTransaction, suiClient,
   isObjectMutated, verifyClaimDamageTransaction, verifyDisputeClaimTransaction,
   depositToMist, BookingEscrowBcs, decodeCreateEscrowArgs, decodeClaimDamageAmountMist,
-  dollarsToUnits, decodeCreatePaymentEscrowArgs, verifyBookingPaymentTransaction
+  dollarsToUnits, decodeCreatePaymentEscrowArgs, verifyBookingPaymentTransaction,
+  verifyBuyResaleTransaction
 } from './escrow.mjs';
 import { bcs } from '@mysten/sui/bcs';
 import { toBase64 } from '@mysten/sui/utils';
@@ -772,6 +773,59 @@ await test('verify: failed on-chain tx is rejected', async () => {
   });
   const r = await verifyBookingPaymentTransaction('digest', EXPECTED);
   assertEqual(r.ok, false);
+});
+
+console.log('\nverifyBuyResaleTransaction (Phase 2c)\n');
+
+// A valid buy reassigns BOTH escrows to the buyer (both objects Mutated), signed
+// by the buyer.
+function mockBuyResaleChain({ sender = '0xbuyer', deposit = true, payment = true } = {}) {
+  const changedObjects = [{ objectId: 'gas-coin-id', idOperation: 'Mutated' }];
+  if (deposit) changedObjects.push({ objectId: 'deposit-id', idOperation: 'Mutated' });
+  if (payment) changedObjects.push({ objectId: 'payment-id', idOperation: 'Mutated' });
+  suiClient.core.getTransaction = async () => ({
+    $kind: 'Transaction',
+    Transaction: {
+      status: { success: true, error: null },
+      transaction: { sender },
+      effects: { changedObjects },
+    },
+  });
+}
+
+await test('buy_resale: buyer signed + both escrows reassigned — returns ok:true', async () => {
+  mockBuyResaleChain({ sender: '0xbuyer' });
+  const r = await verifyBuyResaleTransaction('0xdigest', '0xbuyer', 'deposit-id', 'payment-id');
+  assertEqual(r.ok, true, 'expected ok:true');
+  assertEqual(r.sender, '0xbuyer');
+});
+
+await test('buy_resale: wrong sender (not the buyer) — returns ok:false', async () => {
+  mockBuyResaleChain({ sender: '0xsomeoneelse' });
+  const r = await verifyBuyResaleTransaction('0xdigest', '0xbuyer', 'deposit-id', 'payment-id');
+  assertEqual(r.ok, false, 'expected ok:false');
+  assertEqual(r.reason, 'Transaction sender does not match the expected buyer');
+});
+
+await test('buy_resale: deposit escrow not reassigned — returns ok:false', async () => {
+  mockBuyResaleChain({ sender: '0xbuyer', deposit: false });
+  const r = await verifyBuyResaleTransaction('0xdigest', '0xbuyer', 'deposit-id', 'payment-id');
+  assertEqual(r.ok, false, 'expected ok:false');
+});
+
+await test('buy_resale: payment escrow not reassigned — returns ok:false', async () => {
+  mockBuyResaleChain({ sender: '0xbuyer', payment: false });
+  const r = await verifyBuyResaleTransaction('0xdigest', '0xbuyer', 'deposit-id', 'payment-id');
+  assertEqual(r.ok, false, 'expected ok:false');
+});
+
+await test('buy_resale: failed on-chain tx — returns ok:false', async () => {
+  suiClient.core.getTransaction = async () => ({
+    $kind: 'FailedTransaction',
+    FailedTransaction: { status: { error: { message: 'boom' } } },
+  });
+  const r = await verifyBuyResaleTransaction('0xdigest', '0xbuyer', 'deposit-id', 'payment-id');
+  assertEqual(r.ok, false, 'expected ok:false');
 });
 
 // ─── Summary ──────────────────────────────────────────────────────────────────

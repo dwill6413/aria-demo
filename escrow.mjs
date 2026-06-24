@@ -862,12 +862,148 @@ export async function buildBookingPaymentTransaction(bookingRef, guestAddr, host
       });
     }
 
+    // ── ResalePolicy (Phase 2c, gated) ── one extra moveCall so this booking can be
+    // resold under the host's terms (Rail 1 opt-in + Rail 2 cap, read from the listing
+    // at booking time). Only when RESALE_ENABLED is on AND the listing allows transfer;
+    // otherwise omitted, so the booking PTB stays valid on packages without
+    // create_resale_policy (anything before v6).
+    if (process.env.RESALE_ENABLED === 'true' && amounts?.transferAllowed) {
+      tx.moveCall({
+        target: `${PKG}::${MOD}::create_resale_policy`,
+        arguments: [
+          tx.pure.string(bookingRef),
+          tx.pure.address(hostAddr),
+          tx.pure.bool(true),
+          tx.pure.u64(BigInt(amounts.maxPremiumBps || 0)),
+          tx.pure.u64(releaseMsBig),
+          tx.pure.u64(BigInt(propertyId || 0)),
+          tx.pure.u64(BigInt(checkInMs || 0)),
+          tx.pure.u64(BigInt(checkOutMs || 0)),
+        ],
+      });
+    }
+
     const txBytes = await tx.build({ client: suiClient });
     return { txBytes: toBase64(txBytes), releaseMs: releaseMsBig.toString(), expiryMs: expiryMs.toString() };
   } catch (err) {
     logger?.error?.({ message: err.message, name: err.name, stack: err.stack?.split('\n').slice(0, 4).join(' | ') }, 'buildBookingPaymentTransaction error');
     return null;
   }
+}
+
+// ── Resale (Phase 2c) — list / buy / cancel PTB builders + buy verifier ─────────
+// All amounts here are in on-chain UNITS (the same scale as create_payment_escrow's
+// legs / depositToMist), NOT dollars — the caller (server route) converts dollars →
+// units before listing and reads ask_price back from the on-chain ResalePolicy for a
+// buy. Each builder returns an UNSIGNED PTB (txBytes) for the seller/buyer to sign in
+// their own wallet, exactly like the booking flow.
+
+/// Step 1 — SELLER lists. Consumes the soulbound pass, sets the ask. Seller signs.
+export async function buildListForResaleTransaction(sellerAddr, ids, logger = console) {
+  const { depositEscrowId, paymentEscrowId, policyId, passId, askPriceUnits } = ids || {};
+  if (!sellerAddr || !depositEscrowId || !paymentEscrowId || !policyId || !passId || askPriceUnits == null) return null;
+  if (!process.env.ESCROW_PACKAGE_ID) return null;
+  const PKG = process.env.ESCROW_PACKAGE_ID;
+  const MOD = process.env.ESCROW_MODULE_NAME || 'escrow';
+  try {
+    const tx = new Transaction();
+    tx.setSender(sellerAddr);
+    tx.moveCall({
+      target: `${PKG}::${MOD}::list_for_resale`,
+      typeArguments: [COIN_TYPE()],
+      arguments: [
+        tx.object(depositEscrowId),
+        tx.object(paymentEscrowId),
+        tx.object(policyId),
+        tx.object(passId),
+        tx.pure.u64(BigInt(askPriceUnits)),
+        tx.object('0x6'),
+      ],
+    });
+    const txBytes = await tx.build({ client: suiClient });
+    return { txBytes: toBase64(txBytes) };
+  } catch (err) {
+    logger?.error?.({ message: err.message, name: err.name }, 'buildListForResaleTransaction error');
+    return null;
+  }
+}
+
+/// Step 2 — BUYER buys. Funds exactly the ask; gets the booking + a fresh pass. Buyer signs.
+export async function buildBuyResaleTransaction(buyerAddr, ids, logger = console) {
+  const { depositEscrowId, paymentEscrowId, policyId, askPriceUnits } = ids || {};
+  if (!buyerAddr || !depositEscrowId || !paymentEscrowId || !policyId || askPriceUnits == null) return null;
+  if (!process.env.ESCROW_PACKAGE_ID) return null;
+  const PKG = process.env.ESCROW_PACKAGE_ID;
+  const MOD = process.env.ESCROW_MODULE_NAME || 'escrow';
+  try {
+    const tx = new Transaction();
+    tx.setSender(buyerAddr);
+    const payCoin = coinWithBalance({ balance: BigInt(askPriceUnits) });
+    tx.moveCall({
+      target: `${PKG}::${MOD}::buy_resale`,
+      typeArguments: [COIN_TYPE()],
+      arguments: [
+        tx.object(depositEscrowId),
+        tx.object(paymentEscrowId),
+        tx.object(policyId),
+        payCoin,
+        tx.object('0x6'),
+      ],
+    });
+    const txBytes = await tx.build({ client: suiClient });
+    return { txBytes: toBase64(txBytes) };
+  } catch (err) {
+    logger?.error?.({ message: err.message, name: err.name }, 'buildBuyResaleTransaction error');
+    return null;
+  }
+}
+
+/// SELLER cancels a listing — remints the pass back to the seller. Seller signs.
+export async function buildCancelResaleListingTransaction(sellerAddr, policyId, logger = console) {
+  if (!sellerAddr || !policyId || !process.env.ESCROW_PACKAGE_ID) return null;
+  const PKG = process.env.ESCROW_PACKAGE_ID;
+  const MOD = process.env.ESCROW_MODULE_NAME || 'escrow';
+  try {
+    const tx = new Transaction();
+    tx.setSender(sellerAddr);
+    tx.moveCall({
+      target: `${PKG}::${MOD}::cancel_resale_listing`,
+      arguments: [tx.object(policyId)],
+    });
+    const txBytes = await tx.build({ client: suiClient });
+    return { txBytes: toBase64(txBytes) };
+  } catch (err) {
+    logger?.error?.({ message: err.message, name: err.name }, 'buildCancelResaleListingTransaction error');
+    return null;
+  }
+}
+
+/// Verify a completed buy_resale on-chain before the confirm route writes Postgres.
+/// A successful buy MUST (a) be signed by the expected buyer and (b) mutate BOTH the
+/// deposit and payment escrows (their `guest` reassigned to the buyer). Never trust
+/// the client's report — mirrors verifyEscrowMutation.
+export async function verifyBuyResaleTransaction(digest, expectedBuyer, depositEscrowId, paymentEscrowId) {
+  const result = await suiClient.core.getTransaction({
+    digest,
+    include: { transaction: true, effects: true, objectTypes: true },
+  });
+  if (result?.$kind !== 'Transaction') {
+    const errMsg = result?.FailedTransaction?.status?.error?.message;
+    return { ok: false, reason: errMsg || 'resale buy transaction did not succeed on-chain' };
+  }
+  const txn = result.Transaction;
+  const actualSender = txn?.transaction?.sender;
+  if (expectedBuyer && actualSender && actualSender !== expectedBuyer) {
+    return { ok: false, reason: 'Transaction sender does not match the expected buyer' };
+  }
+  const changed = txn?.effects?.changedObjects;
+  if (!isObjectMutated(changed, depositEscrowId)) {
+    return { ok: false, reason: `Buy did not reassign the deposit escrow (${depositEscrowId})` };
+  }
+  if (!isObjectMutated(changed, paymentEscrowId)) {
+    return { ok: false, reason: `Buy did not reassign the payment escrow (${paymentEscrowId})` };
+  }
+  return { ok: true, sender: actualSender };
 }
 
 // Decode create_payment_escrow's args straight from the parsed transaction —
