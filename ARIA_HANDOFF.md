@@ -1,6 +1,20 @@
 # ARIA — Technical Handoff Document
-**Version:** 4.25 | **Updated:** June 24, 2026
+**Version:** 4.26 | **Updated:** June 24, 2026
 
+> **June 24, 2026 (LATEST — v5 published + BookingPass P2a activated):** v5 escrow
+> package `0xd825ec2db47c38758974dd9ae64fb4c4fe996ed383ae228052f30ec3351dc9b8`
+> published — additive upgrade over v4, no compatibility break (`seal_approve` +
+> fee/Seal calls unchanged). Upgrade tx `EoGhMXMEA8mDobxh38WT2WR1hxd4GuobfJqupsthE1LX`.
+> Env rollout applied: Railway `ESCROW_PACKAGE_ID` = v5 + `BOOKING_PASS_ENABLED` =
+> `true` (both confirmed); Vercel `NEXT_PUBLIC_ESCROW_PACKAGE_ID` = v5 (the
+> `seal_approve` call target — present in v5). The mint is **flag-gated only**; the
+> publish→update-package-ids→then-enable ordering is the safeguard, by design (no
+> runtime version guard — `escrow.mjs` checks only `BOOKING_PASS_ENABLED === 'true'`).
+> **Open:** in-browser fresh-booking test confirming the soulbound `BookingPass`
+> actually mints + surfaces in My Bookings (existing bookings won't retroactively
+> mint). Note: the `seal_approve` target now resolves to v5, so an in-flight pre-v5
+> booking's PII decrypt could misbehave — fresh bookings are clean.
+>
 > **June 24, 2026 (verifiable reviews + BookingPass P1 + Codex micro-fixes):**
 > Two ideas pulled off the §9 vision bank. **Verifiable reviews** (Theme A) —
 > `/reviews/submit` now only accepts a review for the caller's own, non-cancelled,
@@ -187,8 +201,9 @@ a `BookingEscrow<SUI>` shared object that holds the deposit on-chain.
 
 | Item | Value |
 |---|---|
-| Package ID (current, **v4**) | `0xf68a874fbdd3e5aa328f6754bd757edc6c2690510284fa39d5088e44b4cd9e77` |
-| Package ID (prior, v3) | `0xec0d6bd45d6bbf3aad04778ace4aacef33c071a30d79090532ba1697644d8fa1` |
+| Package ID (current, **v5**) | `0xd825ec2db47c38758974dd9ae64fb4c4fe996ed383ae228052f30ec3351dc9b8` |
+| Package ID (prior, v4) | `0xf68a874fbdd3e5aa328f6754bd757edc6c2690510284fa39d5088e44b4cd9e77` |
+| Package ID (older, v3) | `0xec0d6bd45d6bbf3aad04778ace4aacef33c071a30d79090532ba1697644d8fa1` |
 | Package ID (type-defining / original) | `0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe` |
 | Module | `escrow` |
 | Network | Sui testnet |
@@ -707,10 +722,12 @@ Railway runs **Node 22** (`nixpacks.toml`: `nodejs_22`). Required by
 ```
 DATABASE_URL, GOOGLE_CLIENT_ID, GOOGLE_CALLBACK_URL, FRONTEND_URL
 HOST_ADDRESSES, SESSION_SECRET, XAI_API_KEY, RESEND_API_KEY, STRIPE_SECRET_KEY
-ESCROW_PACKAGE_ID       = 0xf68a874fbdd3e5aa328f6754bd757edc6c2690510284fa39d5088e44b4cd9e77
-                          (v4 — published June 23, 2026; adds the fee functions +
-                          seal_approve. Upgrade tx x7LUYvjszivxAouFYchPnLLVFSUGzhowYuhVQBArB2v.
-                          Prior v3: 0xec0d6bd45d6bbf3aad04778ace4aacef33c071a30d79090532ba1697644d8fa1)
+ESCROW_PACKAGE_ID       = 0xd825ec2db47c38758974dd9ae64fb4c4fe996ed383ae228052f30ec3351dc9b8
+                          (v5 — published June 24, 2026; adds BookingPass mint_booking_pass.
+                          Upgrade tx EoGhMXMEA8mDobxh38WT2WR1hxd4GuobfJqupsthE1LX.
+                          Prior v4: 0xf68a874fbdd3e5aa328f6754bd757edc6c2690510284fa39d5088e44b4cd9e77)
+BOOKING_PASS_ENABLED    = true   (June 24, 2026 — gates the v5 BookingPass mint; set ON
+                          only after both *_PACKAGE_ID vars were on v5)
                            (LIVE in Railway since June 18, 2026 — v3 upgrade adding
                            finalize_claim; redeploy confirmed clean via deploy logs
                            (deploy db4f1425, both keypairs loaded, DB initialized).
@@ -923,14 +940,14 @@ decoder return the *payment* amount and reject the first live combined booking.
 **Live-confirmed June 23, 2026.** When `seal_approve` is added in a package
 UPGRADE (not the first publish), the ids must be split:
 - **encrypt** and **`SessionKey.create`** require the **original / first-published**
-  package id (`0x538262…`). Passing an upgraded id (v4) throws
+  package id (`0x538262…`). Passing an upgraded id (v4/v5) throws
   **"Package ID used in PTB is invalid"** — Seal only accepts a first-version id.
 - the **`seal_approve` move-call target** must be the **current/upgraded** id
-  (v4 `0xf68a874f…`, where the function actually exists), or `tx.build` fails
-  **"unable to find function …::escrow::seal_approve"**.
+  (now v5 `0xd825ec2d…`, where the function lives — also present in v4), or `tx.build`
+  fails **"unable to find function …::escrow::seal_approve"**.
 Seal reconciles the two by resolving the call's package to its first version. In
 `lib/seal.js`: `SEAL_PACKAGE_ID` (original) for encrypt + SessionKey,
-`CURRENT_PACKAGE_ID` (v4, from `NEXT_PUBLIC_ESCROW_PACKAGE_ID`) for the call.
+`CURRENT_PACKAGE_ID` (v5, from `NEXT_PUBLIC_ESCROW_PACKAGE_ID`) for the call.
 Also: `seal_approve` gates on `sender == escrow.host`, so the host's wallet must
 BE the escrow's host — set `DEMO_HOST_ADDRESS` to that wallet BEFORE the booking
 is created (existing escrows keep the old host immutably), or the key servers

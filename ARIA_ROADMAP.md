@@ -1,9 +1,21 @@
 # ARIA — Product Roadmap & AI Handoff Document
-**Version:** 2.23 | **Updated:** June 23, 2026
+**Version:** 2.24 | **Updated:** June 24, 2026
 **Purpose:** Complete handoff for an AI assistant continuing ARIA development.
 Read this entire document before writing any code.
 
-> **June 23, 2026 (LATEST — full E2E QA + §5f quick wins + resume-signing):**
+> **June 24, 2026 (LATEST — v5 published + BookingPass activated):** Phase 2a
+> shipped to chain. v5 escrow package `0xd825ec2d…dc9b8` published — additive upgrade
+> over v4, no compatibility break (`seal_approve` + fee/Seal calls unchanged; tx
+> `EoGhMXMEA8mDobxh38WT2WR1hxd4GuobfJqupsthE1LX`). Env rollout applied: Railway
+> `ESCROW_PACKAGE_ID` = v5 and `BOOKING_PASS_ENABLED` = `true` (both confirmed);
+> Vercel `NEXT_PUBLIC_ESCROW_PACKAGE_ID` = v5 (the `seal_approve` call target). The
+> mint is **flag-gated only** — the publish→update-package-ids→then-enable ordering is
+> the safeguard, by design (no runtime version guard, intentionally). **Open:** an
+> in-browser fresh-booking test confirming the soulbound `BookingPass` actually mints
+> and shows in My Bookings (existing bookings won't retroactively mint). See §9
+> Phase 2a + `ARIA_PACKAGE_INVENTORY.md`.
+>
+> **June 23, 2026 (full E2E QA + §5f quick wins + resume-signing):**
 > Phases 1h.5 + 2 are QA'd end-to-end on live testnet (booking → two-escrow sign →
 > confirm; host PII decrypt works ONLY while live — negative case verified; cancel
 > deletes the escrow → `seal_approve` revokes PII access automatically). §5f
@@ -856,10 +868,12 @@ Follow-up: one-time authorization code exchange.
 ```
 DATABASE_URL, GOOGLE_CLIENT_ID, GOOGLE_CALLBACK_URL, FRONTEND_URL
 HOST_ADDRESSES, SESSION_SECRET, XAI_API_KEY, RESEND_API_KEY, STRIPE_SECRET_KEY
-ESCROW_PACKAGE_ID       = 0xf68a874fbdd3e5aa328f6754bd757edc6c2690510284fa39d5088e44b4cd9e77
-                          (v4, June 23 2026 — fee functions + seal_approve; prior v3
-                          0xec0d6bd45d6bbf3aad04778ace4aacef33c071a30d79090532ba1697644d8fa1)
-# Vercel also needs NEXT_PUBLIC_ESCROW_PACKAGE_ID = 0xf68a874f...77 (seal_approve CALL target)
+ESCROW_PACKAGE_ID       = 0xd825ec2db47c38758974dd9ae64fb4c4fe996ed383ae228052f30ec3351dc9b8
+                          (v5, June 24 2026 — adds BookingPass mint_booking_pass; prior v4
+                          0xf68a874fbdd3e5aa328f6754bd757edc6c2690510284fa39d5088e44b4cd9e77)
+BOOKING_PASS_ENABLED    = true   (June 24 2026 — gates the v5 BookingPass mint; set ON
+                          only after both *_PACKAGE_ID vars were on v5)
+# Vercel also needs NEXT_PUBLIC_ESCROW_PACKAGE_ID = 0xd825ec2d...c9b8 (seal_approve CALL target)
                            (LIVE in Railway since June 18, 2026 — v3 upgrade adding
                            finalize_claim; redeploy confirmed clean (deploy db4f1425).
                            Prior v2: 0x98e712692f22f308bb6d097d2d8a2743ed0c01058135d71436b4abcd34264f26.
@@ -965,7 +979,7 @@ These are NOT committed work — they're the idea bank to pull from next.
     in-browser smoke test** (server-side zkLogin signature verification, same risk
     class as the Seal SessionKey path — may need a tweak for the gRPC client).
     No contract upgrade. Camera QR scanning (vs paste) is a small follow-up.
-  - 🟨 **Phase 2a — owned `BookingPass` NFT — CODE BUILT June 24, 2026 (gated, pending v5 publish)** — mint an owned
+  - 🟩 **Phase 2a — owned `BookingPass` NFT — PUBLISHED + ACTIVATED June 24, 2026 (v5 `0xd825ec2d…dc9b8`; flag on; in-browser mint test pending)** — mint an owned
     pass to the guest in the booking PTB (`mint_booking_pass`, one extra `moveCall`,
     no extra signature). **Soulbound by default: `public struct BookingPass has key`
     with NO `store` ability** → the owner can't transfer it; only a function inside
