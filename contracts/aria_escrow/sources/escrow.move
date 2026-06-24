@@ -637,6 +637,75 @@ module aria_escrow::escrow {
         assert!(tx_context::sender(ctx) == escrow.host, ENotHost);
     }
 
+    // === BookingPass (Phase 2a — owned, soulbound proof of booking) ===
+
+    // SOULBOUND: `key` only, NO `store`. The guest OWNS it (it sits in their
+    // wallet) but cannot transfer it onward — `transfer::public_transfer`
+    // requires `store`, which we deliberately omit; only a function in THIS
+    // module can move it. So resale stays disabled until the Phase 2c guardrails
+    // (host opt-in, price cap, 50/50 upcharge split, buyer identity, transfer
+    // windows) ship a gated transfer. The pass is IMMUTABLE and carries no
+    // mutable status: its validity is derived from "the guest owns this AND the
+    // booking's escrow is still live", so cancellation (which deletes the escrow)
+    // auto-invalidates it with no void call. Metadata is minimal (booking_ref +
+    // stay window, NO PII / property address) to preserve the Seal privacy posture.
+    public struct BookingPass has key {
+        id:           UID,
+        booking_ref:  String,
+        guest:        address,
+        host:         address,
+        property_id:  u64,
+        check_in_ms:  u64,
+        check_out_ms: u64,
+    }
+
+    public struct BookingPassMinted has copy, drop {
+        pass_id:     ID,
+        booking_ref: String,
+        guest:       address,
+        host:        address,
+    }
+
+    /// Mint a soulbound BookingPass and transfer it to the guest. Called in the
+    /// SAME guest-signed booking PTB that funds the escrows (one extra moveCall,
+    /// no extra signature), so the guest owns it the instant they book. Uses
+    /// `transfer::transfer` (module-internal) — NOT `public_transfer`, which would
+    /// require `store` and make the pass freely transferable.
+    public fun mint_booking_pass(
+        booking_ref:  String,
+        guest:        address,
+        host:         address,
+        property_id:  u64,
+        check_in_ms:  u64,
+        check_out_ms: u64,
+        ctx:          &mut TxContext,
+    ) {
+        let pass = BookingPass {
+            id: object::new(ctx),
+            booking_ref,
+            guest,
+            host,
+            property_id,
+            check_in_ms,
+            check_out_ms,
+        };
+        event::emit(BookingPassMinted {
+            pass_id:     object::id(&pass),
+            booking_ref: pass.booking_ref,
+            guest:       pass.guest,
+            host:        pass.host,
+        });
+        transfer::transfer(pass, guest);
+    }
+
+    // BookingPass accessors
+    public fun pass_booking_ref(p: &BookingPass): String { p.booking_ref }
+    public fun pass_guest(p: &BookingPass): address      { p.guest }
+    public fun pass_host(p: &BookingPass): address       { p.host }
+    public fun pass_property_id(p: &BookingPass): u64     { p.property_id }
+    public fun pass_check_in_ms(p: &BookingPass): u64     { p.check_in_ms }
+    public fun pass_check_out_ms(p: &BookingPass): u64    { p.check_out_ms }
+
     // === Read-Only Accessors ===
 
     public fun status<T>(e: &BookingEscrow<T>): u8        { e.status }

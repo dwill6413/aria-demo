@@ -465,7 +465,8 @@ export async function createBooking({ propertyId, checkIn, checkOut, session, lo
       const useCombined = !!(process.env.ARIA_FEE_ADDRESS && process.env.ARIA_TAX_REMITTANCE_ADDRESS);
       const built = useCombined
         ? await buildBookingPaymentTransaction(bookingRef, session.suiAddress, hostAddr,
-            { subtotal, ariaFee, taxes, depositAmount, releaseMs }, logger)
+            { subtotal, ariaFee, taxes, depositAmount, releaseMs,
+              propertyId: Number(propertyId), checkInMs: Date.parse(checkInStr), checkOutMs: Date.parse(checkOutStr) }, logger)
         : await buildEscrowTransaction(bookingRef, session.suiAddress, hostAddr, depositAmount, logger);
       if (built?.txBytes) {
         escrowTxBytes = built.txBytes;

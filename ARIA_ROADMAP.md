@@ -965,14 +965,39 @@ These are NOT committed work — they're the idea bank to pull from next.
     in-browser smoke test** (server-side zkLogin signature verification, same risk
     class as the Seal SessionKey path — may need a tweak for the gRPC client).
     No contract upgrade. Camera QR scanning (vs paste) is a small follow-up.
-  - ⬜ **Phase 2 — the owned `BookingPass` NFT** *(needs v5 contract)* — mint an owned
-    pass in the booking PTB (`mint_booking_pass`, one extra `moveCall`, no extra
-    signature), a `pass_approve` gate so real **door locks** open only for the stay
-    window (same dry-run pattern as `seal_approve`; **cancel → pass void → lock won't
-    open**, the automatic-revocation property), and the pass becomes the transferable
-    object behind the Theme B resale market + the Theme A reputation history. Keep
-    on-chain metadata minimal (a ref hash, NOT property/dates) so it doesn't undo the
-    Seal privacy posture. Layer: NFC + real lock integration is hardware follow-up.
+  - 🟨 **Phase 2a — owned `BookingPass` NFT — CODE BUILT June 24, 2026 (gated, pending v5 publish)** — mint an owned
+    pass to the guest in the booking PTB (`mint_booking_pass`, one extra `moveCall`,
+    no extra signature). **Soulbound by default: `public struct BookingPass has key`
+    with NO `store` ability** → the owner can't transfer it; only a function inside
+    the module can (so transfer stays off until resale guardrails exist, enforced by
+    the type system). Validity = guest owns pass + the booking's escrow is live →
+    **cancel deletes the escrow → pass auto-invalidates** (no void call needed; reuses
+    the automatic-revocation property). On-chain-verified check-in. Keep on-chain
+    metadata minimal (booking_ref + window, NOT property address/PII) so it doesn't
+    undo the Seal privacy posture.
+  - ⬜ **Phase 2b — smart-lock `pass_approve`** — a Seal-style gate so real **door
+    locks** open only for the stay window if the holder owns an active pass; cancel →
+    escrow gone → won't open. NFC + real lock integration is the hardware follow-up.
+  - ⬜ **Phase 2c — guardrailed resale market (decided June 24, 2026).** Resale IS
+    allowed but fenced so it's "humane cancellation + host-controlled liquidity," not
+    a scalper market. The five rails:
+    1. **Host opt-in per listing** — transferability is a host setting, **off by
+       default**; the pass's gated `transfer_pass` only works if the listing allows it.
+    2. **Price cap** — resale price `P` capped (≤ a host/platform max premium) to
+       prevent runaway gouging.
+    3. **Upcharge split (50/50 host/seller).** Face `F` = original paid; upcharge
+       `U = P − F`. **Seller gets `F + 0.5·U`; host gets `0.5·U`** (on top of the rental
+       already paid at booking). This makes hosts *root for* flips and halves the
+       scalper's margin. *(ARIA platform fee on resale: TBD — currently none.)*
+    4. **Mandatory Seal identity** on the buyer — the host still knows who's actually
+       staying; also adds anti-bot friction.
+    5. **Transfer windows + limits** — no transfer in the final 48h, one hop (no
+       speculative chains), reputation-gated (book-and-flip-without-staying hurts your
+       portable reputation — Theme A).
+    Mechanism: an atomic marketplace swap — buyer pays, **`escrow.guest` is reassigned**
+    (needs a gated, mutable-guest contract change so money/identity/access follow the
+    new holder), the pass transfers, and the splits pay out (`F + 0.5U`→seller,
+    `0.5U`→host). This is what makes a transfer move the WHOLE booking, not just the key.
 
 ### Theme D — AI agent depth (reuse the Grok agent)
 - **Host-ops autopilot** *(medium)* — dynamic pricing, auto-draft replies, listing

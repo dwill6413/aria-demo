@@ -166,6 +166,10 @@ export async function initDB() {
   await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS settlement_digest TEXT`);
   await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_released_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_refunded_at TIMESTAMPTZ`);
+  // BookingPass Phase 2a — the owned, soulbound pass NFT minted to the guest in
+  // the booking PTB (only when BOOKING_PASS_ENABLED + a v5 package that has
+  // mint_booking_pass). Stores the object id so the UI can link to it.
+  await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS booking_pass_object_id TEXT`);
 
   // ── Phase 2: guest PII verification (Walrus + Seal) ───────────────────────
   // Holds only a POINTER to the guest's Seal-encrypted PII blob on Walrus — no

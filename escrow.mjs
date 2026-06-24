@@ -783,7 +783,7 @@ export const BookingPaymentEscrowBcs = bcs.struct('BookingPaymentEscrow', {
 //   releaseMs = check-in (mainnet: checkInMs [+grace]; testnet: a short window so
 //   release_payment is exercisable without waiting — caller decides).
 export async function buildBookingPaymentTransaction(bookingRef, guestAddr, hostAddr, amounts, logger = console) {
-  const { subtotal, ariaFee, taxes, depositAmount, releaseMs } = amounts || {};
+  const { subtotal, ariaFee, taxes, depositAmount, releaseMs, propertyId, checkInMs, checkOutMs } = amounts || {};
   if (!guestAddr || !hostAddr || !process.env.ESCROW_PACKAGE_ID) return null;
   const ariaAddr = process.env.ARIA_FEE_ADDRESS;
   const taxAddr  = process.env.ARIA_TAX_REMITTANCE_ADDRESS;
@@ -843,6 +843,24 @@ export async function buildBookingPaymentTransaction(bookingRef, guestAddr, host
         tx.object('0x6'),
       ],
     });
+
+    // ── BookingPass (Phase 2a, gated) ── mint a soulbound pass to the guest in
+    // the SAME PTB (no extra signature). Only when BOOKING_PASS_ENABLED is set
+    // AND ESCROW_PACKAGE_ID is a v5+ package that actually has mint_booking_pass —
+    // otherwise omitted so the booking PTB stays valid on v4.
+    if (process.env.BOOKING_PASS_ENABLED === 'true') {
+      tx.moveCall({
+        target: `${PKG}::${MOD}::mint_booking_pass`,
+        arguments: [
+          tx.pure.string(bookingRef),
+          tx.pure.address(guestAddr),
+          tx.pure.address(hostAddr),
+          tx.pure.u64(BigInt(propertyId || 0)),
+          tx.pure.u64(BigInt(checkInMs || 0)),
+          tx.pure.u64(BigInt(checkOutMs || 0)),
+        ],
+      });
+    }
 
     const txBytes = await tx.build({ client: suiClient });
     return { txBytes: toBase64(txBytes), releaseMs: releaseMsBig.toString(), expiryMs: expiryMs.toString() };
@@ -936,11 +954,14 @@ export async function verifyBookingPaymentTransaction(digest, expected = {}) {
   // Locate both objects' ids lag-free from the objectTypes map.
   const isPaymentType = (t) => typeof t === 'string' && new RegExp(`::${mod}::BookingPaymentEscrow<`).test(t);
   const isDepositType = (t) => typeof t === 'string' && new RegExp(`::${mod}::BookingEscrow<`).test(t);
+  // BookingPass (Phase 2a) is a non-generic owned object — match the bare type.
+  const isPassType    = (t) => typeof t === 'string' && new RegExp(`::${mod}::BookingPass$`).test(t);
   const objectTypes = txn?.objectTypes || {};
-  let paymentEscrowId = null, depositEscrowId = null;
+  let paymentEscrowId = null, depositEscrowId = null, bookingPassId = null;
   for (const [oid, t] of Object.entries(objectTypes)) {
     if (!paymentEscrowId && isPaymentType(t)) paymentEscrowId = oid;
     else if (!depositEscrowId && isDepositType(t)) depositEscrowId = oid;
+    else if (!bookingPassId && isPassType(t)) bookingPassId = oid;
   }
 
   // PRIMARY: decode both calls' arguments and assert every authoritative value.
@@ -1006,7 +1027,7 @@ export async function verifyBookingPaymentTransaction(digest, expected = {}) {
     return { ok: false, reason: 'Deposit escrow booking_ref does not match this booking' };
   }
 
-  return { ok: true, paymentEscrowId, depositEscrowId, sender: actualSender };
+  return { ok: true, paymentEscrowId, depositEscrowId, bookingPassId, sender: actualSender };
 }
 
 // Permissionless release at check-in — signed by the zero-privilege auto-release

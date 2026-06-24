@@ -466,9 +466,10 @@ fastify.post('/booking/:bookingRef/escrow/confirm', {
       // on-chain tx already confirmed another booking (replay) → PG 23505.
       await pool.query(
         `UPDATE bookings SET escrow_object_id=$1, deposit_status='held',
-           payment_escrow_object_id=$2, payment_escrow_status='held', settlement_digest=$3
-         WHERE booking_ref=$4 AND wallet_address=$5`,
-        [v.depositEscrowId, v.paymentEscrowId, digest, bookingRef, session.suiAddress]
+           payment_escrow_object_id=$2, payment_escrow_status='held', settlement_digest=$3,
+           booking_pass_object_id=$4
+         WHERE booking_ref=$5 AND wallet_address=$6`,
+        [v.depositEscrowId, v.paymentEscrowId, digest, v.bookingPassId || null, bookingRef, session.suiAddress]
       );
     } catch (err) {
       if (err?.code === '23505') {
@@ -573,7 +574,8 @@ fastify.post('/booking/:bookingRef/escrow/rebuild', {
   try {
     built = useCombined
       ? await buildBookingPaymentTransaction(bookingRef, session.suiAddress, hostAddr,
-          { subtotal: booking.subtotal, ariaFee: booking.aria_fee, taxes: booking.taxes, depositAmount: booking.deposit_amount, releaseMs }, fastify.log)
+          { subtotal: booking.subtotal, ariaFee: booking.aria_fee, taxes: booking.taxes, depositAmount: booking.deposit_amount, releaseMs,
+            propertyId: Number(booking.property_id), checkInMs: Date.parse(booking.check_in), checkOutMs: Date.parse(booking.check_out) }, fastify.log)
       : await buildEscrowTransaction(bookingRef, session.suiAddress, hostAddr, booking.deposit_amount, fastify.log);
   } catch (err) {
     fastify.log.error({ err, bookingRef }, '/escrow/rebuild: build failed');
@@ -920,6 +922,7 @@ fastify.get('/bookings/history', async (request, reply) => {
         totalAmount: b.total_amount, ariaFee: b.aria_fee, taxes: b.taxes, chargeAmount,
         paymentStatus: b.payment_status,
         depositAmount: b.deposit_amount, depositStatus: b.deposit_status,
+        bookingPassObjectId: b.booking_pass_object_id,
         walrusBlobId: b.walrus_blob_id,
         cancellationWalrusBlobId: b.cancellation_walrus_blob_id,
         timestamp: b.created_at, walletAddress: b.wallet_address,
@@ -961,6 +964,7 @@ fastify.get('/bookings/all', async (request, reply) => {
         totalAmount: b.total_amount, ariaFee: b.aria_fee, taxes: b.taxes, chargeAmount,
         paymentStatus: b.payment_status,
         depositAmount: b.deposit_amount, depositStatus: b.deposit_status,
+        bookingPassObjectId: b.booking_pass_object_id,
         walrusBlobId: b.walrus_blob_id,
         cancellationWalrusBlobId: b.cancellation_walrus_blob_id,
         guestName: b.guest_name, guestEmail: b.guest_email,

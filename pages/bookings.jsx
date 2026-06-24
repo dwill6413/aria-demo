@@ -307,6 +307,13 @@ export default function Bookings() {
                             : '⏳ Deposit not yet confirmed on-chain'}
                         </span>
                       )}
+                      {b.bookingPassObjectId && (
+                        <a href={`https://suiscan.xyz/testnet/object/${b.bookingPassObjectId}`} target="_blank" rel="noreferrer"
+                          title="Your BookingPass — a soulbound NFT in your wallet"
+                          style={{ background: '#140a1a', border: '1px solid #2a1a3a', color: '#a98aff', fontSize: '11px', fontWeight: '600', padding: '3px 10px', borderRadius: '20px', textDecoration: 'none' }}>
+                          🎫 BookingPass on-chain ↗
+                        </a>
+                      )}
                     </div>
                   </div>
                   <div style={{ textAlign: 'right' }}>

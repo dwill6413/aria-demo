@@ -902,4 +902,30 @@ module aria_escrow::escrow_tests {
         };
         ts::end(s);
     }
+
+    // ── BookingPass (Phase 2a — soulbound owned proof of booking) ───────────────
+
+    /// mint_booking_pass mints a BookingPass OWNED by the guest with the right
+    /// fields. (It's owned, so it's taken from the guest's address — confirming it
+    /// landed in their wallet, not shared.)
+    #[test]
+    fun test_mint_booking_pass() {
+        let mut s = ts::begin(GUEST);
+        ts::next_tx(&mut s, GUEST);
+        {
+            escrow::mint_booking_pass(ref_str(), GUEST, HOST, 1, 1000, 2000, ts::ctx(&mut s));
+        };
+        ts::next_tx(&mut s, GUEST);
+        {
+            let p = ts::take_from_address<escrow::BookingPass>(&s, GUEST);
+            assert!(escrow::pass_guest(&p)        == GUEST, 0);
+            assert!(escrow::pass_host(&p)         == HOST,  1);
+            assert!(escrow::pass_property_id(&p)  == 1,     2);
+            assert!(escrow::pass_check_in_ms(&p)  == 1000,  3);
+            assert!(escrow::pass_check_out_ms(&p) == 2000,  4);
+            assert!(escrow::pass_booking_ref(&p)  == ref_str(), 5);
+            ts::return_to_address(GUEST, p);
+        };
+        ts::end(s);
+    }
 }
