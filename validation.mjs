@@ -97,6 +97,32 @@ export const guestProfileSchema = z.object({
   phoneVerified: z.boolean().optional()
 });
 
+// ── Phase 2c: resale market request bodies ───────────────────────────────────
+// Dollar amounts arrive as number|string (same convention as claim/dispute);
+// the route converts to on-chain units and re-validates face/cap against the
+// booking before building. The on-chain contract enforces all guardrails
+// authoritatively — these schemas only reject malformed bodies early.
+export const resaleListSchema = z.object({
+  askPrice: z.union([z.string(), z.number()])
+});
+
+export const resaleTransferBuildSchema = z.object({
+  bookingRef: z.string().min(1, 'bookingRef is required')
+});
+
+export const resaleTransferConfirmSchema = z.object({
+  bookingRef: z.string().min(1, 'bookingRef is required'),
+  digest: z.string().min(1, 'digest is required')
+});
+
+// Host sets per-listing transfer opt-in (Rail 1) + premium cap in bps (Rail 2).
+// maxPremiumBps 0 = face-value-only resale. Cap at 100% (10000 bps) so a typo
+// can't open an unbounded markup.
+export const resaleSettingsSchema = z.object({
+  transferAllowed: z.boolean(),
+  maxPremiumBps: z.union([z.string(), z.number()]).optional()
+});
+
 // Runs a zod schema against request.body and sends a 400 with a readable
 // message if it fails. Returns true if validation failed (caller should
 // `return` immediately after calling this), false if the body is valid.

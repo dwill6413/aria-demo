@@ -262,6 +262,21 @@ export async function initDB() {
   await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS transfer_allowed BOOLEAN DEFAULT false`);
   await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS max_resale_premium_bps INTEGER DEFAULT 0`);
 
+  // The 6 demo listings live in catalog.mjs, not the `properties` table (which
+  // has NOT NULL location/beds/baths a catalog entry can't satisfy), so resale
+  // opt-in for them is stored here, keyed by the catalog property_id. This is the
+  // single source getResaleSettings() reads and the host settings route upserts;
+  // the properties.* columns above remain for any real DB-backed listing.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS property_resale_settings (
+      property_id            INTEGER PRIMARY KEY,
+      host_address           TEXT,
+      transfer_allowed       BOOLEAN DEFAULT false,
+      max_resale_premium_bps INTEGER DEFAULT 0,
+      updated_at             TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
   // Per-booking resale state. resale_policy_object_id points at the on-chain
   // ResalePolicy; resale_count mirrors its hop counter (Rail 5, max 1);
   // original_wallet_address preserves provenance across a resale (wallet_address

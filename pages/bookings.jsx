@@ -37,6 +37,15 @@ export default function Bookings() {
   const [passModal, setPassModal] = useState(null); // the booking whose pass is open
   const [passPayload, setPassPayload] = useState(''); // current signed payload (base64 JSON)
   const [passError, setPassError] = useState('');
+  // Phase 2c resale: list-for-resale modal + the buyer marketplace.
+  const [listModal, setListModal] = useState(null);   // booking being listed for resale
+  const [listPrice, setListPrice] = useState('');     // seller's ask (dollars)
+  const [resaleStatus, setResaleStatus] = useState('idle'); // idle|signing|submitting|confirming|done|error
+  const [resaleError, setResaleError] = useState('');
+  const [resaleBusyRef, setResaleBusyRef] = useState(null); // bookingRef with an in-flight cancel/buy
+  const [marketOpen, setMarketOpen] = useState(false);
+  const [market, setMarket] = useState([]);
+  const [marketLoading, setMarketLoading] = useState(false);
 
   const copyAddr = () => {
     navigator.clipboard.writeText(user?.address);
@@ -90,6 +99,104 @@ export default function Bookings() {
       const data = await res.json();
       setBookings(data.bookings || []);
     } catch {}
+  };
+
+  // ── Phase 2c resale: list / cancel-listing / buy ───────────────────────────
+  // Each is the same non-custodial build → sign → submit → confirm path as a
+  // fresh booking's escrow, just for the resale PTBs.
+  const openList = (b) => { setResaleError(''); setResaleStatus('idle'); setListPrice(String(b.faceValue || '')); setListModal(b); };
+
+  const submitListResale = async () => {
+    const b = listModal;
+    const ask = Number(listPrice);
+    if (!b || !Number.isFinite(ask) || ask <= 0) { setResaleError('Enter a valid asking price.'); return; }
+    setResaleError('');
+    try {
+      setResaleStatus('signing');
+      const buildRes = await authFetch(`${API}/pass/${b.bookingRef}/list-resale`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ askPrice: ask }),
+      });
+      const built = await buildRes.json();
+      if (!buildRes.ok || !built.listTxBytes) throw new Error(built.error || 'Could not prepare the listing');
+      const signature = await signTransactionWithZkLogin(fromBase64(built.listTxBytes));
+      setResaleStatus('submitting');
+      const digest = await submitSignedTransaction(built.listTxBytes, signature);
+      setResaleStatus('confirming');
+      const confirmRes = await authFetch(`${API}/pass/${b.bookingRef}/list-resale/confirm`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ digest, askPrice: ask }),
+      });
+      const confirmData = await confirmRes.json();
+      if (!confirmRes.ok || !confirmData.success) throw new Error(confirmData.error || 'Listing could not be verified on-chain');
+      setResaleStatus('done');
+      await refreshBookings();
+      setTimeout(() => { setListModal(null); setResaleStatus('idle'); }, 1200);
+    } catch (err) {
+      console.error('List for resale failed:', err);
+      setResaleError(err.message || 'Could not list this booking.');
+      setResaleStatus('error');
+    }
+  };
+
+  const handleCancelListing = async (b) => {
+    if (!confirm('Remove this booking from the resale market? Your check-in pass is reissued to you.')) return;
+    setResaleBusyRef(b.bookingRef);
+    try {
+      const buildRes = await authFetch(`${API}/pass/${b.bookingRef}/cancel-resale`, { method: 'POST' });
+      const built = await buildRes.json();
+      if (!buildRes.ok || !built.cancelTxBytes) throw new Error(built.error || 'Could not prepare the cancellation');
+      const signature = await signTransactionWithZkLogin(fromBase64(built.cancelTxBytes));
+      const digest = await submitSignedTransaction(built.cancelTxBytes, signature);
+      const confirmRes = await authFetch(`${API}/pass/${b.bookingRef}/cancel-resale/confirm`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ digest }),
+      });
+      const confirmData = await confirmRes.json();
+      if (!confirmRes.ok || !confirmData.success) throw new Error(confirmData.error || 'Could not verify the cancellation');
+      await refreshBookings();
+    } catch (err) {
+      console.error('Cancel listing failed:', err);
+      alert(err.message || 'Could not cancel the listing.');
+    }
+    setResaleBusyRef(null);
+  };
+
+  const loadMarket = async () => {
+    setMarketLoading(true);
+    try {
+      const res = await authFetch(`${API}/resale/listings`);
+      const data = await res.json();
+      setMarket(data.listings || []);
+    } catch { setMarket([]); }
+    setMarketLoading(false);
+  };
+
+  const openMarket = () => { setMarketOpen(true); loadMarket(); };
+
+  const buyListing = async (item) => {
+    if (!confirm(`Buy ${item.property} for $${item.askPrice}? Identity verification is required and the host will see who's staying.`)) return;
+    setResaleBusyRef(item.bookingRef);
+    try {
+      const buildRes = await authFetch(`${API}/pass/${item.bookingRef}/transfer/build`, { method: 'POST' });
+      const built = await buildRes.json();
+      if (buildRes.status === 400 && built.needsVerification) {
+        alert('Complete identity verification first. Redirecting to your profile.');
+        router.push('/profile');
+        return;
+      }
+      if (!buildRes.ok || !built.buyTxBytes) throw new Error(built.error || 'Could not prepare the purchase');
+      const signature = await signTransactionWithZkLogin(fromBase64(built.buyTxBytes));
+      const digest = await submitSignedTransaction(built.buyTxBytes, signature);
+      const confirmRes = await authFetch(`${API}/pass/${item.bookingRef}/transfer/confirm`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ digest }),
+      });
+      const confirmData = await confirmRes.json();
+      if (!confirmRes.ok || !confirmData.success) throw new Error(confirmData.error || 'Purchase could not be verified on-chain');
+      await Promise.all([refreshBookings(), loadMarket()]);
+      alert('Booking purchased — it now appears in your bookings, and your check-in pass has been minted.');
+    } catch (err) {
+      console.error('Buy resale failed:', err);
+      alert(err.message || 'Could not complete the purchase.');
+    }
+    setResaleBusyRef(null);
   };
 
   // Resume an unsigned booking: ask the backend to rebuild the escrow PTB, show
@@ -253,11 +360,17 @@ export default function Bookings() {
 
       {/* Content */}
       <div style={{ maxWidth: '900px', margin: '0 auto', padding: '40px 24px' }}>
-        <div style={{ marginBottom: '32px' }}>
-          <h1 style={{ fontSize: '24px', fontWeight: '700', margin: '0 0 8px' }}>My Bookings</h1>
-          <p style={{ color: '#666', fontSize: '14px', margin: 0 }}>
-            {bookings.length === 0 ? 'No bookings yet' : `${bookings.length} booking${bookings.length > 1 ? 's' : ''} found`}
-          </p>
+        <div style={{ marginBottom: '32px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '16px', flexWrap: 'wrap' }}>
+          <div>
+            <h1 style={{ fontSize: '24px', fontWeight: '700', margin: '0 0 8px' }}>My Bookings</h1>
+            <p style={{ color: '#666', fontSize: '14px', margin: 0 }}>
+              {bookings.length === 0 ? 'No bookings yet' : `${bookings.length} booking${bookings.length > 1 ? 's' : ''} found`}
+            </p>
+          </div>
+          <button onClick={openMarket}
+            style={{ background: 'transparent', border: '1px solid #3a2e1a', color: '#ffaa00', padding: '10px 16px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+            🏷️ Resale Market
+          </button>
         </div>
 
         {bookings.length === 0 ? (
@@ -441,6 +554,26 @@ export default function Bookings() {
                     {reviewedRefs.includes(b.bookingRef) && (
                       <span style={{ color: '#aa44ff', fontSize: '12px', fontWeight: '600' }}>⭐ Reviewed</span>
                     )}
+                    {b.resaleListed && b.paymentStatus !== 'cancelled' && (
+                      <>
+                        <span style={{ background: '#1a140a', border: '1px solid #3a2e1a', color: '#ffaa00', fontSize: '11px', padding: '6px 12px', borderRadius: '6px', fontWeight: '600' }}>
+                          🏷️ Listed for ${b.resaleAskPrice}
+                        </span>
+                        <button
+                          onClick={() => handleCancelListing(b)}
+                          disabled={resaleBusyRef === b.bookingRef}
+                          style={{ background: 'transparent', border: '1px solid #3a2e1a', color: resaleBusyRef === b.bookingRef ? '#555' : '#ffaa00', fontSize: '12px', padding: '6px 12px', borderRadius: '6px', cursor: resaleBusyRef === b.bookingRef ? 'not-allowed' : 'pointer', fontWeight: '600' }}>
+                          {resaleBusyRef === b.bookingRef ? 'Working…' : 'Remove Listing'}
+                        </button>
+                      </>
+                    )}
+                    {b.resaleable && !b.resaleListed && b.paymentStatus !== 'cancelled' && (
+                      <button
+                        onClick={() => openList(b)}
+                        style={{ background: 'transparent', border: '1px solid #3a2e1a', color: '#ffaa00', fontSize: '12px', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontWeight: '600' }}>
+                        🏷️ List for Resale
+                      </button>
+                    )}
                     {b.paymentStatus !== 'cancelled' ? (
                       <button
                         onClick={() => handleCancel(b.bookingRef)}
@@ -609,6 +742,80 @@ export default function Bookings() {
               style={{ width: '100%', marginTop: '16px', background: 'transparent', border: '1px solid #333', color: '#888', borderRadius: '8px', padding: '11px', fontSize: '13px', cursor: 'pointer' }}>
               Close
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* List-for-resale modal */}
+      {listModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '24px' }}>
+          <div style={{ background: '#111', border: '1px solid #333', borderRadius: '16px', width: '100%', maxWidth: '460px', padding: '32px' }}>
+            <h3 style={{ margin: '0 0 4px', fontSize: '20px', fontWeight: '700' }}>🏷️ List for Resale</h3>
+            <p style={{ color: '#666', fontSize: '14px', margin: '0 0 20px' }}>{listModal.property}</p>
+            <div style={{ background: '#0a0a0a', border: '1px solid #222', borderRadius: '8px', padding: '14px', marginBottom: '16px', fontSize: '12px', color: '#888', lineHeight: 1.6 }}>
+              You paid <span style={{ color: '#fff' }}>${listModal.faceValue}</span> (face value). On a sale, you always keep the full face; any markup splits <span style={{ color: '#ffaa00' }}>ARIA 10% · host 45% · you 45%</span>. Listing burns your check-in pass until you sell or cancel.
+            </div>
+            <label style={{ fontSize: '12px', color: '#888', fontWeight: '600' }}>ASKING PRICE (USD)</label>
+            <input type="number" min={listModal.faceValue} value={listPrice} onChange={e => setListPrice(e.target.value)}
+              style={{ width: '100%', marginTop: '6px', marginBottom: '8px', background: '#0a0a0a', border: '1px solid #333', borderRadius: '8px', padding: '10px 12px', color: '#fff', fontSize: '15px', outline: 'none', boxSizing: 'border-box' }} />
+            <p style={{ color: '#555', fontSize: '11px', margin: '0 0 16px' }}>Minimum ${listModal.faceValue}. The host's price cap is enforced on-chain.</p>
+            {resaleError && <p style={{ color: '#ff6666', fontSize: '12px', margin: '0 0 12px' }}>{resaleError}</p>}
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button onClick={() => { setListModal(null); setResaleStatus('idle'); }}
+                disabled={['signing','submitting','confirming'].includes(resaleStatus)}
+                style={{ flex: 1, background: 'transparent', border: '1px solid #333', color: '#888', borderRadius: '8px', padding: '11px', fontSize: '13px', cursor: 'pointer' }}>
+                Cancel
+              </button>
+              <button onClick={submitListResale}
+                disabled={['signing','submitting','confirming','done'].includes(resaleStatus)}
+                style={{ flex: 2, background: resaleStatus === 'done' ? '#1a3a1a' : '#ffaa00', color: resaleStatus === 'done' ? '#00ff44' : '#000', border: 'none', borderRadius: '8px', padding: '11px', fontSize: '13px', fontWeight: '700', cursor: 'pointer' }}>
+                {resaleStatus === 'signing' ? 'Sign in wallet…' : resaleStatus === 'submitting' ? 'Submitting…' : resaleStatus === 'confirming' ? 'Confirming…' : resaleStatus === 'done' ? '✓ Listed' : 'List for Resale'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Buyer resale marketplace */}
+      {marketOpen && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 100, padding: '24px', overflowY: 'auto' }}>
+          <div style={{ background: '#111', border: '1px solid #333', borderRadius: '16px', width: '100%', maxWidth: '640px', padding: '32px', margin: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+              <h3 style={{ margin: 0, fontSize: '20px', fontWeight: '700' }}>🏷️ Resale Market</h3>
+              <button onClick={() => setMarketOpen(false)} style={{ background: 'transparent', border: 'none', color: '#888', fontSize: '22px', cursor: 'pointer', lineHeight: 1 }}>×</button>
+            </div>
+            <p style={{ color: '#666', fontSize: '13px', margin: '0 0 20px' }}>Verified, capped resales. Buying requires identity verification — the host will know who's staying.</p>
+            {marketLoading ? (
+              <div style={{ color: '#888', fontSize: '13px', padding: '30px 0', textAlign: 'center' }}>Loading listings…</div>
+            ) : market.length === 0 ? (
+              <div style={{ color: '#888', fontSize: '13px', padding: '30px 0', textAlign: 'center' }}>No bookings are listed for resale right now.</div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                {market.map(item => (
+                  <div key={item.bookingRef} style={{ background: '#0a0a0a', border: '1px solid #222', borderRadius: '10px', padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: '700', fontSize: '15px' }}>{item.property}</div>
+                      <div style={{ color: '#888', fontSize: '12px', margin: '4px 0' }}>{fmtDay(item.checkIn)} → {fmtDay(item.checkOut)} · {item.nights} night{item.nights > 1 ? 's' : ''}</div>
+                      <div style={{ fontSize: '12px', color: '#666' }}>
+                        Face ${item.faceValue}{item.upcharge > 0 && <span style={{ color: '#ffaa00' }}> · +${item.upcharge} markup</span>}
+                        {item.sellerFlips > 0 && <span style={{ color: '#ff8855', marginLeft: '8px' }} title="Times this seller has resold without staying">⚠ {item.sellerFlips} prior flip{item.sellerFlips > 1 ? 's' : ''}</span>}
+                      </div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontWeight: '700', fontSize: '18px', color: '#00ff44', marginBottom: '6px' }}>${item.askPrice}</div>
+                      {item.isOwnListing ? (
+                        <span style={{ color: '#666', fontSize: '12px' }}>Your listing</span>
+                      ) : (
+                        <button onClick={() => buyListing(item)} disabled={resaleBusyRef === item.bookingRef}
+                          style={{ background: resaleBusyRef === item.bookingRef ? '#1a1a1a' : '#00ff44', color: resaleBusyRef === item.bookingRef ? '#555' : '#000', border: 'none', borderRadius: '8px', padding: '9px 18px', fontSize: '13px', fontWeight: '700', cursor: resaleBusyRef === item.bookingRef ? 'not-allowed' : 'pointer' }}>
+                          {resaleBusyRef === item.bookingRef ? 'Working…' : 'Buy'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}

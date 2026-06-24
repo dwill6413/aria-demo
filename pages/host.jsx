@@ -43,6 +43,10 @@ export default function Host() {
   const [messageCounts, setMessageCounts] = useState({});
   const [addrCopied, setAddrCopied] = useState(false);
   const [properties, setProperties] = useState(PROPERTY_DISPLAY);
+  // Phase 2c: per-listing resale opt-in (Rail 1) + premium cap (Rail 2).
+  const [resaleSettings, setResaleSettings] = useState({}); // { [propertyId]: { transferAllowed, maxPremiumBps } }
+  const [resaleEnabled, setResaleEnabled] = useState(false); // global flag (RESALE_ENABLED)
+  const [savingResale, setSavingResale] = useState({});      // { [propertyId]: true } while saving
 
   const copyAddr = () => {
     navigator.clipboard.writeText(user?.address);
@@ -94,6 +98,12 @@ export default function Host() {
         const rvData = await rvRes.json();
         setReviews(rvData.reviews || []);
         loadApplications(true);
+        try {
+          const rsRes = await authFetch(`${API}/host/resale-settings`);
+          const rsData = await rsRes.json();
+          if (rsData.settings) setResaleSettings(rsData.settings);
+          setResaleEnabled(!!rsData.resaleEnabled);
+        } catch {}
         setLoading(false);
       })
       .catch(() => { router.push('/'); });
@@ -109,6 +119,25 @@ export default function Host() {
       }));
     }).catch(() => {});
   }, []);
+
+  // Persist a listing's resale opt-in + cap. Optimistic local update, then POST.
+  const saveResaleSettings = async (propertyId, next) => {
+    setResaleSettings(prev => ({ ...prev, [propertyId]: { ...prev[propertyId], ...next } }));
+    setSavingResale(prev => ({ ...prev, [propertyId]: true }));
+    try {
+      const cur = { transferAllowed: false, maxPremiumBps: 0, ...resaleSettings[propertyId], ...next };
+      const res = await authFetch(`${API}/host/property/${propertyId}/resale-settings`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transferAllowed: !!cur.transferAllowed, maxPremiumBps: Number(cur.maxPremiumBps) || 0 }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Save failed');
+      setResaleSettings(prev => ({ ...prev, [propertyId]: { transferAllowed: data.transferAllowed, maxPremiumBps: data.maxPremiumBps } }));
+    } catch (err) {
+      alert(err.message || 'Could not save resale settings');
+    }
+    setSavingResale(prev => ({ ...prev, [propertyId]: false }));
+  };
 
   const loadApplications = async (silent = false) => {
     if (!silent) setApplicationsLoading(true);
@@ -564,6 +593,38 @@ export default function Host() {
                         </button>
                       </div>
                     </div>
+                    {/* Phase 2c: resale transferability (Rail 1 opt-in + Rail 2 cap) */}
+                    {(() => {
+                      const rs = resaleSettings[p.id] || { transferAllowed: false, maxPremiumBps: 0 };
+                      const saving = !!savingResale[p.id];
+                      return (
+                        <div style={{ background: '#1a140a', border: '1px solid #2e2410', borderRadius: '8px', padding: '10px', marginBottom: '10px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div style={{ fontSize: '10px', color: '#ffaa00', fontWeight: '700' }}>🏷️ GUEST RESALE</div>
+                            <button onClick={() => saveResaleSettings(p.id, { transferAllowed: !rs.transferAllowed })} disabled={saving}
+                              style={{ background: rs.transferAllowed ? '#3a2e1a' : '#1a1a1a', border: `1px solid ${rs.transferAllowed ? '#ffaa00' : '#333'}`, color: rs.transferAllowed ? '#ffaa00' : '#888', fontSize: '11px', padding: '4px 10px', borderRadius: '6px', cursor: saving ? 'wait' : 'pointer', fontWeight: '600' }}>
+                              {rs.transferAllowed ? '● On' : '○ Off'}
+                            </button>
+                          </div>
+                          {rs.transferAllowed && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '8px' }}>
+                              <span style={{ fontSize: '11px', color: '#888' }}>Max markup</span>
+                              <select value={rs.maxPremiumBps} onChange={e => saveResaleSettings(p.id, { maxPremiumBps: Number(e.target.value) })} disabled={saving}
+                                style={{ flex: 1, background: '#111', border: '1px solid #333', borderRadius: '6px', padding: '5px 8px', fontSize: '11px', color: '#fff', outline: 'none' }}>
+                                <option value={0}>Face value only (0%)</option>
+                                <option value={1000}>+10%</option>
+                                <option value={2500}>+25%</option>
+                                <option value={5000}>+50%</option>
+                                <option value={10000}>+100%</option>
+                              </select>
+                            </div>
+                          )}
+                          <p style={{ color: '#6a5a3a', fontSize: '10px', margin: '8px 0 0', lineHeight: 1.5 }}>
+                            {resaleEnabled ? 'Applies to future bookings. Any markup splits ARIA 10% / you 45% / seller 45%.' : 'Resale is globally disabled until launch — this just stages your preference.'}
+                          </p>
+                        </div>
+                      );
+                    })()}
                     <div style={{ display: 'flex', gap: '8px' }}>
                       {[['BOOKINGS', activeBookings.filter(b => b.propertyId === p.id || b.propertyId === String(p.id)).length, '#00ff44'],
                         ['REVENUE', `$${activeBookings.filter(b => b.propertyId === p.id || b.propertyId === String(p.id)).reduce((s, b) => s + (b.totalAmount || 0), 0).toLocaleString()}`, '#4a9eff'],

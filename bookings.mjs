@@ -63,6 +63,33 @@ export async function getPropertyHostAddress(propertyId, logger = console) {
   }
 }
 
+// ── Phase 2c: per-listing resale settings read-through ─────────────────────
+// Rail 1 (host opt-in) + Rail 2 (premium cap) live on the `properties` row and
+// are baked into the booking's on-chain ResalePolicy at booking time (later
+// listing changes only affect future bookings — see ARIA_PHASE2C_PLAN §4). The
+// 6 demo properties have no `properties` row by default, so a missing row means
+// transfer DISABLED — the safe default. Returns { transferAllowed, maxPremiumBps }.
+export async function getResaleSettings(propertyId, logger = console) {
+  // Resale is globally gated: never report transfer-allowed unless the flag is on,
+  // so the create_resale_policy moveCall stays omitted on pre-v6 packages.
+  if (process.env.RESALE_ENABLED !== 'true') return { transferAllowed: false, maxPremiumBps: 0 };
+  try {
+    const r = await pool.query(
+      'SELECT transfer_allowed, max_resale_premium_bps FROM property_resale_settings WHERE property_id = $1',
+      [Number(propertyId)]
+    );
+    const row = r.rows[0];
+    if (!row) return { transferAllowed: false, maxPremiumBps: 0 };
+    return {
+      transferAllowed: row.transfer_allowed === true,
+      maxPremiumBps: Math.max(0, Number(row.max_resale_premium_bps) || 0),
+    };
+  } catch (err) {
+    logger?.warn?.({ err, propertyId }, 'getResaleSettings lookup failed — defaulting to transfer disabled');
+    return { transferAllowed: false, maxPremiumBps: 0 };
+  }
+}
+
 // ── Shared deposit-release logic (Findings #4 and #5) ──────────────────────
 // Single authoritative implementation of "release this booking's deposit back
 // to the guest," used by BOTH server.mjs's REST /booking/release-deposit and
@@ -393,8 +420,8 @@ export async function createBooking({ propertyId, checkIn, checkOut, session, lo
     await client.query(
       `INSERT INTO bookings (booking_ref, property_id, property_title, wallet_address, guest_name, guest_email,
         check_in, check_out, nights, price_per_night, subtotal, aria_fee, taxes, total_amount,
-        deposit_amount, payment_status, payment_method, deposit_status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'confirmed','SuiUSD','pending')`,
+        deposit_amount, payment_status, payment_method, deposit_status, original_wallet_address)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'confirmed','SuiUSD','pending',$4)`,
       [bookingRef, propertyId, propertyTitle, session.suiAddress, session.name, session.email,
        checkInStr, checkOutStr, nights, pricePerNight, subtotal, ariaFee, taxes, bookingTotal, depositAmount]
     );
@@ -463,10 +490,15 @@ export async function createBooking({ propertyId, checkIn, checkOut, session, lo
     const hostAddr = await getPropertyHostAddress(propertyId, logger);
     if (hostAddr) {
       const useCombined = !!(process.env.ARIA_FEE_ADDRESS && process.env.ARIA_TAX_REMITTANCE_ADDRESS);
+      // Phase 2c: read the host's resale opt-in + cap (Rail 1/2). When enabled,
+      // buildBookingPaymentTransaction adds the create_resale_policy moveCall so
+      // this booking can later be resold under these terms. Dormant otherwise.
+      const resale = await getResaleSettings(propertyId, logger);
       const built = useCombined
         ? await buildBookingPaymentTransaction(bookingRef, session.suiAddress, hostAddr,
             { subtotal, ariaFee, taxes, depositAmount, releaseMs,
-              propertyId: Number(propertyId), checkInMs: Date.parse(checkInStr), checkOutMs: Date.parse(checkOutStr) }, logger)
+              propertyId: Number(propertyId), checkInMs: Date.parse(checkInStr), checkOutMs: Date.parse(checkOutStr),
+              transferAllowed: resale.transferAllowed, maxPremiumBps: resale.maxPremiumBps }, logger)
         : await buildEscrowTransaction(bookingRef, session.suiAddress, hostAddr, depositAmount, logger);
       if (built?.txBytes) {
         escrowTxBytes = built.txBytes;

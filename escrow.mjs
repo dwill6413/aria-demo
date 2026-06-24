@@ -1003,6 +1003,63 @@ export async function verifyBuyResaleTransaction(digest, expectedBuyer, depositE
   if (!isObjectMutated(changed, paymentEscrowId)) {
     return { ok: false, reason: `Buy did not reassign the payment escrow (${paymentEscrowId})` };
   }
+  // The buy mints a FRESH soulbound pass to the buyer — capture its id so the
+  // confirm route can repoint booking_pass_object_id (the original was burned at
+  // list time). Optional: absent only if the read lags, which doesn't invalidate
+  // the verified swap above.
+  const mod = process.env.ESCROW_MODULE_NAME || 'escrow';
+  const isPassType = (t) => typeof t === 'string' && new RegExp(`::${mod}::BookingPass$`).test(t);
+  let newPassId = null;
+  for (const [oid, t] of Object.entries(txn?.objectTypes || {})) {
+    if (isPassType(t)) { newPassId = oid; break; }
+  }
+  return { ok: true, sender: actualSender, newPassId };
+}
+
+/// Verify a completed list_for_resale on-chain before the confirm route flips
+/// resale_listed=true. A valid listing MUST (a) be signed by the seller and
+/// (b) mutate the ResalePolicy (policy.listed -> true). The pass is consumed in
+/// the same tx; we don't require reading it back (it's deleted). Never trust the
+/// client report — mirrors verifyBuyResaleTransaction.
+export async function verifyListResaleTransaction(digest, expectedSeller, policyId) {
+  const result = await suiClient.core.getTransaction({
+    digest,
+    include: { transaction: true, effects: true, objectTypes: true },
+  });
+  if (result?.$kind !== 'Transaction') {
+    const errMsg = result?.FailedTransaction?.status?.error?.message;
+    return { ok: false, reason: errMsg || 'resale list transaction did not succeed on-chain' };
+  }
+  const txn = result.Transaction;
+  const actualSender = txn?.transaction?.sender;
+  if (expectedSeller && actualSender && actualSender !== expectedSeller) {
+    return { ok: false, reason: 'Transaction sender does not match the expected seller' };
+  }
+  if (!isObjectMutated(txn?.effects?.changedObjects, policyId)) {
+    return { ok: false, reason: `List did not update the resale policy (${policyId})` };
+  }
+  return { ok: true, sender: actualSender };
+}
+
+/// Verify a completed cancel_resale_listing on-chain before clearing the listing
+/// in Postgres. Signed by the seller; mutates the ResalePolicy (listed -> false).
+export async function verifyCancelResaleTransaction(digest, expectedSeller, policyId) {
+  const result = await suiClient.core.getTransaction({
+    digest,
+    include: { transaction: true, effects: true, objectTypes: true },
+  });
+  if (result?.$kind !== 'Transaction') {
+    const errMsg = result?.FailedTransaction?.status?.error?.message;
+    return { ok: false, reason: errMsg || 'resale cancel transaction did not succeed on-chain' };
+  }
+  const txn = result.Transaction;
+  const actualSender = txn?.transaction?.sender;
+  if (expectedSeller && actualSender && actualSender !== expectedSeller) {
+    return { ok: false, reason: 'Transaction sender does not match the expected seller' };
+  }
+  if (!isObjectMutated(txn?.effects?.changedObjects, policyId)) {
+    return { ok: false, reason: `Cancel did not update the resale policy (${policyId})` };
+  }
   return { ok: true, sender: actualSender };
 }
 
@@ -1092,12 +1149,17 @@ export async function verifyBookingPaymentTransaction(digest, expected = {}) {
   const isDepositType = (t) => typeof t === 'string' && new RegExp(`::${mod}::BookingEscrow<`).test(t);
   // BookingPass (Phase 2a) is a non-generic owned object — match the bare type.
   const isPassType    = (t) => typeof t === 'string' && new RegExp(`::${mod}::BookingPass$`).test(t);
+  // ResalePolicy (Phase 2c) — non-generic shared object, minted in the same PTB
+  // only when the listing opted into transfer. Optional: absent on bookings that
+  // didn't enable resale, so a null id is not an error.
+  const isPolicyType  = (t) => typeof t === 'string' && new RegExp(`::${mod}::ResalePolicy$`).test(t);
   const objectTypes = txn?.objectTypes || {};
-  let paymentEscrowId = null, depositEscrowId = null, bookingPassId = null;
+  let paymentEscrowId = null, depositEscrowId = null, bookingPassId = null, resalePolicyId = null;
   for (const [oid, t] of Object.entries(objectTypes)) {
     if (!paymentEscrowId && isPaymentType(t)) paymentEscrowId = oid;
     else if (!depositEscrowId && isDepositType(t)) depositEscrowId = oid;
     else if (!bookingPassId && isPassType(t)) bookingPassId = oid;
+    else if (!resalePolicyId && isPolicyType(t)) resalePolicyId = oid;
   }
 
   // PRIMARY: decode both calls' arguments and assert every authoritative value.
@@ -1163,7 +1225,7 @@ export async function verifyBookingPaymentTransaction(digest, expected = {}) {
     return { ok: false, reason: 'Deposit escrow booking_ref does not match this booking' };
   }
 
-  return { ok: true, paymentEscrowId, depositEscrowId, bookingPassId, sender: actualSender };
+  return { ok: true, paymentEscrowId, depositEscrowId, bookingPassId, resalePolicyId, sender: actualSender };
 }
 
 // Permissionless release at check-in — signed by the zero-privilege auto-release

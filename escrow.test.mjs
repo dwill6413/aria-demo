@@ -13,7 +13,7 @@ import {
   isObjectMutated, verifyClaimDamageTransaction, verifyDisputeClaimTransaction,
   depositToMist, BookingEscrowBcs, decodeCreateEscrowArgs, decodeClaimDamageAmountMist,
   dollarsToUnits, decodeCreatePaymentEscrowArgs, verifyBookingPaymentTransaction,
-  verifyBuyResaleTransaction
+  verifyBuyResaleTransaction, verifyListResaleTransaction, verifyCancelResaleTransaction
 } from './escrow.mjs';
 import { bcs } from '@mysten/sui/bcs';
 import { toBase64 } from '@mysten/sui/utils';
@@ -825,6 +825,69 @@ await test('buy_resale: failed on-chain tx — returns ok:false', async () => {
     FailedTransaction: { status: { error: { message: 'boom' } } },
   });
   const r = await verifyBuyResaleTransaction('0xdigest', '0xbuyer', 'deposit-id', 'payment-id');
+  assertEqual(r.ok, false, 'expected ok:false');
+});
+
+await test('buy_resale: captures the freshly minted pass id (newPassId)', async () => {
+  suiClient.core.getTransaction = async () => ({
+    $kind: 'Transaction',
+    Transaction: {
+      status: { success: true, error: null },
+      transaction: { sender: '0xbuyer' },
+      effects: { changedObjects: [
+        { objectId: 'deposit-id', idOperation: 'Mutated' },
+        { objectId: 'payment-id', idOperation: 'Mutated' },
+        { objectId: 'fresh-pass-id', idOperation: 'Created' },
+      ] },
+      objectTypes: { 'fresh-pass-id': '0xpkg::escrow::BookingPass' },
+    },
+  });
+  const r = await verifyBuyResaleTransaction('0xdigest', '0xbuyer', 'deposit-id', 'payment-id');
+  assertEqual(r.ok, true, 'expected ok:true');
+  assertEqual(r.newPassId, 'fresh-pass-id');
+});
+
+console.log('\nverifyListResaleTransaction / verifyCancelResaleTransaction (Phase 2c)\n');
+
+function mockPolicyMutation({ sender = '0xseller', policy = true } = {}) {
+  const changedObjects = [{ objectId: 'gas-coin-id', idOperation: 'Mutated' }];
+  if (policy) changedObjects.push({ objectId: 'policy-id', idOperation: 'Mutated' });
+  suiClient.core.getTransaction = async () => ({
+    $kind: 'Transaction',
+    Transaction: { status: { success: true, error: null }, transaction: { sender }, effects: { changedObjects } },
+  });
+}
+
+await test('list_for_resale: seller signed + policy mutated — ok:true', async () => {
+  mockPolicyMutation({ sender: '0xseller' });
+  const r = await verifyListResaleTransaction('0xdigest', '0xseller', 'policy-id');
+  assertEqual(r.ok, true, 'expected ok:true');
+});
+
+await test('list_for_resale: wrong signer — ok:false', async () => {
+  mockPolicyMutation({ sender: '0xstranger' });
+  const r = await verifyListResaleTransaction('0xdigest', '0xseller', 'policy-id');
+  assertEqual(r.ok, false, 'expected ok:false');
+  assertEqual(r.reason, 'Transaction sender does not match the expected seller');
+});
+
+await test('list_for_resale: policy not mutated — ok:false', async () => {
+  mockPolicyMutation({ sender: '0xseller', policy: false });
+  const r = await verifyListResaleTransaction('0xdigest', '0xseller', 'policy-id');
+  assertEqual(r.ok, false, 'expected ok:false');
+});
+
+await test('cancel_resale_listing: seller signed + policy mutated — ok:true', async () => {
+  mockPolicyMutation({ sender: '0xseller' });
+  const r = await verifyCancelResaleTransaction('0xdigest', '0xseller', 'policy-id');
+  assertEqual(r.ok, true, 'expected ok:true');
+});
+
+await test('cancel_resale_listing: failed on-chain tx — ok:false', async () => {
+  suiClient.core.getTransaction = async () => ({
+    $kind: 'FailedTransaction', FailedTransaction: { status: { error: { message: 'boom' } } },
+  });
+  const r = await verifyCancelResaleTransaction('0xdigest', '0xseller', 'policy-id');
   assertEqual(r.ok, false, 'expected ok:false');
 });
 
