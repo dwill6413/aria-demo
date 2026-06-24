@@ -950,10 +950,29 @@ These are NOT committed work — they're the idea bank to pull from next.
 - **Host cash-advance** *(high)* — borrow against confirmed future bookings
   (receivables as collateral). DeFi × travel.
 
-### Theme C — Physical-world bridge (flashy, demo-winning)
-- ⭐ **Seal-gated smart-lock check-in** *(medium)* — the booking object grants door
-  access only for the stay window, decryptable via the same Seal pattern shipped
-  in Phase 2. Connects the chain to a real lock — the single best live-demo moment.
+### Theme C — Physical-world bridge (flashy, demo-winning) → BookingPass
+- 🟨 **BookingPass / check-in pass** — the unifying object behind check-in + resale
+  (Theme B) + smart-lock + reputation. Built in two phases:
+  - ✅ **Phase 1 — dynamic wallet-signed check-in pass — SHIPPED June 24, 2026.**
+    The guest's app signs a FRESH `ARIA-CHECKIN:<ref>:<ts>:<nonce>` personal message
+    with their zkLogin wallet (reusing `signPersonalMessageWithZkLogin`) and renders
+    a **rotating QR** on My Bookings (`pages/bookings.jsx`, `qrcode.react`, ~18s
+    refresh). A host-only **scanner** (`pages/scan.jsx`) posts the scanned payload to
+    `POST /checkin/verify`, which proves it's *fresh* (timestamp window — screenshots
+    go stale), *wallet-signed* (`verifyCheckinSignature` in `escrow.mjs` →
+    `verifyPersonalMessageSignature`), by the *booking's own guest*, for a *live,
+    on-chain-escrow-backed* booking the scanning host manages → ✅/⛔. **NEEDS an
+    in-browser smoke test** (server-side zkLogin signature verification, same risk
+    class as the Seal SessionKey path — may need a tweak for the gRPC client).
+    No contract upgrade. Camera QR scanning (vs paste) is a small follow-up.
+  - ⬜ **Phase 2 — the owned `BookingPass` NFT** *(needs v5 contract)* — mint an owned
+    pass in the booking PTB (`mint_booking_pass`, one extra `moveCall`, no extra
+    signature), a `pass_approve` gate so real **door locks** open only for the stay
+    window (same dry-run pattern as `seal_approve`; **cancel → pass void → lock won't
+    open**, the automatic-revocation property), and the pass becomes the transferable
+    object behind the Theme B resale market + the Theme A reputation history. Keep
+    on-chain metadata minimal (a ref hash, NOT property/dates) so it doesn't undo the
+    Seal privacy posture. Layer: NFC + real lock integration is hardware follow-up.
 
 ### Theme D — AI agent depth (reuse the Grok agent)
 - **Host-ops autopilot** *(medium)* — dynamic pricing, auto-draft replies, listing

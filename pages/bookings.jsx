@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import { authFetch } from '../lib/authFetch';
-import { signTransactionWithZkLogin, submitSignedTransaction } from '../lib/zklogin';
+import { signTransactionWithZkLogin, submitSignedTransaction, signPersonalMessageWithZkLogin } from '../lib/zklogin';
 import { fromBase64 } from '@mysten/sui/utils';
+import { QRCodeSVG } from 'qrcode.react';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -32,6 +33,10 @@ export default function Bookings() {
   const [resumeModal, setResumeModal] = useState(null); // rebuild payload for the booking being resumed
   const [resumeStatus, setResumeStatus] = useState('idle'); // idle|loading|review|signing|submitting|confirming|done|error
   const [resumeError, setResumeError] = useState('');
+  // BookingPass check-in: dynamic, wallet-signed presentation (rotating QR).
+  const [passModal, setPassModal] = useState(null); // the booking whose pass is open
+  const [passPayload, setPassPayload] = useState(''); // current signed payload (base64 JSON)
+  const [passError, setPassError] = useState('');
 
   const copyAddr = () => {
     navigator.clipboard.writeText(user?.address);
@@ -132,6 +137,32 @@ export default function Bookings() {
       setResumeStatus('error');
     }
   };
+
+  const openPass = (b) => { setPassPayload(''); setPassError(''); setPassModal(b); };
+  const closePass = () => { setPassModal(null); setPassPayload(''); setPassError(''); };
+
+  // While a pass is open, sign a FRESH check-in message every ~18s so the QR
+  // rotates — a screenshot goes stale (the backend rejects an old timestamp).
+  useEffect(() => {
+    if (!passModal || !user?.address) return;
+    let cancelled = false;
+    const gen = async () => {
+      try {
+        const ts = Date.now();
+        const nonce = (window.crypto?.randomUUID?.() || String(Math.random())).replace(/-/g, '').slice(0, 16);
+        const message = new TextEncoder().encode(`ARIA-CHECKIN:${passModal.bookingRef}:${ts}:${nonce}`);
+        const signature = await signPersonalMessageWithZkLogin(message);
+        if (cancelled) return;
+        setPassPayload(btoa(JSON.stringify({ bookingRef: passModal.bookingRef, ts, nonce, address: user.address, signature })));
+        setPassError('');
+      } catch (err) {
+        if (!cancelled) setPassError(err.message || 'Could not generate your check-in pass');
+      }
+    };
+    gen();
+    const id = setInterval(gen, 18000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [passModal, user]);
 
   useEffect(() => {
     authFetch(`${API}/auth/me`)
@@ -374,6 +405,13 @@ export default function Bookings() {
                         ✍️ Complete payment & sign
                       </button>
                     )}
+                    {b.paymentStatus !== 'cancelled' && b.depositStatus === 'held' && (
+                      <button
+                        onClick={() => openPass(b)}
+                        style={{ background: 'transparent', border: '1px solid #2a2a3a', color: '#a98aff', fontSize: '12px', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontWeight: '600' }}>
+                        🎫 Check-in Pass
+                      </button>
+                    )}
                     {b.paymentStatus !== 'cancelled' && b.walrusBlobId && (
                       <a href={`https://aggregator.walrus-testnet.walrus.space/v1/blobs/${b.walrusBlobId}`}
                         target="_blank" rel="noreferrer"
@@ -525,6 +563,45 @@ export default function Bookings() {
                 </button>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* BookingPass — dynamic, wallet-signed check-in pass (rotating QR) */}
+      {passModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.88)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '24px' }}>
+          <div style={{ background: '#0d0a18', border: '1px solid #2a2a3a', borderRadius: '16px', width: '100%', maxWidth: '380px', padding: '24px', textAlign: 'center' }}>
+            <h3 style={{ margin: '0 0 2px', fontSize: '18px', fontWeight: '700' }}>🎫 Check-in Pass</h3>
+            <p style={{ color: '#888', fontSize: '12px', margin: '0 0 16px' }}>{passModal.property} · {fmtDay(passModal.checkIn)} → {fmtDay(passModal.checkOut)}</p>
+
+            {passError ? (
+              <div style={{ background: '#1a1212', border: '1px solid #2a1a1a', borderRadius: '8px', padding: '12px', color: '#ff6666', fontSize: '12px' }}>⚠️ {passError}</div>
+            ) : passPayload ? (
+              <>
+                <div style={{ background: '#fff', borderRadius: '12px', padding: '14px', display: 'inline-block' }}>
+                  <QRCodeSVG value={passPayload} size={216} level="M" />
+                </div>
+                <div style={{ color: '#a98aff', fontSize: '12px', fontWeight: 600, margin: '14px 0 4px' }}>🔄 Refreshes automatically — present at check-in</div>
+                <p style={{ color: '#566', fontSize: '10px', lineHeight: 1.5, margin: '0 0 12px' }}>
+                  Signed by your wallet, live. A screenshot won't work — the code rotates so only the real, present holder verifies.
+                </p>
+                <details style={{ textAlign: 'left' }}>
+                  <summary style={{ color: '#667', fontSize: '11px', cursor: 'pointer' }}>Show code (for a paste-in scanner)</summary>
+                  <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
+                    <code style={{ flex: 1, background: '#000', border: '1px solid #222', borderRadius: '6px', padding: '6px', color: '#7a7', fontSize: '9px', wordBreak: 'break-all', maxHeight: '60px', overflow: 'auto' }}>{passPayload}</code>
+                    <button onClick={() => navigator.clipboard?.writeText(passPayload)}
+                      style={{ background: 'transparent', border: '1px solid #333', color: '#888', borderRadius: '6px', padding: '4px 8px', fontSize: '11px', cursor: 'pointer', whiteSpace: 'nowrap' }}>Copy</button>
+                  </div>
+                </details>
+              </>
+            ) : (
+              <div style={{ color: '#a98aff', fontSize: '13px', padding: '40px 0' }}>🔏 Signing your pass…</div>
+            )}
+
+            <button onClick={closePass}
+              style={{ width: '100%', marginTop: '16px', background: 'transparent', border: '1px solid #333', color: '#888', borderRadius: '8px', padding: '11px', fontSize: '13px', cursor: 'pointer' }}>
+              Close
+            </button>
           </div>
         </div>
       )}

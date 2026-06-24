@@ -19,7 +19,8 @@ import {
   verifyClaimDamageTransaction, verifyDisputeClaimTransaction,
   resolveDisputeEscrow, finalizeClaimEscrow,
   verifyBookingPaymentTransaction, releasePaymentEscrow,
-  buildBookingPaymentTransaction, buildEscrowTransaction
+  buildBookingPaymentTransaction, buildEscrowTransaction,
+  verifyCheckinSignature
 } from './escrow.mjs';
 import { createBooking, releaseDepositForBooking, cancelBooking, hostManagesBooking, getPropertyHostAddress } from './bookings.mjs';
 import { pushToWalrus } from './walrus.mjs';
@@ -1158,6 +1159,74 @@ fastify.get('/reviews/:propertyId', async (request, reply) => {
     const verifiedCount = reviews.filter(r => r.verified).length;
     return { reviews, averageRating: parseFloat(averageRating), count: reviews.length, verifiedCount };
   } catch (err) { return { reviews: [], averageRating: 0, count: 0 }; }
+});
+
+// BookingPass check-in verify (Phase 1) — a scanner (front desk / lock operator)
+// posts the guest's presented payload; we prove it's a fresh, wallet-signed
+// presentation by the booking's own guest, for an active on-chain booking the
+// scanning host manages. Host-gated (only the property's side scans).
+fastify.post('/checkin/verify', {
+  config: {
+    rateLimit: {
+      max: 60, timeWindow: '1 minute',
+      errorResponseBuilder: () => ({ error: 'Too many check-in scans. Slow down.' })
+    }
+  }
+}, async (request, reply) => {
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
+  if (!isHost(session)) return reply.code(403).send({ error: 'Host/scanner access required' });
+
+  // The scanner forwards exactly what it scanned (base64 JSON of the signed
+  // payload). Decode + shape-check before trusting anything in it.
+  let payload;
+  try {
+    const raw = request.body?.token;
+    if (!raw || typeof raw !== 'string') return reply.code(400).send({ valid: false, reason: 'No pass payload presented' });
+    payload = JSON.parse(Buffer.from(raw, 'base64').toString('utf8'));
+  } catch {
+    return reply.code(400).send({ valid: false, reason: 'Unreadable pass — not a valid ARIA check-in code' });
+  }
+  const { bookingRef, ts, nonce, address, signature } = payload || {};
+  if (!bookingRef || !ts || !nonce || !address || !signature)
+    return reply.code(400).send({ valid: false, reason: 'Incomplete pass payload' });
+
+  // Freshness — a rotating pass is only valid for a short window, so a screenshot
+  // or photographed QR goes stale. Reject old AND future timestamps.
+  const CHECKIN_WINDOW_MS = Number(process.env.CHECKIN_WINDOW_MS || 90_000);
+  const skew = Date.now() - Number(ts);
+  if (!Number.isFinite(skew) || skew > CHECKIN_WINDOW_MS || skew < -30_000)
+    return reply.code(400).send({ valid: false, reason: 'Pass expired — ask the guest to refresh their check-in code' });
+
+  // Cryptographic proof-of-control: the payload is signed by the wallet it claims.
+  const sig = await verifyCheckinSignature({ bookingRef, ts, nonce, address, signature });
+  if (!sig.ok) return reply.code(400).send({ valid: false, reason: sig.reason });
+
+  let booking;
+  try {
+    const r = await pool.query('SELECT * FROM bookings WHERE booking_ref = $1', [bookingRef]);
+    booking = r.rows[0];
+  } catch (err) {
+    fastify.log.error({ err }, '/checkin/verify: lookup failed');
+    return reply.code(500).send({ valid: false, reason: 'Lookup failed' });
+  }
+  if (!booking) return reply.code(404).send({ valid: false, reason: 'No such booking' });
+  // The signer must BE the booking's guest, the scanning host must manage it,
+  // and it must be a real, active, on-chain-escrow-backed booking.
+  if (String(booking.wallet_address).toLowerCase() !== String(address).toLowerCase())
+    return reply.code(403).send({ valid: false, reason: 'This pass was not issued to this booking' });
+  if (!(await hostManagesBooking(session, booking)))
+    return reply.code(403).send({ valid: false, reason: 'You do not manage this property' });
+  if (booking.payment_status === 'cancelled')
+    return reply.code(400).send({ valid: false, reason: 'Booking is cancelled' });
+  if (!booking.escrow_object_id)
+    return reply.code(400).send({ valid: false, reason: 'Booking not funded on-chain — no valid pass' });
+
+  fastify.log.info({ bookingRef, guest: address }, '/checkin/verify: valid pass presented');
+  return {
+    valid: true, bookingRef, guestName: booking.guest_name, property: booking.property_title,
+    checkIn: booking.check_in, checkOut: booking.check_out, nights: booking.nights,
+  };
 });
 
 fastify.get('/reviews/all', async (request, reply) => {

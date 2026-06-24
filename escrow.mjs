@@ -19,6 +19,7 @@ import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
 import { toBase64, fromBase64 } from '@mysten/sui/utils';
 import { bcs } from '@mysten/sui/bcs';
+import { verifyPersonalMessageSignature } from '@mysten/sui/verify';
 
 export const suiClient = new SuiGrpcClient({
   network: 'testnet',
@@ -1088,5 +1089,42 @@ export async function refundDepositEscrow(depositEscrowObjectId) {
   } catch (err) {
     console.warn('refundDepositEscrow failed:', err.message);
     return false;
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// BookingPass (Phase 1) — dynamic, wallet-signed check-in presentation
+// ════════════════════════════════════════════════════════════════════════════
+//
+// The guest's app signs a FRESH `ARIA-CHECKIN:<ref>:<ts>:<nonce>` personal
+// message with their zkLogin wallet each time it renders the QR; a scanner posts
+// that signed payload to /checkin/verify. We recover the signer from the
+// signature and confirm it controls the booking's wallet — so a stale screenshot
+// (old ts) or a different wallet fails. The pass on-chain (the live escrow) is
+// the source of truth; this signature is the proof-of-control in the moment.
+//
+// NEEDS AN IN-BROWSER SMOKE TEST: verifying a zkLogin personal-message signature
+// server-side uses the SDK verifier with a client (to fetch epoch + JWK). This
+// is the same class of thing as the Seal SessionKey path — it may need tweaking
+// for the gRPC client (or a JSON-RPC client just for verification). Build the
+// flow, then exercise it once live and adjust.
+export function checkinMessageBytes(bookingRef, ts, nonce) {
+  return new TextEncoder().encode(`ARIA-CHECKIN:${bookingRef}:${ts}:${nonce}`);
+}
+
+export async function verifyCheckinSignature({ bookingRef, ts, nonce, address, signature }) {
+  if (!bookingRef || !ts || !nonce || !address || !signature) {
+    return { ok: false, reason: 'Incomplete check-in payload' };
+  }
+  try {
+    const message = checkinMessageBytes(bookingRef, ts, nonce);
+    const publicKey = await verifyPersonalMessageSignature(message, signature, { client: suiClient });
+    const signer = publicKey.toSuiAddress();
+    if (normalizeAddr(signer) !== normalizeAddr(address)) {
+      return { ok: false, reason: 'Signature does not match the presented wallet address' };
+    }
+    return { ok: true, signer };
+  } catch (err) {
+    return { ok: false, reason: `Invalid check-in signature: ${err.message}` };
   }
 }

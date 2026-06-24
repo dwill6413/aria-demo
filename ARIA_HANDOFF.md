@@ -1,5 +1,19 @@
 # ARIA — Technical Handoff Document
-**Version:** 4.24 | **Updated:** June 23, 2026
+**Version:** 4.25 | **Updated:** June 24, 2026
+
+> **June 24, 2026 (verifiable reviews + BookingPass P1 + Codex micro-fixes):**
+> Two ideas pulled off the §9 vision bank. **Verifiable reviews** (Theme A) —
+> `/reviews/submit` now only accepts a review for the caller's own, non-cancelled,
+> on-chain-escrow-backed booking, written to Walrus as an immutable attestation;
+> "✓ Verified stay" badge + Walrus proof link (host.jsx) + `✓N` count on cards
+> (index.jsx); fixed a latent `/reviews/all` snake_case→camelCase bug. **BookingPass
+> Phase 1** (Theme C) — a dynamic, wallet-signed check-in pass: rotating QR on My
+> Bookings (`signPersonalMessageWithZkLogin`, `qrcode.react`) + a host scanner
+> (`pages/scan.jsx`) → `POST /checkin/verify` (`verifyCheckinSignature` in
+> `escrow.mjs`). **NEEDS in-browser smoke test** (server-side zkLogin sig verify is
+> the risk). **Codex 5.1 review** (§5g): sweep re-entrancy guards + `LIMIT` on
+> `/bookings/all`; rest already tracked (TLS=M4, monolith=R1). New deps:
+> `qrcode.react`. See `ARIA_ROADMAP.md` §9 (BookingPass spec) + §5g.
 
 > **June 23, 2026 (late — full end-to-end QA + resume-signing):** Phases 1h.5 +
 > 2 are now QA'd end-to-end on live testnet, not just unit-tested:
