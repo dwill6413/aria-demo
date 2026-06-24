@@ -36,12 +36,34 @@ module aria_escrow::escrow {
     const ENotReleaseTime:      u64 = 11; // release_payment called before check-in
     const ERefundTooLate:       u64 = 12; // refund_payment called at/after check-in
     const EReleaseTimeInPast:   u64 = 13; // create_payment_escrow with past release time
+    // Resale (Phase 2c) error codes
+    const EResaleNotAllowed:    u64 = 14; // listing has transfer disabled
+    const EPremiumTooHigh:      u64 = 15; // resale price exceeds the host's cap
+    const EResaleWindowClosed:  u64 = 16; // within 48h of check-in
+    const EMaxHopsReached:      u64 = 17; // already resold once (one hop only)
+    const EFaceUnderpaid:       u64 = 18; // payment < face value
+    const EBookingMismatch:     u64 = 19; // policy/escrow/pass booking_ref mismatch
+    const EResaleNotListed:     u64 = 20; // buy/cancel on a policy that isn't listed
+    const EPriceMismatch:       u64 = 21; // buyer's coin != the seller's ask price
+    const EAlreadyListed:       u64 = 22; // list called while already listed
 
     // 5 days in milliseconds
     const FIVE_DAYS_MS: u64 = 432_000_000;
 
     // 30 days in milliseconds — upper bound on how far out expiry_ms can be set
     const MAX_EXPIRY_MS: u64 = 2_592_000_000;
+
+    // === Resale (Phase 2c) constants ===
+    // No transfer inside the final 48h before check-in (kills last-minute no-show games).
+    const RESALE_WINDOW_MS: u64 = 172_800_000;
+    // One hop only — no speculative resale chains.
+    const MAX_RESALE_HOPS: u8 = 1;
+    // Upcharge (premium) split: ARIA 10%, host 45%; seller keeps the remaining 45%
+    // of the upcharge ON TOP OF the full face value. Face-value resale (cap = 0) pays
+    // no ARIA/host cut. Denominated in basis points.
+    const ARIA_RESALE_BPS: u64 = 1000;
+    const HOST_RESALE_BPS: u64 = 4500;
+    const BPS_DENOM:       u64 = 10000;
 
     // === Core Object ===
 
@@ -705,6 +727,285 @@ module aria_escrow::escrow {
     public fun pass_property_id(p: &BookingPass): u64     { p.property_id }
     public fun pass_check_in_ms(p: &BookingPass): u64     { p.check_in_ms }
     public fun pass_check_out_ms(p: &BookingPass): u64    { p.check_out_ms }
+
+    // === Resale (Phase 2c — guardrailed transfer) ===
+    //
+    // Why a companion object: Sui upgrade compatibility forbids adding fields to the
+    // existing BookingEscrow / BookingPaymentEscrow / BookingPass structs or changing
+    // the create_* signatures. So the host's transfer policy lives in a NEW shared
+    // ResalePolicy object, minted in the booking PTB for new bookings. Resale only
+    // ADDS behavior: it mutates the existing escrows' `guest` field (legal — same
+    // module) so the deposit refund + Seal identity follow the new holder, and it
+    // burns + remints the soulbound pass. Pre-v6 bookings have no ResalePolicy and so
+    // cannot be resold — resale is opt-in for new bookings.
+    //
+    // Two steps, because the pass is soulbound (no `store`) and a single buyer-signed
+    // tx can't carry the seller's pass:
+    //   1. list_for_resale  — SELLER signs, consumes (burns) their pass, sets an ask.
+    //   2. buy_resale       — BUYER signs + funds, gets the booking reassigned + a
+    //                         fresh pass; splits pay out ARIA 10% / host 45% / seller
+    //                         keeps face + 45% of the upcharge.
+    //   (cancel_resale_listing — SELLER unlists and gets their pass reminted.)
+    // The pass's metadata is mirrored onto the policy at creation, so a reissue never
+    // needs the burned pass.
+
+    public struct ResalePolicy has key {
+        id:               UID,
+        booking_ref:      String,
+        host:             address,
+        transferable:     bool,   // host opt-in (Rail 1) — off by default
+        max_premium_bps:  u64,    // price cap (Rail 2) — 0 = face-value only
+        resale_count:     u8,     // hop counter (Rail 5) — capped at MAX_RESALE_HOPS
+        release_time_ms:  u64,    // check-in, for the 48h window assert
+        property_id:      u64,    // mirrored pass metadata (for reissue)
+        check_in_ms:      u64,
+        check_out_ms:     u64,
+        listed:           bool,   // currently for sale?
+        ask_price:        u64,    // seller's ask (face .. face*(1+cap))
+        seller:           address,// who listed it (for cancel + payout); @0x0 when unlisted
+    }
+
+    public struct ResalePolicyCreated has copy, drop {
+        policy_id:       ID,
+        booking_ref:     String,
+        host:            address,
+        transferable:    bool,
+        max_premium_bps: u64,
+    }
+
+    public struct ResaleListed has copy, drop {
+        booking_ref: String,
+        seller:      address,
+        ask_price:   u64,
+        face:        u64,
+    }
+
+    public struct ResaleCancelled has copy, drop {
+        booking_ref: String,
+        seller:      address,
+    }
+
+    public struct BookingResold has copy, drop {
+        booking_ref: String,
+        seller:      address,
+        buyer:       address,
+        sale_price:  u64,   // P
+        face:        u64,   // F = stay payment + deposit
+        aria_cut:    u64,   // 10% of upcharge
+        host_cut:    u64,   // 45% of upcharge
+        seller_cut:  u64,   // face + 45% of upcharge
+    }
+
+    /// Mint the per-booking ResalePolicy. Called in the booking PTB (one extra
+    /// moveCall) when the listing has opted into transfer. `transferable` /
+    /// `max_premium_bps` are read from the host's listing settings at booking time;
+    /// later listing changes only affect future bookings. Pass metadata is mirrored
+    /// here so a resale can reissue the pass without the (burned) original.
+    public fun create_resale_policy(
+        booking_ref:     String,
+        host:            address,
+        transferable:    bool,
+        max_premium_bps: u64,
+        release_time_ms: u64,
+        property_id:     u64,
+        check_in_ms:     u64,
+        check_out_ms:    u64,
+        ctx:             &mut TxContext,
+    ) {
+        let policy = ResalePolicy {
+            id: object::new(ctx),
+            booking_ref,
+            host,
+            transferable,
+            max_premium_bps,
+            resale_count: 0,
+            release_time_ms,
+            property_id,
+            check_in_ms,
+            check_out_ms,
+            listed:    false,
+            ask_price: 0,
+            seller:    @0x0,
+        };
+        event::emit(ResalePolicyCreated {
+            policy_id:       object::id(&policy),
+            booking_ref:     policy.booking_ref,
+            host:            policy.host,
+            transferable:    policy.transferable,
+            max_premium_bps: policy.max_premium_bps,
+        });
+        transfer::share_object(policy);
+    }
+
+    /// Step 1 — SELLER lists their booking for resale. Signs the tx, hands over the
+    /// soulbound pass (consumed/burned as proof of consent), and sets `ask_price`.
+    /// All the guardrails are checked here: host opt-in, hop limit, 48h window, and
+    /// the price cap (ask must be in [face, face*(1+cap)]). Existing structs/signatures
+    /// are untouched.
+    public fun list_for_resale<T>(
+        deposit_escrow: &mut BookingEscrow<T>,
+        payment_escrow: &mut BookingPaymentEscrow<T>,
+        policy:         &mut ResalePolicy,
+        pass:           BookingPass,
+        ask_price:      u64,
+        clock:          &Clock,
+        ctx:            &mut TxContext,
+    ) {
+        let seller = tx_context::sender(ctx);
+
+        // Ownership: the seller must currently hold all three.
+        assert!(seller == deposit_escrow.guest, ENotGuest);
+        assert!(seller == payment_escrow.guest, ENotGuest);
+        assert!(seller == pass.guest, ENotGuest);
+
+        // Same booking across policy, both escrows, and the pass.
+        assert!(policy.booking_ref == deposit_escrow.booking_ref, EBookingMismatch);
+        assert!(policy.booking_ref == payment_escrow.booking_ref, EBookingMismatch);
+        assert!(policy.booking_ref == pass.booking_ref, EBookingMismatch);
+
+        // Both escrows must still be live; not already listed.
+        assert!(deposit_escrow.status == STATUS_ACTIVE, EWrongStatus);
+        assert!(payment_escrow.status == STATUS_ACTIVE, EWrongStatus);
+        assert!(!policy.listed, EAlreadyListed);
+
+        // Rail 1 host opt-in, Rail 5 hop limit + 48h window.
+        assert!(policy.transferable, EResaleNotAllowed);
+        assert!((policy.resale_count as u64) < (MAX_RESALE_HOPS as u64), EMaxHopsReached);
+        assert!(
+            clock::timestamp_ms(clock) + RESALE_WINDOW_MS < policy.release_time_ms,
+            EResaleWindowClosed,
+        );
+
+        // Rail 2 price cap: face computed on-chain; ask must be in [face, face*(1+cap)].
+        let payment_total =
+            payment_escrow.host_amount + payment_escrow.aria_amount + payment_escrow.tax_amount;
+        let face = deposit_escrow.amount + payment_total;
+        assert!(ask_price >= face, EFaceUnderpaid);
+        assert!((ask_price - face) * BPS_DENOM <= face * policy.max_premium_bps, EPremiumTooHigh);
+
+        // Burn the seller's soulbound pass (consent). Metadata already mirrored on the
+        // policy, so reissue at buy/cancel doesn't need it.
+        let BookingPass {
+            id, booking_ref: _, guest: _, host: _, property_id: _,
+            check_in_ms: _, check_out_ms: _,
+        } = pass;
+        object::delete(id);
+
+        policy.listed    = true;
+        policy.ask_price = ask_price;
+        policy.seller    = seller;
+
+        event::emit(ResaleListed { booking_ref: policy.booking_ref, seller, ask_price, face });
+    }
+
+    /// Step 2 — BUYER buys a listed booking. Buyer signs + funds `payment` (must equal
+    /// the ask exactly). The booking is reassigned to the buyer (deposit refund + Seal
+    /// identity follow), the upcharge splits ARIA 10% / host 45% / seller keeps face +
+    /// 45%, and a fresh soulbound pass is minted to the buyer. Buyer Seal identity
+    /// (Rail 4) is enforced off-chain before this PTB is built.
+    public fun buy_resale<T>(
+        deposit_escrow: &mut BookingEscrow<T>,
+        payment_escrow: &mut BookingPaymentEscrow<T>,
+        policy:         &mut ResalePolicy,
+        payment:        Coin<T>,
+        clock:          &Clock,
+        ctx:            &mut TxContext,
+    ) {
+        let buyer = tx_context::sender(ctx);
+
+        assert!(policy.listed, EResaleNotListed);
+        assert!(policy.booking_ref == deposit_escrow.booking_ref, EBookingMismatch);
+        assert!(policy.booking_ref == payment_escrow.booking_ref, EBookingMismatch);
+        assert!(deposit_escrow.status == STATUS_ACTIVE, EWrongStatus);
+        assert!(payment_escrow.status == STATUS_ACTIVE, EWrongStatus);
+        assert!(
+            clock::timestamp_ms(clock) + RESALE_WINDOW_MS < policy.release_time_ms,
+            EResaleWindowClosed,
+        );
+
+        // Buyer must pay exactly the ask (already cap-validated at list time).
+        let p = coin::value(&payment);
+        assert!(p == policy.ask_price, EPriceMismatch);
+
+        let payment_total =
+            payment_escrow.host_amount + payment_escrow.aria_amount + payment_escrow.tax_amount;
+        let face = deposit_escrow.amount + payment_total;
+        assert!(p >= face, EFaceUnderpaid); // defensive
+        let upcharge = p - face;
+
+        // Rail 3 split — same coin::split primitive as release_payment.
+        let aria_cut   = upcharge * ARIA_RESALE_BPS / BPS_DENOM;
+        let host_cut   = upcharge * HOST_RESALE_BPS / BPS_DENOM;
+        let seller_cut = p - aria_cut - host_cut; // = face + 45% of upcharge
+        let seller     = deposit_escrow.guest;    // current holder, before reassignment
+        let aria_addr  = payment_escrow.aria_addr;
+        let host_addr  = payment_escrow.host;
+
+        // Reassign the booking to the buyer — money + identity + access all follow.
+        deposit_escrow.guest = buyer;
+        payment_escrow.guest = buyer;
+        policy.resale_count  = policy.resale_count + 1;
+        policy.listed        = false;
+        policy.ask_price     = 0;
+        policy.seller        = @0x0;
+
+        // Pay out: ARIA + host cuts first, remainder to the seller. Zero legs skipped.
+        let mut payment = payment;
+        if (aria_cut > 0) {
+            transfer::public_transfer(coin::split(&mut payment, aria_cut, ctx), aria_addr);
+        };
+        if (host_cut > 0) {
+            transfer::public_transfer(coin::split(&mut payment, host_cut, ctx), host_addr);
+        };
+        transfer::public_transfer(payment, seller);
+
+        // Remint a fresh soulbound pass to the buyer from the mirrored metadata.
+        mint_booking_pass(
+            policy.booking_ref, buyer, policy.host,
+            policy.property_id, policy.check_in_ms, policy.check_out_ms, ctx,
+        );
+
+        event::emit(BookingResold {
+            booking_ref: policy.booking_ref,
+            seller, buyer, sale_price: p, face, aria_cut, host_cut, seller_cut,
+        });
+    }
+
+    /// SELLER cancels a listing and gets their soulbound pass reminted. Only the
+    /// lister can cancel.
+    public fun cancel_resale_listing(
+        policy: &mut ResalePolicy,
+        ctx:    &mut TxContext,
+    ) {
+        assert!(policy.listed, EResaleNotListed);
+        assert!(tx_context::sender(ctx) == policy.seller, ENotGuest);
+
+        let seller = policy.seller;
+        policy.listed    = false;
+        policy.ask_price = 0;
+        policy.seller    = @0x0;
+
+        mint_booking_pass(
+            policy.booking_ref, seller, policy.host,
+            policy.property_id, policy.check_in_ms, policy.check_out_ms, ctx,
+        );
+
+        event::emit(ResaleCancelled { booking_ref: policy.booking_ref, seller });
+    }
+
+    // ResalePolicy accessors
+    public fun policy_booking_ref(p: &ResalePolicy): String     { p.booking_ref }
+    public fun policy_host(p: &ResalePolicy): address           { p.host }
+    public fun policy_transferable(p: &ResalePolicy): bool      { p.transferable }
+    public fun policy_max_premium_bps(p: &ResalePolicy): u64    { p.max_premium_bps }
+    public fun policy_resale_count(p: &ResalePolicy): u8        { p.resale_count }
+    public fun policy_release_time_ms(p: &ResalePolicy): u64    { p.release_time_ms }
+    public fun policy_listed(p: &ResalePolicy): bool            { p.listed }
+    public fun policy_ask_price(p: &ResalePolicy): u64          { p.ask_price }
+    public fun policy_seller(p: &ResalePolicy): address         { p.seller }
+    public fun policy_property_id(p: &ResalePolicy): u64        { p.property_id }
+    public fun policy_check_in_ms(p: &ResalePolicy): u64        { p.check_in_ms }
+    public fun policy_check_out_ms(p: &ResalePolicy): u64       { p.check_out_ms }
 
     // === Read-Only Accessors ===
 

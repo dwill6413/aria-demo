@@ -928,4 +928,243 @@ module aria_escrow::escrow_tests {
         };
         ts::end(s);
     }
+
+    // ── Resale (Phase 2c — list / buy / cancel) ─────────────────────────────────
+    const BUYER:         address = @0x600;
+    const RS_CAP:        u64 = 2000;          // 20% premium cap (basis points)
+    const RS_RELEASE:    u64 = 200_000_000;   // check-in — far enough out for the 48h window
+    const RS_PROP:       u64 = 7;
+    const RS_CHECKIN:    u64 = 200_000_000;
+    const RS_CHECKOUT:   u64 = 250_000_000;
+    const RS_FACE:       u64 = 1_700_000_000; // DEPOSIT (1e9) + P_TOTAL (7e8)
+    const RS_ASK:        u64 = 1_800_000_000; // face + 100M upcharge (within cap)
+    const RS_ARIA_CUT:   u64 =    10_000_000; // 10% of upcharge
+    const RS_HOST_CUT:   u64 =    45_000_000; // 45% of upcharge
+    const RS_SELLER_CUT: u64 = 1_745_000_000; // face + 45% of upcharge
+    const RS_LATE:       u64 = 100_000_000;   // now inside the 48h window (abort)
+    const RS_OVERASK:    u64 = 2_100_000_000; // face + 400M upcharge (> 20% cap, abort)
+
+    /// Build a full resale-ready booking owned by GUEST: deposit escrow, payment
+    /// escrow (release far out), ResalePolicy, and the soulbound pass.
+    fun setup_resale(scenario: &mut ts::Scenario, transferable: bool, cap_bps: u64) {
+        ts::next_tx(scenario, GUEST);
+        {
+            let mut clock = clock::create_for_testing(ts::ctx(scenario));
+            clock::set_for_testing(&mut clock, T_BEFORE);
+            let dcoin = coin::mint_for_testing<SUI>(DEPOSIT, ts::ctx(scenario));
+            escrow::create_escrow<SUI>(
+                ref_str(), GUEST, HOST, ARBITRATOR, T_EXPIRY, dcoin, &clock, ts::ctx(scenario)
+            );
+            let pcoin = coin::mint_for_testing<SUI>(P_TOTAL, ts::ctx(scenario));
+            escrow::create_payment_escrow<SUI>(
+                ref_str(), GUEST, HOST, ARIA_ADDR, TAX_ADDR, ARBITRATOR,
+                P_HOST, P_ARIA, P_TAX, RS_RELEASE, pcoin, &clock, ts::ctx(scenario)
+            );
+            escrow::create_resale_policy(
+                ref_str(), HOST, transferable, cap_bps, RS_RELEASE,
+                RS_PROP, RS_CHECKIN, RS_CHECKOUT, ts::ctx(scenario)
+            );
+            escrow::mint_booking_pass(
+                ref_str(), GUEST, HOST, RS_PROP, RS_CHECKIN, RS_CHECKOUT, ts::ctx(scenario)
+            );
+            clock::destroy_for_testing(clock);
+        };
+    }
+
+    /// GUEST lists the booking at `ask`, with the clock at `now_ms`.
+    fun do_list(scenario: &mut ts::Scenario, ask: u64, now_ms: u64) {
+        ts::next_tx(scenario, GUEST);
+        {
+            let mut clock = clock::create_for_testing(ts::ctx(scenario));
+            clock::set_for_testing(&mut clock, now_ms);
+            let mut de  = ts::take_shared<BookingEscrow<SUI>>(scenario);
+            let mut pe  = ts::take_shared<escrow::BookingPaymentEscrow<SUI>>(scenario);
+            let mut pol = ts::take_shared<escrow::ResalePolicy>(scenario);
+            let pass = ts::take_from_address<escrow::BookingPass>(scenario, GUEST);
+            escrow::list_for_resale<SUI>(&mut de, &mut pe, &mut pol, pass, ask, &clock, ts::ctx(scenario));
+            ts::return_shared(de);
+            ts::return_shared(pe);
+            ts::return_shared(pol);
+            clock::destroy_for_testing(clock);
+        };
+    }
+
+    /// Happy path: list with a premium, buyer buys → splits, reassignment, fresh pass.
+    #[test]
+    fun test_resale_list_and_buy_happy_path() {
+        let mut s = ts::begin(GUEST);
+        setup_resale(&mut s, true, RS_CAP);
+        do_list(&mut s, RS_ASK, T_BEFORE);
+
+        ts::next_tx(&mut s, BUYER);
+        {
+            let mut clock = clock::create_for_testing(ts::ctx(&mut s));
+            clock::set_for_testing(&mut clock, T_BEFORE);
+            let mut de  = ts::take_shared<BookingEscrow<SUI>>(&s);
+            let mut pe  = ts::take_shared<escrow::BookingPaymentEscrow<SUI>>(&s);
+            let mut pol = ts::take_shared<escrow::ResalePolicy>(&s);
+            let c = coin::mint_for_testing<SUI>(RS_ASK, ts::ctx(&mut s));
+            escrow::buy_resale<SUI>(&mut de, &mut pe, &mut pol, c, &clock, ts::ctx(&mut s));
+            assert!(escrow::guest<SUI>(&de)          == BUYER, 0);
+            assert!(escrow::payment_guest<SUI>(&pe)  == BUYER, 1);
+            assert!(escrow::policy_resale_count(&pol) == 1,    2);
+            assert!(!escrow::policy_listed(&pol),              3);
+            ts::return_shared(de);
+            ts::return_shared(pe);
+            ts::return_shared(pol);
+            clock::destroy_for_testing(clock);
+        };
+
+        // Upcharge split: ARIA 10%, host 45%, seller keeps face + 45%.
+        assert_received(&mut s, ARIA_ADDR, RS_ARIA_CUT);
+        assert_received(&mut s, HOST,      RS_HOST_CUT);
+        assert_received(&mut s, GUEST,     RS_SELLER_CUT);
+
+        // Buyer holds a fresh soulbound pass.
+        ts::next_tx(&mut s, BUYER);
+        {
+            let np = ts::take_from_address<escrow::BookingPass>(&s, BUYER);
+            assert!(escrow::pass_guest(&np)       == BUYER,     4);
+            assert!(escrow::pass_booking_ref(&np) == ref_str(), 5);
+            assert!(escrow::pass_property_id(&np) == RS_PROP,   6);
+            ts::return_to_address(BUYER, np);
+        };
+        ts::end(s);
+    }
+
+    /// Face-value resale (ask == face): no ARIA/host cut, seller gets the whole face.
+    #[test]
+    fun test_resale_face_value_no_cuts() {
+        let mut s = ts::begin(GUEST);
+        setup_resale(&mut s, true, RS_CAP);
+        do_list(&mut s, RS_FACE, T_BEFORE);
+
+        ts::next_tx(&mut s, BUYER);
+        {
+            let mut clock = clock::create_for_testing(ts::ctx(&mut s));
+            clock::set_for_testing(&mut clock, T_BEFORE);
+            let mut de  = ts::take_shared<BookingEscrow<SUI>>(&s);
+            let mut pe  = ts::take_shared<escrow::BookingPaymentEscrow<SUI>>(&s);
+            let mut pol = ts::take_shared<escrow::ResalePolicy>(&s);
+            let c = coin::mint_for_testing<SUI>(RS_FACE, ts::ctx(&mut s));
+            escrow::buy_resale<SUI>(&mut de, &mut pe, &mut pol, c, &clock, ts::ctx(&mut s));
+            ts::return_shared(de);
+            ts::return_shared(pe);
+            ts::return_shared(pol);
+            clock::destroy_for_testing(clock);
+        };
+        assert_received(&mut s, GUEST, RS_FACE);
+        ts::end(s);
+    }
+
+    /// Listing a non-transferable booking aborts.
+    #[test, expected_failure(abort_code = aria_escrow::escrow::EResaleNotAllowed)]
+    fun test_resale_disabled_listing_fails() {
+        let mut s = ts::begin(GUEST);
+        setup_resale(&mut s, false, RS_CAP);
+        do_list(&mut s, RS_ASK, T_BEFORE);
+        ts::end(s);
+    }
+
+    /// Listing above the host's premium cap aborts.
+    #[test, expected_failure(abort_code = aria_escrow::escrow::EPremiumTooHigh)]
+    fun test_resale_over_cap_fails() {
+        let mut s = ts::begin(GUEST);
+        setup_resale(&mut s, true, RS_CAP);
+        do_list(&mut s, RS_OVERASK, T_BEFORE);
+        ts::end(s);
+    }
+
+    /// Listing inside the final 48h window aborts.
+    #[test, expected_failure(abort_code = aria_escrow::escrow::EResaleWindowClosed)]
+    fun test_resale_inside_window_fails() {
+        let mut s = ts::begin(GUEST);
+        setup_resale(&mut s, true, RS_CAP);
+        do_list(&mut s, RS_ASK, RS_LATE);
+        ts::end(s);
+    }
+
+    /// Buyer paying the wrong price aborts.
+    #[test, expected_failure(abort_code = aria_escrow::escrow::EPriceMismatch)]
+    fun test_resale_wrong_price_fails() {
+        let mut s = ts::begin(GUEST);
+        setup_resale(&mut s, true, RS_CAP);
+        do_list(&mut s, RS_ASK, T_BEFORE);
+        ts::next_tx(&mut s, BUYER);
+        {
+            let mut clock = clock::create_for_testing(ts::ctx(&mut s));
+            clock::set_for_testing(&mut clock, T_BEFORE);
+            let mut de  = ts::take_shared<BookingEscrow<SUI>>(&s);
+            let mut pe  = ts::take_shared<escrow::BookingPaymentEscrow<SUI>>(&s);
+            let mut pol = ts::take_shared<escrow::ResalePolicy>(&s);
+            let c = coin::mint_for_testing<SUI>(RS_ASK - 1, ts::ctx(&mut s));
+            escrow::buy_resale<SUI>(&mut de, &mut pe, &mut pol, c, &clock, ts::ctx(&mut s));
+            ts::return_shared(de);
+            ts::return_shared(pe);
+            ts::return_shared(pol);
+            clock::destroy_for_testing(clock);
+        };
+        ts::end(s);
+    }
+
+    /// A second hop is rejected (one hop only): after a buy, the buyer can't relist.
+    #[test, expected_failure(abort_code = aria_escrow::escrow::EMaxHopsReached)]
+    fun test_resale_second_hop_fails() {
+        let mut s = ts::begin(GUEST);
+        setup_resale(&mut s, true, RS_CAP);
+        do_list(&mut s, RS_ASK, T_BEFORE);
+        ts::next_tx(&mut s, BUYER);
+        {
+            let mut clock = clock::create_for_testing(ts::ctx(&mut s));
+            clock::set_for_testing(&mut clock, T_BEFORE);
+            let mut de  = ts::take_shared<BookingEscrow<SUI>>(&s);
+            let mut pe  = ts::take_shared<escrow::BookingPaymentEscrow<SUI>>(&s);
+            let mut pol = ts::take_shared<escrow::ResalePolicy>(&s);
+            let c = coin::mint_for_testing<SUI>(RS_ASK, ts::ctx(&mut s));
+            escrow::buy_resale<SUI>(&mut de, &mut pe, &mut pol, c, &clock, ts::ctx(&mut s));
+            ts::return_shared(de);
+            ts::return_shared(pe);
+            ts::return_shared(pol);
+            clock::destroy_for_testing(clock);
+        };
+        // Buyer now owns the booking + a fresh pass; relisting must abort (hop == 1).
+        ts::next_tx(&mut s, BUYER);
+        {
+            let mut clock = clock::create_for_testing(ts::ctx(&mut s));
+            clock::set_for_testing(&mut clock, T_BEFORE);
+            let mut de  = ts::take_shared<BookingEscrow<SUI>>(&s);
+            let mut pe  = ts::take_shared<escrow::BookingPaymentEscrow<SUI>>(&s);
+            let mut pol = ts::take_shared<escrow::ResalePolicy>(&s);
+            let pass = ts::take_from_address<escrow::BookingPass>(&s, BUYER);
+            escrow::list_for_resale<SUI>(&mut de, &mut pe, &mut pol, pass, RS_ASK, &clock, ts::ctx(&mut s));
+            ts::return_shared(de);
+            ts::return_shared(pe);
+            ts::return_shared(pol);
+            clock::destroy_for_testing(clock);
+        };
+        ts::end(s);
+    }
+
+    /// Cancelling a listing remints the pass to the seller and clears `listed`.
+    #[test]
+    fun test_resale_cancel_remints_pass() {
+        let mut s = ts::begin(GUEST);
+        setup_resale(&mut s, true, RS_CAP);
+        do_list(&mut s, RS_ASK, T_BEFORE);
+
+        ts::next_tx(&mut s, GUEST);
+        {
+            let mut pol = ts::take_shared<escrow::ResalePolicy>(&s);
+            escrow::cancel_resale_listing(&mut pol, ts::ctx(&mut s));
+            assert!(!escrow::policy_listed(&pol), 0);
+            ts::return_shared(pol);
+        };
+        ts::next_tx(&mut s, GUEST);
+        {
+            let p = ts::take_from_address<escrow::BookingPass>(&s, GUEST);
+            assert!(escrow::pass_guest(&p) == GUEST, 1);
+            ts::return_to_address(GUEST, p);
+        };
+        ts::end(s);
+    }
 }
