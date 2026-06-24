@@ -17,7 +17,7 @@ load) in Railway environment variables.
 | Signs | Nothing currently. Originally deployed `escrow.move` and (before P0b, June 16, 2026) signed `create_escrow` directly. |
 | Why it's powerful | Owns the `UpgradeCap` (`0x41f043cf28d0bb77ef6031c5208b611bdd673992afa9e27763b41033e4a327eb`) — can upgrade the deployed package. This is the highest-privilege key in the system. |
 | When you'd need it | Only to upgrade the Move contract, or to formally burn the UpgradeCap (planned pre-mainnet step, once an independent audit passes). |
-| Recent use | Signed the **v4 upgrade** (June 23, 2026, tx `x7LUYvjszivxAouFYchPnLLVFSUGzhowYuhVQBArB2v`), publishing package **v4** at `0xf68a874fbdd3e5aa328f6754bd757edc6c2690510284fa39d5088e44b4cd9e77` — adds the Phase 1h.5 fee functions + Phase 2 `seal_approve` in one bundled upgrade. (Earlier: v3 `0xec0d6bd4…644d8fa1` finalize_claim June 18; v2 `0x98e712…4264f26` June 17, tx `JCA8da…FtJZK`.) The original package ID above stays the type-defining ID for existing `BookingEscrow` objects — and anchors Seal's identity namespace — regardless of how many upgrades happen. |
+| Recent use | Signed the **v6 upgrade** (June 24, 2026, tx `CRYbygbqkk1HNaTaZfXsZnbXy85adHNUAQd6J4QKXTjD`), publishing package **v6** at `0x897777aa537c6e438dba11c750d5579848e2cd57afb29c3f68531ec6aeb6c901` — Phase 2c resale market (`ResalePolicy` + list/buy/cancel; additive, no compatibility break). UpgradeCap is now at version 6. (Earlier: **v5** `0xd825ec2d…dc9b8` Phase 2a BookingPass June 24, tx `EoGhMXMEA8mDobxh38WT2WR1hxd4GuobfJqupsthE1LX`; **v4** `0xf68a874f…b4cd9e77` fee escrow + `seal_approve` June 23, tx `x7LUYvjszivxAouFYchPnLLVFSUGzhowYuhVQBArB2v`; v3 `0xec0d6bd4…644d8fa1` finalize_claim June 18; v2 `0x98e712…4264f26` June 17, tx `JCA8da…FtJZK`.) The original package ID above stays the type-defining ID for existing `BookingEscrow` objects — and anchors Seal's identity namespace — regardless of how many upgrades happen. |
 
 ## 2. Auto-release key (`ARIA_AUTO_RELEASE_KEY` / `autoReleaseKeypair`)
 
@@ -93,10 +93,12 @@ load) in Railway environment variables.
 
 ---
 
-*Created June 17, 2026 (P2). Last updated June 23, 2026: arbitrator key #4 marked
-active (loaded in Railway, now also signs Phase 1h.5 `refund_payment`/
-`refund_deposit`); auto-release key #2 also signs `finalize_claim` + `release_payment`;
-treasury addresses (#5) and `DEMO_HOST_ADDRESS` (#6) recorded; deployer key #1
-signed the v4 upgrade. Update whenever a key is rotated, retired, or generated —
-keep in sync with the Environment Variables sections of `ARIA_HANDOFF.md` /
+*Created June 17, 2026 (P2). Last updated June 24, 2026: deployer key #1 signed the
+**v5** (Phase 2a BookingPass) and **v6** (Phase 2c resale market) upgrades; UpgradeCap
+now at version 6. No keys rotated or generated for v5/v6 — same deployer, auto-release,
+arbitrator, and treasury addresses as before. (Prior June 23, 2026: arbitrator key #4
+marked active, signs `resolve_dispute` + Phase 1h.5 `refund_payment`/`refund_deposit`;
+auto-release key #2 signs `finalize_claim` + `release_payment`; treasury addresses (#5)
+and `DEMO_HOST_ADDRESS` (#6) recorded.) Update whenever a key is rotated, retired, or
+generated — keep in sync with the Environment Variables sections of `ARIA_HANDOFF.md` /
 `ARIA_ROADMAP.md` and with `ARIA_PACKAGE_INVENTORY.md`.*
