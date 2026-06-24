@@ -209,6 +209,13 @@ export async function initDB() {
   END $$;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_reviews_property_id ON reviews(property_id)`);
 
+  // Verifiable reviews (June 24, 2026): a review is only accepted for the guest's
+  // own, non-cancelled, on-chain-escrow-backed booking, and is itself written to
+  // Walrus as an immutable attestation. These columns hold the proof.
+  await pool.query(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS verified BOOLEAN DEFAULT false`);
+  await pool.query(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS settlement_ref TEXT`);
+  await pool.query(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS review_walrus_blob_id TEXT`);
+
   // Status enums as CHECK constraints (catch app bugs at the DB layer). NOT VALID
   // so existing rows aren't re-checked (no startup failure); enforced on new
   // writes. Idempotent via pg_constraint lookup.

@@ -136,10 +136,10 @@ export default function Home() {
       .catch(() => setLoading(false));
 
     Promise.all(PROPERTY_DISPLAY.map(p =>
-      fetch(`${API}/reviews/${p.id}`).then(r => r.json()).then(d => ({ id: p.id, rating: d.averageRating, count: d.count })).catch(() => ({ id: p.id, rating: 0, count: 0 }))
+      fetch(`${API}/reviews/${p.id}`).then(r => r.json()).then(d => ({ id: p.id, rating: d.averageRating, count: d.count, verifiedCount: d.verifiedCount || 0 })).catch(() => ({ id: p.id, rating: 0, count: 0, verifiedCount: 0 }))
     )).then(results => {
       const ratings = {};
-      results.forEach(r => { ratings[r.id] = { rating: r.rating, count: r.count }; });
+      results.forEach(r => { ratings[r.id] = { rating: r.rating, count: r.count, verifiedCount: r.verifiedCount }; });
       setLiveRatings(ratings);
     });
 
@@ -162,8 +162,8 @@ export default function Home() {
 
   const getDisplayRating = (p) => {
     const live = liveRatings[p.id];
-    if (live && live.count > 0) return { rating: live.rating.toFixed(2), count: live.count, isLive: true };
-    return { rating: p.rating, count: p.reviews, isLive: false };
+    if (live && live.count > 0) return { rating: live.rating.toFixed(2), count: live.count, verifiedCount: live.verifiedCount || 0, isLive: true };
+    return { rating: p.rating, count: p.reviews, verifiedCount: 0, isLive: false };
   };
 
   const handleLogin = async () => {
@@ -473,7 +473,7 @@ export default function Home() {
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(320px,1fr))', gap: '20px' }}>
           {filteredProperties.map(p => {
-            const { rating, count, isLive } = getDisplayRating(p);
+            const { rating, count, verifiedCount, isLive } = getDisplayRating(p);
             return (
               <div key={p.id} className="property-card" onClick={() => openModal(p)}
                 style={{ background: '#111', border: '1px solid #222', borderRadius: '12px', overflow: 'hidden', cursor: 'pointer', transition: 'border-color 0.2s' }}
@@ -492,6 +492,9 @@ export default function Home() {
                       <span style={{ color: isLive ? '#aa44ff' : '#888' }}>★</span>
                       <span style={{ color: isLive ? '#aa44ff' : '#fff', fontWeight: isLive ? '700' : '400' }}>{rating}</span>
                       <span style={{ color: '#555', fontSize: '11px' }}>({count})</span>
+                      {verifiedCount > 0 && (
+                        <span title={`${verifiedCount} review${verifiedCount > 1 ? 's' : ''} from a real on-chain-escrow stay`} style={{ color: '#00ff44', fontSize: '11px', fontWeight: '700' }}>✓{verifiedCount}</span>
+                      )}
                     </div>
                   </div>
                   <p style={{ color: '#666', fontSize: '13px', margin: '0 0 12px' }}>{p.location}</p>

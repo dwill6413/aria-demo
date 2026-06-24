@@ -785,6 +785,31 @@ decision; per-user zkLogin salt migration (**M3**); `useEscrowSign()` hook to de
 
 ---
 
+## 5g. Sixth External Review (Codex 5.1 mini, June 24, 2026) — Outcomes
+
+Four findings, all valid (no false positives). Two had a quick-win nugget (fixed
+June 24); two were already tracked.
+
+**Fixed June 24, 2026:**
+- **Sweep re-entrancy guard** — `guardedAutoReleaseSweep` / `guardedCheckInReleaseSweep`
+  skip a tick if the prior run is still in flight. The sweeps `await` on-chain
+  releases serially, so a run could outlast its interval and overlap itself (or the
+  startup `setTimeout`). `server.mjs`.
+- **`/bookings/all` bounded** — `LIMIT` (`BOOKINGS_ALL_LIMIT`, default 500) so one
+  host request can't pull the whole table into memory. `server.mjs`.
+
+**Already tracked / logged for later:**
+- **DB TLS `rejectUnauthorized:false` (High)** = **M4** — supply the Railway CA cert.
+  Genuine mainnet blocker; lower urgency on testnet (the app↔DB link is Railway-internal).
+- **Sweep scaling** (batch `LIMIT`, concurrency cap, job queue) — for when volume
+  justifies it; the overlap guard ships now.
+- **Read pagination** — `/bookings/history` is wallet-scoped (bounded); `/bookings/all`
+  now `LIMIT`ed; proper offset/cursor pagination is the follow-up.
+- **`server.mjs` monolith (~1,500 lines)** = **R1** — split into `routes/*.mjs`; also
+  move the inline HTML email strings into templates (the reviewer's specific add).
+
+---
+
 ## 6. Deliberately Deferred
 
 ### zkLogin salt = `'0'`
@@ -896,10 +921,16 @@ buildable, not hand-wavy). ⭐ = highest differentiation / on-brand. Lift is rou
 These are NOT committed work — they're the idea bank to pull from next.
 
 ### Theme A — Trust & reputation (ARIA's real moat vs Airbnb)
-- ⭐ **Verifiable reviews** *(low lift)* — make a review a signed attestation gated
-  on a *settled on-chain booking* (escrow released). Reviews already carry
-  `booking_ref`; tie them to a real completed stay so fake/incentivized reviews
-  become impossible. Reframes ARIA from "cheaper Airbnb" to "the trust layer."
+- ✅ **Verifiable reviews — SHIPPED June 24, 2026** *(was low lift)* — `/reviews/submit`
+  now accepts a review ONLY for the caller's own, non-cancelled, **on-chain-escrow-backed**
+  booking (`escrow_object_id` must exist), writes the review to **Walrus as an immutable
+  attestation** (tied to the escrow object id + settlement digest), and stores
+  `verified`/`settlement_ref`/`review_walrus_blob_id`. Frontend: "✓ Verified stay"
+  badge + "on-chain proof" Walrus link on host review cards (`host.jsx`), and a
+  `✓N` verified-review count on guest property cards (`index.jsx`). Optional stricter
+  gate `REQUIRE_STAY_COMPLETED` (checkout-passed; off by default). Also fixed a latent
+  bug: `/reviews/all` returned raw snake_case rows so the host UI's `guestName`/`bookingRef`
+  were undefined — now mapped to camelCase. **First idea off the bank.**
 - ⭐ **Portable on-chain reputation** *(medium)* — a guest's/host's stay history,
   review record, and dispute record as a Sui object the user OWNS and carries
   across platforms. Walrus already stores the receipts; make reputation portable

@@ -637,13 +637,26 @@ export default function Host() {
                     <div key={i} style={{ background: '#111', border: '1px solid #222', borderRadius: '12px', padding: '20px' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
                         <div>
-                          <div style={{ fontSize: '15px', fontWeight: '600', marginBottom: '2px' }}>{prop?.title || `Property ${r.propertyId}`}</div>
+                          <div style={{ fontSize: '15px', fontWeight: '600', marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                            {prop?.title || `Property ${r.propertyId}`}
+                            {r.verified && (
+                              <span title="Backed by a real on-chain escrow booking" style={{ background: '#0a1a0a', border: '1px solid #1a3a1a', color: '#00ff44', fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '20px' }}>
+                                ✓ Verified stay
+                              </span>
+                            )}
+                          </div>
                           <div style={{ fontSize: '12px', color: '#666' }}>{r.guestName} · {fmtDate(r.timestamp)}</div>
                         </div>
                         <div style={{ fontSize: '20px' }}>{stars(r.rating)}</div>
                       </div>
                       <p style={{ color: '#ccc', fontSize: '14px', margin: '0 0 8px', lineHeight: '1.6' }}>{r.review}</p>
-                      <div style={{ fontSize: '11px', color: '#555', fontFamily: 'monospace' }}>Ref: {r.bookingRef}</div>
+                      <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', fontSize: '11px', color: '#555', fontFamily: 'monospace' }}>
+                        <span>Ref: {r.bookingRef}</span>
+                        {r.walrusBlobId && (
+                          <a href={`https://aggregator.walrus-testnet.walrus.space/v1/blobs/${r.walrusBlobId}`} target="_blank" rel="noreferrer"
+                            style={{ color: '#00ff44', textDecoration: 'none' }}>🔗 on-chain proof</a>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
