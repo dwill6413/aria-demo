@@ -10,10 +10,10 @@
 > `seal_approve` call target — present in v5). The mint is **flag-gated only**; the
 > publish→update-package-ids→then-enable ordering is the safeguard, by design (no
 > runtime version guard — `escrow.mjs` checks only `BOOKING_PASS_ENABLED === 'true'`).
-> **Open:** in-browser fresh-booking test confirming the soulbound `BookingPass`
-> actually mints + surfaces in My Bookings (existing bookings won't retroactively
-> mint). Note: the `seal_approve` target now resolves to v5, so an in-flight pre-v5
-> booking's PII decrypt could misbehave — fresh bookings are clean.
+> **Verified** June 24, 2026: fresh booking `ARIA-1-1782312873579-3d5f50` minted the
+> soulbound `BookingPass` (🎫 on-chain in My Bookings; existing bookings don't
+> retroactively mint). Note: the `seal_approve` target now resolves to v5, so an
+> in-flight pre-v5 booking's PII decrypt could misbehave — fresh bookings are clean.
 >
 > **June 24, 2026 (verifiable reviews + BookingPass P1 + Codex micro-fixes):**
 > Two ideas pulled off the §9 vision bank. **Verifiable reviews** (Theme A) —

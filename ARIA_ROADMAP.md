@@ -10,10 +10,10 @@ Read this entire document before writing any code.
 > `ESCROW_PACKAGE_ID` = v5 and `BOOKING_PASS_ENABLED` = `true` (both confirmed);
 > Vercel `NEXT_PUBLIC_ESCROW_PACKAGE_ID` = v5 (the `seal_approve` call target). The
 > mint is **flag-gated only** — the publish→update-package-ids→then-enable ordering is
-> the safeguard, by design (no runtime version guard, intentionally). **Open:** an
-> in-browser fresh-booking test confirming the soulbound `BookingPass` actually mints
-> and shows in My Bookings (existing bookings won't retroactively mint). See §9
-> Phase 2a + `ARIA_PACKAGE_INVENTORY.md`.
+> the safeguard, by design (no runtime version guard, intentionally). **Verified**
+> June 24, 2026: fresh booking `ARIA-1-1782312873579-3d5f50` minted the soulbound
+> `BookingPass` (🎫 on-chain in My Bookings; existing bookings don't retroactively
+> mint). See §9 Phase 2a + `ARIA_PACKAGE_INVENTORY.md`.
 >
 > **June 23, 2026 (full E2E QA + §5f quick wins + resume-signing):**
 > Phases 1h.5 + 2 are QA'd end-to-end on live testnet (booking → two-escrow sign →
@@ -979,7 +979,7 @@ These are NOT committed work — they're the idea bank to pull from next.
     in-browser smoke test** (server-side zkLogin signature verification, same risk
     class as the Seal SessionKey path — may need a tweak for the gRPC client).
     No contract upgrade. Camera QR scanning (vs paste) is a small follow-up.
-  - 🟩 **Phase 2a — owned `BookingPass` NFT — PUBLISHED + ACTIVATED June 24, 2026 (v5 `0xd825ec2d…dc9b8`; flag on; in-browser mint test pending)** — mint an owned
+  - 🟩 **Phase 2a — owned `BookingPass` NFT — LIVE June 24, 2026 (v5 `0xd825ec2d…dc9b8`; flag on; mint verified in-browser — booking `ARIA-1-1782312873579-3d5f50`)** — mint an owned
     pass to the guest in the booking PTB (`mint_booking_pass`, one extra `moveCall`,
     no extra signature). **Soulbound by default: `public struct BookingPass has key`
     with NO `store` ability** → the owner can't transfer it; only a function inside

@@ -30,9 +30,9 @@ the version the function lives in — see Seal section + `ARIA_HANDOFF.md` Sui
 Integration Lessons §13.) **Note:** as of June 24, 2026 v5 is published on-chain and
 the rollout is applied — Railway `ESCROW_PACKAGE_ID` = v5 and `BOOKING_PASS_ENABLED`
 = `true` (both confirmed); Vercel `NEXT_PUBLIC_ESCROW_PACKAGE_ID` set to v5 per the
-rollout (confirm the Vercel redeploy). The one open item is an in-browser
-fresh-booking test confirming the soulbound `BookingPass` actually mints. See the
-env-vars table below.
+rollout. Live mint **verified in-browser June 24, 2026** — fresh booking
+`ARIA-1-1782312873579-3d5f50` minted the soulbound `BookingPass` (🎫 on-chain in
+My Bookings). See the env-vars table below.
 
 ### Version history
 
@@ -42,7 +42,7 @@ env-vars table below.
 | v2 | `0x98e712692f22f308bb6d097d2d8a2743ed0c01058135d71436b4abcd34264f26` | June 17, 2026 (P3) | Removed dead `STATUS_RESOLVED` constant; added 30-day `MAX_EXPIRY_MS` + `EExpiryTooFar`. Tx `JCA8daJ9mSByY6x51ZhEc6Ubfrv1LEbf3nsVccEFtJZK`. |
 | v3 | `0xec0d6bd45d6bbf3aad04778ace4aacef33c071a30d79090532ba1697644d8fa1` | June 18, 2026 | Added permissionless `finalize_claim` (CLAIMED-deadlock fix). Tx `9wzX4hQkZzzyZTMh9siAU2kHqRLQmJJots3FjzgGMAQa`. |
 | v4 | `0xf68a874fbdd3e5aa328f6754bd757edc6c2690510284fa39d5088e44b4cd9e77` | June 23, 2026 | **Phase 1h.5 fee escrow** (`BookingPaymentEscrow` + `create_payment_escrow`/`release_payment`/`refund_payment`/`refund_deposit`) **+ Phase 2 `seal_approve`**, one bundled upgrade. Tx `x7LUYvjszivxAouFYchPnLLVFSUGzhowYuhVQBArB2v`. Live + smoke-tested. |
-| **v5 (current)** | `0xd825ec2db47c38758974dd9ae64fb4c4fe996ed383ae228052f30ec3351dc9b8` | June 24, 2026 | **Phase 2a BookingPass** — soulbound `BookingPass` owned object minted in the booking PTB, gated behind `BOOKING_PASS_ENABLED`. Additive upgrade, no compatibility break; `seal_approve` + fee/Seal calls unchanged. Tx `EoGhMXMEA8mDobxh38WT2WR1hxd4GuobfJqupsthE1LX`. Published on-chain + env set to v5 with `BOOKING_PASS_ENABLED=true` (June 24, 2026); **fresh-booking on-chain mint not yet verified in-browser**. |
+| **v5 (current)** | `0xd825ec2db47c38758974dd9ae64fb4c4fe996ed383ae228052f30ec3351dc9b8` | June 24, 2026 | **Phase 2a BookingPass** — soulbound `BookingPass` owned object minted in the booking PTB, gated behind `BOOKING_PASS_ENABLED`. Additive upgrade, no compatibility break; `seal_approve` + fee/Seal calls unchanged. Tx `EoGhMXMEA8mDobxh38WT2WR1hxd4GuobfJqupsthE1LX`. Published on-chain + env set to v5 with `BOOKING_PASS_ENABLED=true` (June 24, 2026); **live mint verified in-browser June 24, 2026** — fresh booking `ARIA-1-1782312873579-3d5f50` minted the soulbound `BookingPass` (🎫 on-chain badge in My Bookings). |
 
 ### Env vars that reference this contract
 
@@ -105,9 +105,9 @@ install --frozen-lockfile`** (see `nixpacks.toml` / `railway.json`). NOT npm
 
 | Question | Answer |
 |---|---|
-| "Which package ID do I call functions on?" | The current published one (v5): `0xd825ec2d…dc9b8` — but the live env still calls v4 `0xf68a874f…cd9e77` until the rollout flips `*_PACKAGE_ID`. |
+| "Which package ID do I call functions on?" | The current published one (v5): `0xd825ec2d…dc9b8` — live in both Railway and Vercel as of June 24, 2026. |
 | "Which package ID defines the escrow types / anchors Seal?" | The original (v1): `0x538262…7fdbe` — never changes. |
-| "Which id does Seal encrypt + SessionKey use vs. the seal_approve call?" | encrypt + SessionKey → original `0x538262…`; the `seal_approve` move call → whatever `NEXT_PUBLIC_ESCROW_PACKAGE_ID` is set to (v4 `0xf68a874f…` now, v5 `0xd825ec2d…` after rollout — the fn exists in both). |
+| "Which id does Seal encrypt + SessionKey use vs. the seal_approve call?" | encrypt + SessionKey → original `0x538262…`; the `seal_approve` move call → whatever `NEXT_PUBLIC_ESCROW_PACKAGE_ID` is set to (v5 `0xd825ec2d…` as of June 24, 2026; the fn exists in both v4 and v5). |
 | "Who can publish a new upgrade?" | Whoever holds the UpgradeCap (`0x41f043…327eb`), currently the cold deployer key. |
 | "Is there a separate Seal/PII contract?" | No — `seal_approve` lives in `escrow.move` (v4 + v5). No `SEAL_PACKAGE_ID`. |
 | "What changed in v5?" | Added the soulbound `BookingPass` mint to the booking PTB, gated by `BOOKING_PASS_ENABLED`. Additive/no-break; everything else identical to v4. |
@@ -119,8 +119,8 @@ Phase 2a soulbound `BookingPass` mint, gated by `BOOKING_PASS_ENABLED`; additive
 upgrade, no compatibility break). v5 is published on-chain (`Published.toml`
 version 5), the env rollout is applied (Railway `ESCROW_PACKAGE_ID` = v5 +
 `BOOKING_PASS_ENABLED` = `true`, both confirmed; Vercel `NEXT_PUBLIC_ESCROW_PACKAGE_ID`
-set to v5 per rollout). One item remains: an in-browser fresh-booking test confirming
-the soulbound `BookingPass` mints — flip the version-history note to "verified" once
-that passes. Update this file every time a new package version is published or dependencies
+set to v5 per rollout). Live mint verified in-browser June 24, 2026 — fresh booking
+`ARIA-1-1782312873579-3d5f50` minted the soulbound `BookingPass` (🎫 on-chain in My
+Bookings). Update this file every time a new package version is published or dependencies
 change — keep it in sync with `Published.toml`, `ARIA_KEY_INVENTORY.md`, and the
 Environment Variables sections of `ARIA_HANDOFF.md` / `ARIA_ROADMAP.md`.*
