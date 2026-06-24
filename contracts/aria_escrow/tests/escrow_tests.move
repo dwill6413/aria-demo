@@ -933,6 +933,7 @@ module aria_escrow::escrow_tests {
     const BUYER:         address = @0x600;
     const RS_CAP:        u64 = 2000;          // 20% premium cap (basis points)
     const RS_RELEASE:    u64 = 200_000_000;   // check-in — far enough out for the 48h window
+    const RS_WINDOW:     u64 = 172_800_000;   // 48h no-transfer window (mainnet default)
     const RS_PROP:       u64 = 7;
     const RS_CHECKIN:    u64 = 200_000_000;
     const RS_CHECKOUT:   u64 = 250_000_000;
@@ -961,7 +962,7 @@ module aria_escrow::escrow_tests {
                 P_HOST, P_ARIA, P_TAX, RS_RELEASE, pcoin, &clock, ts::ctx(scenario)
             );
             escrow::create_resale_policy(
-                ref_str(), HOST, transferable, cap_bps, RS_RELEASE,
+                ref_str(), HOST, transferable, cap_bps, RS_RELEASE, RS_WINDOW,
                 RS_PROP, RS_CHECKIN, RS_CHECKOUT, ts::ctx(scenario)
             );
             escrow::mint_booking_pass(

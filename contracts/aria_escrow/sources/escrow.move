@@ -756,7 +756,10 @@ module aria_escrow::escrow {
         transferable:     bool,   // host opt-in (Rail 1) — off by default
         max_premium_bps:  u64,    // price cap (Rail 2) — 0 = face-value only
         resale_count:     u8,     // hop counter (Rail 5) — capped at MAX_RESALE_HOPS
-        release_time_ms:  u64,    // check-in, for the 48h window assert
+        release_time_ms:  u64,    // check-in, for the no-transfer window assert
+        resale_window_ms: u64,    // no-transfer window before check-in (Rail 5). Baked
+                                  // per booking so testnet can use a short window while
+                                  // mainnet keeps the 48h default (RESALE_WINDOW_MS).
         property_id:      u64,    // mirrored pass metadata (for reissue)
         check_in_ms:      u64,
         check_out_ms:     u64,
@@ -807,6 +810,7 @@ module aria_escrow::escrow {
         transferable:    bool,
         max_premium_bps: u64,
         release_time_ms: u64,
+        resale_window_ms: u64,
         property_id:     u64,
         check_in_ms:     u64,
         check_out_ms:    u64,
@@ -820,6 +824,7 @@ module aria_escrow::escrow {
             max_premium_bps,
             resale_count: 0,
             release_time_ms,
+            resale_window_ms,
             property_id,
             check_in_ms,
             check_out_ms,
@@ -872,7 +877,7 @@ module aria_escrow::escrow {
         assert!(policy.transferable, EResaleNotAllowed);
         assert!((policy.resale_count as u64) < (MAX_RESALE_HOPS as u64), EMaxHopsReached);
         assert!(
-            clock::timestamp_ms(clock) + RESALE_WINDOW_MS < policy.release_time_ms,
+            clock::timestamp_ms(clock) + policy.resale_window_ms < policy.release_time_ms,
             EResaleWindowClosed,
         );
 
@@ -919,7 +924,7 @@ module aria_escrow::escrow {
         assert!(deposit_escrow.status == STATUS_ACTIVE, EWrongStatus);
         assert!(payment_escrow.status == STATUS_ACTIVE, EWrongStatus);
         assert!(
-            clock::timestamp_ms(clock) + RESALE_WINDOW_MS < policy.release_time_ms,
+            clock::timestamp_ms(clock) + policy.resale_window_ms < policy.release_time_ms,
             EResaleWindowClosed,
         );
 
@@ -1000,6 +1005,7 @@ module aria_escrow::escrow {
     public fun policy_max_premium_bps(p: &ResalePolicy): u64    { p.max_premium_bps }
     public fun policy_resale_count(p: &ResalePolicy): u8        { p.resale_count }
     public fun policy_release_time_ms(p: &ResalePolicy): u64    { p.release_time_ms }
+    public fun policy_resale_window_ms(p: &ResalePolicy): u64   { p.resale_window_ms }
     public fun policy_listed(p: &ResalePolicy): bool            { p.listed }
     public fun policy_ask_price(p: &ResalePolicy): u64          { p.ask_price }
     public fun policy_seller(p: &ResalePolicy): address         { p.seller }
@@ -1032,6 +1038,10 @@ module aria_escrow::escrow {
 
     public fun five_days_ms():    u64 { FIVE_DAYS_MS    }
     public fun max_expiry_ms():   u64 { MAX_EXPIRY_MS   }
+    /// Canonical mainnet no-transfer window (48h). create_resale_policy takes the
+    /// window as a parameter (so testnet can pass a short one); this exposes the
+    /// default the backend uses when RESALE_WINDOW_MS env is unset.
+    public fun default_resale_window_ms(): u64 { RESALE_WINDOW_MS }
     public fun status_active():   u8  { STATUS_ACTIVE   }
     public fun status_released(): u8  { STATUS_RELEASED }
     public fun status_claimed():  u8  { STATUS_CLAIMED  }

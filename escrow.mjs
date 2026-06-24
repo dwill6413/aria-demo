@@ -876,6 +876,9 @@ export async function buildBookingPaymentTransaction(bookingRef, guestAddr, host
           tx.pure.bool(true),
           tx.pure.u64(BigInt(amounts.maxPremiumBps || 0)),
           tx.pure.u64(releaseMsBig),
+          // No-transfer window before check-in (Rail 5). Baked per booking so testnet
+          // can use a short window; defaults to 48h (172_800_000) like mainnet.
+          tx.pure.u64(BigInt(amounts.resaleWindowMs ?? 172_800_000)),
           tx.pure.u64(BigInt(propertyId || 0)),
           tx.pure.u64(BigInt(checkInMs || 0)),
           tx.pure.u64(BigInt(checkOutMs || 0)),

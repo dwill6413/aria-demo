@@ -494,11 +494,17 @@ export async function createBooking({ propertyId, checkIn, checkOut, session, lo
       // buildBookingPaymentTransaction adds the create_resale_policy moveCall so
       // this booking can later be resold under these terms. Dormant otherwise.
       const resale = await getResaleSettings(propertyId, logger);
+      // No-transfer window before check-in (Rail 5), baked into the policy. Defaults
+      // to 48h; set RESALE_WINDOW_MS (ms) lower on testnet so resale is exercisable
+      // against the short 5-min testnet release_time. 0 disables the window entirely.
+      const resaleWindowMs = Number.isFinite(Number(process.env.RESALE_WINDOW_MS))
+        ? Math.max(0, Number(process.env.RESALE_WINDOW_MS)) : 172_800_000;
       const built = useCombined
         ? await buildBookingPaymentTransaction(bookingRef, session.suiAddress, hostAddr,
             { subtotal, ariaFee, taxes, depositAmount, releaseMs,
               propertyId: Number(propertyId), checkInMs: Date.parse(checkInStr), checkOutMs: Date.parse(checkOutStr),
-              transferAllowed: resale.transferAllowed, maxPremiumBps: resale.maxPremiumBps }, logger)
+              transferAllowed: resale.transferAllowed, maxPremiumBps: resale.maxPremiumBps,
+              resaleWindowMs }, logger)
         : await buildEscrowTransaction(bookingRef, session.suiAddress, hostAddr, depositAmount, logger);
       if (built?.txBytes) {
         escrowTxBytes = built.txBytes;

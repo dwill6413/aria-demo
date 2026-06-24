@@ -914,7 +914,11 @@ fastify.post('/booking/resolve-dispute', {
 // Rail 4 (buyer Seal identity) before building the buy PTB, and — crucially —
 // never write Postgres until the signed tx is verified on-chain. The whole
 // feature is dormant unless RESALE_ENABLED=true (same playbook as 2a's flag).
-const RESALE_WINDOW_MS = 172_800_000;  // 48h — must match escrow.move RESALE_WINDOW_MS
+// No-transfer window for the off-chain pre-check. The authoritative window is
+// baked per-policy on-chain (create_resale_policy); this mirrors the same env
+// createBooking uses so the pre-check matches a testnet-shortened window. Default 48h.
+const RESALE_WINDOW_MS = Number.isFinite(Number(process.env.RESALE_WINDOW_MS))
+  ? Math.max(0, Number(process.env.RESALE_WINDOW_MS)) : 172_800_000;
 const MAX_RESALE_HOPS   = 1;           // one hop — must match MAX_RESALE_HOPS
 const ARIA_RESALE_BPS   = 1000;        // 10% of upcharge — must match ARIA_RESALE_BPS
 const HOST_RESALE_BPS   = 4500;        // 45% of upcharge — must match HOST_RESALE_BPS
