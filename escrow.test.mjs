@@ -408,6 +408,30 @@ await test('fallback field .id used when .objectId absent', () => {
   assertEqual(isObjectMutated(changedObjects, 'escrow-id'), true);
 });
 
+// Real gRPC core API: a mutated EXISTING object has idOperation 'None' (the field
+// only tracks ID create/delete). changedObjects lists only changed objects, so
+// presence + not-created + not-deleted = mutated. (This is the prod shape; the
+// 'Mutated' literal above is the legacy/mock shape.)
+await test('gRPC shape: idOperation "None" on a matching id — counts as mutated', () => {
+  const changedObjects = [{ objectId: 'policy-id', idOperation: 'None', outputState: { $kind: 'ObjectWrite' } }];
+  assertEqual(isObjectMutated(changedObjects, 'policy-id'), true);
+});
+
+await test('gRPC shape: idOperation as { $kind: "None" } object — counts as mutated', () => {
+  const changedObjects = [{ objectId: 'policy-id', idOperation: { $kind: 'None' } }];
+  assertEqual(isObjectMutated(changedObjects, 'policy-id'), true);
+});
+
+await test('gRPC shape: idOperation "Deleted" — NOT counted as mutated', () => {
+  const changedObjects = [{ objectId: 'policy-id', idOperation: 'Deleted' }];
+  assertEqual(isObjectMutated(changedObjects, 'policy-id'), false);
+});
+
+await test('JSON-RPC shape: reference.objectId is matched', () => {
+  const changedObjects = [{ reference: { objectId: 'policy-id' }, idOperation: 'None' }];
+  assertEqual(isObjectMutated(changedObjects, 'policy-id'), true);
+});
+
 console.log('\nverifyClaimDamageTransaction\n');
 
 await test('successful claim_damage tx, correct host sender, escrow mutated — returns ok:true', async () => {

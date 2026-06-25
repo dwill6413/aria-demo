@@ -187,11 +187,18 @@ export function extractCreatedObjectId(changedObjects) {
 export function isObjectMutated(changedObjects, expectedObjectId) {
   if (!expectedObjectId) return false;
   return (changedObjects || []).some(c => {
-    const id = c.objectId ?? c.id ?? c.object_id;
+    const id = c.objectId ?? c.id ?? c.object_id ?? c.reference?.objectId;
     if (id !== expectedObjectId) return false;
     let op = c.idOperation ?? c.operation ?? c.id_operation ?? c.$kind;
     if (op && typeof op === 'object') op = op.$kind;
-    return typeof op === 'string' && /mutated/i.test(op);
+    op = typeof op === 'string' ? op : '';
+    if (/mutated/i.test(op)) return true;                  // legacy / JSON-RPC / mock shape
+    if (/created/i.test(op) || /deleted/i.test(op)) return false;
+    // Real gRPC (core API) shape: a MUTATED existing object has idOperation 'None'
+    // (that field tracks only ID create/delete, not content writes). changedObjects
+    // lists ONLY objects that actually changed, so an entry whose id matches and was
+    // neither created nor deleted is a write to an existing object = mutated.
+    return true;
   });
 }
 
