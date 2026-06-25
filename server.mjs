@@ -33,7 +33,7 @@ import {
   bookingCreateSchema, paymentCreateIntentSchema, hostApplySchema, validateBody,
   claimDamageSchema, claimDamageConfirmSchema, disputeClaimSchema, disputeClaimConfirmSchema, resolveDisputeSchema,
   guestProfileSchema,
-  resaleListSchema, resaleTransferBuildSchema, resaleTransferConfirmSchema, resaleSettingsSchema
+  resaleListSchema, resaleTransferConfirmSchema, resaleSettingsSchema
 } from './validation.mjs';
 
 dotenvConfig();

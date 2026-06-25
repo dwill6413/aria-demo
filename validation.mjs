@@ -106,12 +106,11 @@ export const resaleListSchema = z.object({
   askPrice: z.union([z.string(), z.number()])
 });
 
-export const resaleTransferBuildSchema = z.object({
-  bookingRef: z.string().min(1, 'bookingRef is required')
-});
-
+// bookingRef for these routes is a URL path param (/pass/:bookingRef/…), NOT a
+// body field — the route reads request.params.bookingRef. So the body schema
+// validates only the digest. (Extra body keys like askPrice are ignored by zod's
+// default strip behavior and still readable from request.body in the route.)
 export const resaleTransferConfirmSchema = z.object({
-  bookingRef: z.string().min(1, 'bookingRef is required'),
   digest: z.string().min(1, 'digest is required')
 });
 
