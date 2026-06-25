@@ -1,7 +1,17 @@
 # ARIA — Technical Handoff Document
-**Version:** 4.27 | **Updated:** June 24, 2026
+**Version:** 4.28 | **Updated:** June 25, 2026
 
-> **June 24, 2026 (LATEST — v6 published + Phase 2c resale market LIVE & VERIFIED):**
+> **June 25, 2026 (LATEST — v7 pre-mainnet hardening):** v7 escrow package
+> `0xadd5ac7867a69200d632e858193549b6fa94abff7d80397a1ab4c418f99d3e60` published —
+> resale split (`aria_cut`/`host_cut`) and the Rail 2 price-cap comparison now use u128
+> intermediates so the multiply-then-divide can't overflow u64 at extreme values (per an
+> external review). No behavior change at realistic values; 52/52 Move tests unchanged.
+> Additive/no-break; tx `6DTCEZ3rf54NfY5RhV18WWx2apk1tgB5e1d2AUWGoukC`. Set Railway/Vercel
+> `*_PACKAGE_ID` to v7. (Publishing required bumping the local Sui CLI to 1.74.0 for
+> testnet protocol 127 + a faucet top-up of the deployer for gas.) Phase 2c resale itself
+> shipped + verified in v6 (below) — v7 is the same logic, overflow-hardened.
+>
+> **June 24, 2026 (v6 published + Phase 2c resale market LIVE & VERIFIED):**
 > v6 escrow package `0x897777aa537c6e438dba11c750d5579848e2cd57afb29c3f68531ec6aeb6c901`
 > published — additive upgrade over v5, no compatibility break (existing escrow
 > structs/signatures untouched). Upgrade tx `CRYbygbqkk1HNaTaZfXsZnbXy85adHNUAQd6J4QKXTjD`.
@@ -220,7 +230,8 @@ a `BookingEscrow<SUI>` shared object that holds the deposit on-chain.
 
 | Item | Value |
 |---|---|
-| Package ID (current, **v6**) | `0x897777aa537c6e438dba11c750d5579848e2cd57afb29c3f68531ec6aeb6c901` |
+| Package ID (current, **v7**) | `0xadd5ac7867a69200d632e858193549b6fa94abff7d80397a1ab4c418f99d3e60` |
+| Package ID (prior, v6) | `0x897777aa537c6e438dba11c750d5579848e2cd57afb29c3f68531ec6aeb6c901` |
 | Package ID (prior, v5) | `0xd825ec2db47c38758974dd9ae64fb4c4fe996ed383ae228052f30ec3351dc9b8` |
 | Package ID (prior, v4) | `0xf68a874fbdd3e5aa328f6754bd757edc6c2690510284fa39d5088e44b4cd9e77` |
 | Package ID (older, v3) | `0xec0d6bd45d6bbf3aad04778ace4aacef33c071a30d79090532ba1697644d8fa1` |
@@ -742,10 +753,11 @@ Railway runs **Node 22** (`nixpacks.toml`: `nodejs_22`). Required by
 ```
 DATABASE_URL, GOOGLE_CLIENT_ID, GOOGLE_CALLBACK_URL, FRONTEND_URL
 HOST_ADDRESSES, SESSION_SECRET, XAI_API_KEY, RESEND_API_KEY, STRIPE_SECRET_KEY
-ESCROW_PACKAGE_ID       = 0x897777aa537c6e438dba11c750d5579848e2cd57afb29c3f68531ec6aeb6c901
-                          (v6 — published June 24, 2026; adds Phase 2c resale market.
-                          Upgrade tx CRYbygbqkk1HNaTaZfXsZnbXy85adHNUAQd6J4QKXTjD.
-                          Prior v5: 0xd825ec2db47c38758974dd9ae64fb4c4fe996ed383ae228052f30ec3351dc9b8)
+ESCROW_PACKAGE_ID       = 0xadd5ac7867a69200d632e858193549b6fa94abff7d80397a1ab4c418f99d3e60
+                          (v7 — published June 25, 2026; u128 overflow hardening of the
+                          resale math. Upgrade tx 6DTCEZ3rf54NfY5RhV18WWx2apk1tgB5e1d2AUWGoukC.
+                          Prior v6: 0x897777aa537c6e438dba11c750d5579848e2cd57afb29c3f68531ec6aeb6c901
+                          (Phase 2c resale, tx CRYbygbqkk1HNaTaZfXsZnbXy85adHNUAQd6J4QKXTjD))
 BOOKING_PASS_ENABLED    = true   (June 24, 2026 — gates the BookingPass mint; v6 keeps it)
 RESALE_ENABLED          = true   (June 24, 2026 — gates Phase 2c resale routes +
                           create_resale_policy mint; set ON after *_PACKAGE_ID on v6)

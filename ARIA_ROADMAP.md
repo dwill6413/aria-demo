@@ -1,9 +1,16 @@
 # ARIA — Product Roadmap & AI Handoff Document
-**Version:** 2.25 | **Updated:** June 24, 2026
+**Version:** 2.26 | **Updated:** June 25, 2026
 **Purpose:** Complete handoff for an AI assistant continuing ARIA development.
 Read this entire document before writing any code.
 
-> **June 24, 2026 (LATEST — v6 published + Phase 2c resale market LIVE & VERIFIED):**
+> **June 25, 2026 (LATEST — v7 pre-mainnet hardening):** v7 escrow package
+> `0xadd5ac7867a69200d632e858193549b6fa94abff7d80397a1ab4c418f99d3e60` published — resale
+> split + price-cap math now uses u128 intermediates (overflow-safe), per an external code
+> review. No behavior change at realistic values; 52/52 Move tests unchanged. Additive/no-break;
+> tx `6DTCEZ3rf54NfY5RhV18WWx2apk1tgB5e1d2AUWGoukC`. Railway/Vercel `*_PACKAGE_ID` → v7.
+> Phase 2c resale itself shipped + verified in v6 (below); v7 is identical logic, hardened.
+>
+> **June 24, 2026 (v6 published + Phase 2c resale market LIVE & VERIFIED):**
 > The guardrailed resale market shipped to chain. v6 escrow package
 > `0x897777aa537c6e438dba11c750d5579848e2cd57afb29c3f68531ec6aeb6c901` published —
 > additive upgrade over v5, no compatibility break (existing escrow structs/signatures
