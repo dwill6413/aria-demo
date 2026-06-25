@@ -572,8 +572,12 @@ fastify.post('/booking/:bookingRef/escrow/rebuild', {
   if (!hostAddr) return reply.code(503).send({ error: 'Host address not configured for this property' });
 
   // Fresh release window — the original (now + 5min testnet) has likely lapsed,
-  // and create_payment_escrow asserts release_time is in the future.
-  const releaseMs = Date.now() + 300_000;
+  // and create_payment_escrow asserts release_time is in the future. Honors
+  // PAYMENT_RELEASE_OFFSET_MS (same as createBooking) so a rebuilt booking gets
+  // the same release horizon — relevant for the resale demo window.
+  const releaseMs = Date.now() + (
+    Number.isFinite(Number(process.env.PAYMENT_RELEASE_OFFSET_MS))
+      ? Math.max(60_000, Number(process.env.PAYMENT_RELEASE_OFFSET_MS)) : 300_000);
   const useCombined = !!(process.env.ARIA_FEE_ADDRESS && process.env.ARIA_TAX_REMITTANCE_ADDRESS);
   let built;
   try {

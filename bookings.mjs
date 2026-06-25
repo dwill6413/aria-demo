@@ -485,7 +485,13 @@ export async function createBooking({ propertyId, checkIn, checkOut, session, lo
   // without waiting for the real check-in date (mirrors the deposit's 5-min
   // testnet expiry window). MAINNET: set releaseMs to the real check-in
   // timestamp, e.g. Date.parse(checkInStr) [+ optional grace].
-  const releaseMs = Date.now() + 300_000;
+  // PAYMENT_RELEASE_OFFSET_MS overrides the 5-min default — set it longer (e.g.
+  // 86_400_000 = 1 day) to demo resale, since resale is only allowed while the
+  // release time is still in the future (minus RESALE_WINDOW_MS). The release
+  // time is also baked into the ResalePolicy, so it governs the on-chain window.
+  const releaseMs = Date.now() + (
+    Number.isFinite(Number(process.env.PAYMENT_RELEASE_OFFSET_MS))
+      ? Math.max(60_000, Number(process.env.PAYMENT_RELEASE_OFFSET_MS)) : 300_000);
   try {
     const hostAddr = await getPropertyHostAddress(propertyId, logger);
     if (hostAddr) {
