@@ -886,7 +886,14 @@ module aria_escrow::escrow {
             payment_escrow.host_amount + payment_escrow.aria_amount + payment_escrow.tax_amount;
         let face = deposit_escrow.amount + payment_total;
         assert!(ask_price >= face, EFaceUnderpaid);
-        assert!((ask_price - face) * BPS_DENOM <= face * policy.max_premium_bps, EPremiumTooHigh);
+        // u128 intermediates so the cap comparison can't overflow u64 at large
+        // face/premium values (mainnet hardening — the products are bounded in
+        // practice, but the cast costs nothing and removes the abort-on-overflow edge).
+        assert!(
+            ((ask_price - face) as u128) * (BPS_DENOM as u128)
+                <= (face as u128) * (policy.max_premium_bps as u128),
+            EPremiumTooHigh,
+        );
 
         // Burn the seller's soulbound pass (consent). Metadata already mirrored on the
         // policy, so reissue at buy/cancel doesn't need it.
@@ -938,9 +945,11 @@ module aria_escrow::escrow {
         assert!(p >= face, EFaceUnderpaid); // defensive
         let upcharge = p - face;
 
-        // Rail 3 split — same coin::split primitive as release_payment.
-        let aria_cut   = upcharge * ARIA_RESALE_BPS / BPS_DENOM;
-        let host_cut   = upcharge * HOST_RESALE_BPS / BPS_DENOM;
+        // Rail 3 split — same coin::split primitive as release_payment. u128
+        // intermediates on the multiply-then-divide so an exceptionally large
+        // upcharge can't overflow u64 mid-calc (mainnet hardening); results fit u64.
+        let aria_cut   = (((upcharge as u128) * (ARIA_RESALE_BPS as u128) / (BPS_DENOM as u128)) as u64);
+        let host_cut   = (((upcharge as u128) * (HOST_RESALE_BPS as u128) / (BPS_DENOM as u128)) as u64);
         let seller_cut = p - aria_cut - host_cut; // = face + 45% of upcharge
         let seller     = deposit_escrow.guest;    // current holder, before reassignment
         let aria_addr  = payment_escrow.aria_addr;
