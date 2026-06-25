@@ -171,6 +171,12 @@ export default function Bookings() {
 
   const openMarket = () => { setMarketOpen(true); loadMarket(); };
 
+  // Deep-link: /bookings?market=1 (e.g. the homepage "Resale Market" button) opens
+  // the marketplace automatically once the user/session is ready.
+  useEffect(() => {
+    if (router.isReady && router.query.market === '1' && user && !marketOpen) openMarket();
+  }, [router.isReady, user]);
+
   const buyListing = async (item) => {
     if (!confirm(`Buy ${item.property} for $${item.askPrice}? Identity verification is required and the host will see who's staying.`)) return;
     setResaleBusyRef(item.bookingRef);

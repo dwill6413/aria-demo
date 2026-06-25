@@ -11,12 +11,19 @@ const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 //
 // NOTE: demo data only. Per the Phase 2 compliance note, real PII must not flow
 // through this path until mainnet hardening (audit logging, paid key servers).
+const US_STATES = [
+  'AL','AK','AZ','AR','CA','CO','CT','DE','DC','FL','GA','HI','ID','IL','IN','IA','KS',
+  'KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC',
+  'ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY',
+];
+
 const FIELDS = [
   { key: 'fullName', label: 'Full legal name', placeholder: 'Jordan A. Traveler' },
   { key: 'dob', label: 'Date of birth', placeholder: 'YYYY-MM-DD' },
   { key: 'phone', label: 'Phone number', placeholder: '+1 555 010 0000' },
   { key: 'idType', label: 'ID type', placeholder: 'Passport / Driver license' },
   { key: 'idNumber', label: 'ID number', placeholder: 'X1234567' },
+  { key: 'idState', label: 'ID issuing state', type: 'select', options: US_STATES, placeholder: 'Select state' },
   { key: 'address', label: 'Home address', placeholder: '123 Main St, City, ST' },
 ];
 
@@ -114,8 +121,16 @@ export default function Profile() {
             {FIELDS.map(f => (
               <div key={f.key} style={{ marginBottom: 12 }}>
                 <label style={{ display: 'block', color: '#aaa', fontSize: 12, marginBottom: 4 }}>{f.label}</label>
-                <input value={form[f.key]} onChange={e => setField(f.key, e.target.value)} placeholder={f.placeholder}
-                  style={{ width: '100%', boxSizing: 'border-box', background: '#0a0a0a', border: '1px solid #333', borderRadius: 6, padding: '10px', color: '#fff', fontSize: 13 }} />
+                {f.type === 'select' ? (
+                  <select value={form[f.key]} onChange={e => setField(f.key, e.target.value)}
+                    style={{ width: '100%', boxSizing: 'border-box', background: '#0a0a0a', border: '1px solid #333', borderRadius: 6, padding: '10px', color: form[f.key] ? '#fff' : '#666', fontSize: 13 }}>
+                    <option value="">{f.placeholder || 'Select…'}</option>
+                    {f.options.map(o => <option key={o} value={o} style={{ color: '#fff' }}>{o}</option>)}
+                  </select>
+                ) : (
+                  <input value={form[f.key]} onChange={e => setField(f.key, e.target.value)} placeholder={f.placeholder}
+                    style={{ width: '100%', boxSizing: 'border-box', background: '#0a0a0a', border: '1px solid #333', borderRadius: 6, padding: '10px', color: '#fff', fontSize: 13 }} />
+                )}
               </div>
             ))}
 

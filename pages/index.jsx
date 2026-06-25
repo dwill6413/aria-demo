@@ -360,6 +360,7 @@ export default function Home() {
             </div>
           </div>
           <button onClick={() => router.push('/bookings')} style={{ background: 'transparent', border: '1px solid #333', color: '#888', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>My Bookings</button>
+          <button onClick={() => router.push('/bookings?market=1')} style={{ background: 'transparent', border: '1px solid #3a2e1a', color: '#ffaa00', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', fontWeight: '600' }}>🏷️ Resale Market</button>
           {user.isHost && <button onClick={() => router.push('/host')} style={{ background: 'transparent', border: '1px solid #333', color: '#888', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>Host Dashboard</button>}
           {!user.isHost && user.hostStatus !== 'pending' && (
             <button onClick={() => router.push('/become-host')} style={{ background: 'transparent', border: '1px solid #00ff44', color: '#00ff44', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', fontWeight: '600' }}>🏡 Become a Host</button>
@@ -396,6 +397,7 @@ export default function Home() {
           </div>
           {[
             { label: '📋 My Bookings', action: () => { router.push('/bookings'); setMenuOpen(false); } },
+            { label: '🏷️ Resale Market', action: () => { router.push('/bookings?market=1'); setMenuOpen(false); } },
             user.isHost ? { label: '🏡 Host Dashboard', action: () => { router.push('/host'); setMenuOpen(false); } } : null,
             (!user.isHost && user.hostStatus !== 'pending') ? { label: '🏡 Become a Host', action: () => { router.push('/become-host'); setMenuOpen(false); } } : null,
             { label: '🤖 AI Assistant', action: () => { router.push('/ai'); setMenuOpen(false); } },

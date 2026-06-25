@@ -31,12 +31,14 @@ the version the function lives in — see Seal section + `ARIA_HANDOFF.md` Sui
 Integration Lessons §13.) **Note:** **v6 published on-chain June 24, 2026** (Phase 2c
 resale market — `ResalePolicy` + `list_for_resale`/`buy_resale`/`cancel_resale_listing`,
 additive/no-break; tx `CRYbygbqkk1HNaTaZfXsZnbXy85adHNUAQd6J4QKXTjD`). **Env rollout
-PENDING** as of this update — set Railway `ESCROW_PACKAGE_ID` + Vercel
-`NEXT_PUBLIC_ESCROW_PACKAGE_ID` to v6, set `RESALE_WINDOW_MS=0` (testnet), then flip
-`RESALE_ENABLED=true` (package-ids-first, flag-last). Resale **not yet verified
-in-browser** — hold the "resale is live" claim until a fresh transferable booking is
-listed and bought end-to-end. (v5 BookingPass remains published + verified — see v5
-row.) See the env-vars table below.
+applied + resale VERIFIED in-browser June 24, 2026** — Railway `ESCROW_PACKAGE_ID` +
+Vercel `NEXT_PUBLIC_ESCROW_PACKAGE_ID` on v6, `RESALE_ENABLED=true`, `RESALE_WINDOW_MS=0`
++ `PAYMENT_RELEASE_OFFSET_MS=86400000` (testnet). End-to-end list→buy confirmed on
+booking `ARIA-1-1782390279195-4320e7` (buy digest `E9gWpqWGKZh5hJw6kfnF6LfZfrj1son5HbctTVnzpcXg`):
+the on-chain `BookingResold` event split $400 sale as ARIA $0.30 / host $1.35 / seller
+$398.35 (face $397 + 45% of the $3 upcharge), reassigned both escrows to the buyer,
+bumped `resale_count`→1, and minted a fresh pass to the buyer. (v5 BookingPass also
+published + verified — see v5 row.) See the env-vars table below.
 
 ### Version history
 
@@ -47,18 +49,19 @@ row.) See the env-vars table below.
 | v3 | `0xec0d6bd45d6bbf3aad04778ace4aacef33c071a30d79090532ba1697644d8fa1` | June 18, 2026 | Added permissionless `finalize_claim` (CLAIMED-deadlock fix). Tx `9wzX4hQkZzzyZTMh9siAU2kHqRLQmJJots3FjzgGMAQa`. |
 | v4 | `0xf68a874fbdd3e5aa328f6754bd757edc6c2690510284fa39d5088e44b4cd9e77` | June 23, 2026 | **Phase 1h.5 fee escrow** (`BookingPaymentEscrow` + `create_payment_escrow`/`release_payment`/`refund_payment`/`refund_deposit`) **+ Phase 2 `seal_approve`**, one bundled upgrade. Tx `x7LUYvjszivxAouFYchPnLLVFSUGzhowYuhVQBArB2v`. Live + smoke-tested. |
 | v5 | `0xd825ec2db47c38758974dd9ae64fb4c4fe996ed383ae228052f30ec3351dc9b8` | June 24, 2026 | **Phase 2a BookingPass** — soulbound `BookingPass` owned object minted in the booking PTB, gated behind `BOOKING_PASS_ENABLED`. Additive upgrade, no compatibility break; `seal_approve` + fee/Seal calls unchanged. Tx `EoGhMXMEA8mDobxh38WT2WR1hxd4GuobfJqupsthE1LX`. Published + verified in-browser June 24, 2026 — booking `ARIA-1-1782312873579-3d5f50` minted the 🎫 pass. |
-| **v6 (current)** | `0x897777aa537c6e438dba11c750d5579848e2cd57afb29c3f68531ec6aeb6c901` | June 24, 2026 | **Phase 2c resale market** — new `ResalePolicy` shared object + `create_resale_policy` / `list_for_resale` / `buy_resale` / `cancel_resale_listing`. Five rails: host opt-in, price cap, ARIA 10% / host 45% / seller-keeps-face+45% split, one-hop limit, configurable no-transfer window (`resale_window_ms`, baked per booking; 48h mainnet default). Additive upgrade, no struct/signature changes to existing escrows. 52/52 Move tests. Tx `CRYbygbqkk1HNaTaZfXsZnbXy85adHNUAQd6J4QKXTjD`. Published on-chain; **env rollout + in-browser resale test PENDING** — gated by `RESALE_ENABLED` (off until verified). |
+| **v6 (current)** | `0x897777aa537c6e438dba11c750d5579848e2cd57afb29c3f68531ec6aeb6c901` | June 24, 2026 | **Phase 2c resale market** — new `ResalePolicy` shared object + `create_resale_policy` / `list_for_resale` / `buy_resale` / `cancel_resale_listing`. Five rails: host opt-in, price cap, ARIA 10% / host 45% / seller-keeps-face+45% split, one-hop limit, configurable no-transfer window (`resale_window_ms`, baked per booking; 48h mainnet default). Additive upgrade, no struct/signature changes to existing escrows. 52/52 Move tests. Tx `CRYbygbqkk1HNaTaZfXsZnbXy85adHNUAQd6J4QKXTjD`. **Live + verified in-browser June 24, 2026** — end-to-end list→buy on booking `ARIA-1-1782390279195-4320e7` (buy digest `E9gWpqWGKZh5hJw6kfnF6LfZfrj1son5HbctTVnzpcXg`); `BookingResold` split ARIA $0.30 / host $1.35 / seller $398.35, escrows reassigned to buyer, fresh pass minted. `RESALE_ENABLED=true`. |
 
 ### Env vars that reference this contract
 
 | Env var | Value | Where |
 |---|---|---|
-| `ESCROW_PACKAGE_ID` | v5 `0xd825ec2d…dc9b8` live → **set to v6 `0x897777aa…c901`** | Railway — v6 rollout pending |
+| `ESCROW_PACKAGE_ID` | `0x897777aa…c901` (v6) | Railway — on v6 (confirmed June 24, 2026) |
 | `ESCROW_MODULE_NAME` | `escrow` | Railway |
-| `NEXT_PUBLIC_ESCROW_PACKAGE_ID` | v5 `0xd825ec2d…dc9b8` live → **set to v6 `0x897777aa…c901`** | Vercel — `seal_approve` move-call target in `lib/seal.js`; v6 rollout pending |
-| `BOOKING_PASS_ENABLED` | `true` (mint on) | Railway — gates the BookingPass mint; on since June 24, 2026 (confirmed). v6 keeps the pass logic, leave on. |
-| `RESALE_ENABLED` | `false` → **set `true` AFTER both `*_PACKAGE_ID` vars are on v6** | Railway — gates the Phase 2c resale routes + the `create_resale_policy` mint. Flag-last. |
-| `RESALE_WINDOW_MS` | unset → 48h default; **set `0` (or `60000`) on testnet** so resale clears the 5-min testnet release window | Railway — baked into each booking's `ResalePolicy` at creation |
+| `NEXT_PUBLIC_ESCROW_PACKAGE_ID` | `0x897777aa…c901` (v6) | Vercel — `seal_approve` move-call target in `lib/seal.js`; on v6 (confirmed) |
+| `BOOKING_PASS_ENABLED` | `true` (mint on) | Railway — gates the BookingPass mint; on since June 24, 2026. v6 keeps the pass logic, leave on. |
+| `RESALE_ENABLED` | `true` | Railway — gates the Phase 2c resale routes + the `create_resale_policy` mint. Live June 24, 2026. |
+| `RESALE_WINDOW_MS` | `0` (testnet) → 48h default on mainnet (unset) | Railway — no-transfer window baked into each booking's `ResalePolicy`. 0 on testnet because the release time is artificial; mainnet uses the real check-in + 48h. |
+| `PAYMENT_RELEASE_OFFSET_MS` | `86400000` (1 day, testnet) → default 5 min if unset | Railway — how far out a new booking's payment release / `ResalePolicy.release_time_ms` is set. Longer = usable resale window on testnet. Mainnet: set release to the real check-in. |
 | `PAYMENT_COIN_TYPE` / `NEXT_PUBLIC_PAYMENT_COIN_TYPE` | unset → `0x2::sui::SUI` (testnet); SuiUSD type on mainnet | Railway / Vercel |
 
 ### Explorer links
@@ -127,11 +130,13 @@ install --frozen-lockfile`** (see `nixpacks.toml` / `railway.json`). NOT npm
 Phase 2c resale market**: new `ResalePolicy` + `list_for_resale`/`buy_resale`/
 `cancel_resale_listing`, configurable `resale_window_ms`; additive upgrade, no
 compatibility break; 52/52 Move tests; tx `CRYbygbqkk1HNaTaZfXsZnbXy85adHNUAQd6J4QKXTjD`).
-v6 is published on-chain (`Published.toml` version 6). **Env rollout PENDING** —
-move Railway/Vercel `*_PACKAGE_ID` to v6, set `RESALE_WINDOW_MS=0` (testnet), then
-flip `RESALE_ENABLED=true` (flag-last). **Resale not yet verified in-browser** — the
-end-to-end list→buy test is the gate before marking it live in the roadmap/handoff.
-v5 BookingPass remains published + verified. Update this file every time a new package
+v6 is published on-chain (`Published.toml` version 6), the env rollout is applied
+(Railway/Vercel `*_PACKAGE_ID` on v6, `RESALE_ENABLED=true`, `RESALE_WINDOW_MS=0`,
+`PAYMENT_RELEASE_OFFSET_MS=86400000` on testnet), and **resale is verified live
+in-browser June 24, 2026** — end-to-end list→buy on booking
+`ARIA-1-1782390279195-4320e7` (buy digest `E9gWpqWGKZh5hJw6kfnF6LfZfrj1son5HbctTVnzpcXg`)
+with the on-chain `BookingResold` split confirmed. v5 BookingPass also published +
+verified. Update this file every time a new package
 version is published or dependencies change — keep it in sync with `Published.toml`,
 `ARIA_KEY_INVENTORY.md`, and the Environment Variables sections of `ARIA_HANDOFF.md`
 / `ARIA_ROADMAP.md`.*

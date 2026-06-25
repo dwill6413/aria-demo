@@ -1,9 +1,28 @@
 # ARIA — Product Roadmap & AI Handoff Document
-**Version:** 2.24 | **Updated:** June 24, 2026
+**Version:** 2.25 | **Updated:** June 24, 2026
 **Purpose:** Complete handoff for an AI assistant continuing ARIA development.
 Read this entire document before writing any code.
 
-> **June 24, 2026 (LATEST — v5 published + BookingPass activated):** Phase 2a
+> **June 24, 2026 (LATEST — v6 published + Phase 2c resale market LIVE & VERIFIED):**
+> The guardrailed resale market shipped to chain. v6 escrow package
+> `0x897777aa537c6e438dba11c750d5579848e2cd57afb29c3f68531ec6aeb6c901` published —
+> additive upgrade over v5, no compatibility break (existing escrow structs/signatures
+> untouched; tx `CRYbygbqkk1HNaTaZfXsZnbXy85adHNUAQd6J4QKXTjD`). New shared
+> `ResalePolicy` object + `create_resale_policy` / `list_for_resale` / `buy_resale` /
+> `cancel_resale_listing`; 52/52 Move tests, 78/78 JS verifier tests. Env: Railway +
+> Vercel `*_PACKAGE_ID` on v6, `RESALE_ENABLED=true`, `RESALE_WINDOW_MS=0` +
+> `PAYMENT_RELEASE_OFFSET_MS=86400000` (testnet). **Verified end-to-end in-browser**:
+> booking `ARIA-1-1782390279195-4320e7` listed at $400 and bought from a second
+> verified account (buy digest `E9gWpqWGKZh5hJw6kfnF6LfZfrj1son5HbctTVnzpcXg`). The
+> on-chain `BookingResold` event split the $400 sale as **ARIA $0.30 / host $1.35 /
+> seller $398.35** (face $397 + 45% of the $3 upcharge), reassigned both escrows to the
+> buyer, bumped `resale_count`→1, and minted a fresh soulbound pass to the buyer — and
+> the booking moved out of the seller's account into the buyer's (Seal identity follows,
+> since `seal_approve` gates on `escrow.guest`). **ARIA resale fee decided: 10% of the
+> upcharge only** (face-value resale is fee-free). See §9 Phase 2c + `ARIA_PACKAGE_INVENTORY.md`
+> + `ARIA_PHASE2C_PLAN.md`.
+>
+> **June 24, 2026 (v5 published + BookingPass activated):** Phase 2a
 > shipped to chain. v5 escrow package `0xd825ec2d…dc9b8` published — additive upgrade
 > over v4, no compatibility break (`seal_approve` + fee/Seal calls unchanged; tx
 > `EoGhMXMEA8mDobxh38WT2WR1hxd4GuobfJqupsthE1LX`). Env rollout applied: Railway
@@ -992,26 +1011,34 @@ These are NOT committed work — they're the idea bank to pull from next.
   - ⬜ **Phase 2b — smart-lock `pass_approve`** — a Seal-style gate so real **door
     locks** open only for the stay window if the holder owns an active pass; cancel →
     escrow gone → won't open. NFC + real lock integration is the hardware follow-up.
-  - ⬜ **Phase 2c — guardrailed resale market (decided June 24, 2026).** Resale IS
-    allowed but fenced so it's "humane cancellation + host-controlled liquidity," not
-    a scalper market. The five rails:
-    1. **Host opt-in per listing** — transferability is a host setting, **off by
-       default**; the pass's gated `transfer_pass` only works if the listing allows it.
-    2. **Price cap** — resale price `P` capped (≤ a host/platform max premium) to
-       prevent runaway gouging.
-    3. **Upcharge split (50/50 host/seller).** Face `F` = original paid; upcharge
-       `U = P − F`. **Seller gets `F + 0.5·U`; host gets `0.5·U`** (on top of the rental
-       already paid at booking). This makes hosts *root for* flips and halves the
-       scalper's margin. *(ARIA platform fee on resale: TBD — currently none.)*
-    4. **Mandatory Seal identity** on the buyer — the host still knows who's actually
-       staying; also adds anti-bot friction.
-    5. **Transfer windows + limits** — no transfer in the final 48h, one hop (no
-       speculative chains), reputation-gated (book-and-flip-without-staying hurts your
-       portable reputation — Theme A).
-    Mechanism: an atomic marketplace swap — buyer pays, **`escrow.guest` is reassigned**
-    (needs a gated, mutable-guest contract change so money/identity/access follow the
-    new holder), the pass transfers, and the splits pay out (`F + 0.5U`→seller,
-    `0.5U`→host). This is what makes a transfer move the WHOLE booking, not just the key.
+  - ✅ **Phase 2c — guardrailed resale market — LIVE & VERIFIED June 24, 2026 (v6).**
+    Resale IS allowed but fenced so it's "humane cancellation + host-controlled
+    liquidity," not a scalper market. Shipped in v6 `0x897777aa…c901`; verified
+    end-to-end on booking `ARIA-1-1782390279195-4320e7` (buy digest
+    `E9gWpqWGKZh5hJw6kfnF6LfZfrj1son5HbctTVnzpcXg`). The five rails, as built:
+    1. **Host opt-in per listing** — transferability is a host setting (`properties`/
+       `property_resale_settings.transfer_allowed`), **off by default**; baked into the
+       booking's `ResalePolicy` at booking time. No policy = not resaleable.
+    2. **Price cap** — ask `P` must be in `[face, face·(1+max_premium_bps)]`, enforced
+       on-chain in `list_for_resale` and configured per listing (Rail 2).
+    3. **Upcharge split — ARIA 10% / host 45% / seller 45% (FINAL, supersedes the
+       earlier 50/50).** Face `F` = original paid; upcharge `U = P − F`. **Seller gets
+       `F + 0.45·U`, host gets `0.45·U`, ARIA gets `0.10·U`** — ARIA's fee is on the
+       upcharge ONLY (face-value resale is fee-free). Verified on-chain: $400 sale →
+       ARIA $0.30 / host $1.35 / seller $398.35.
+    4. **Mandatory Seal identity** on the buyer — `transfer/build` blocks a buyer with
+       no `guest_verifications` row; after the swap the host sees the buyer's identity
+       (since `seal_approve` gates on `escrow.guest`, now the buyer).
+    5. **Transfer window + one hop** — no transfer inside `resale_window_ms` of the
+       release time (48h mainnet default, baked per policy, env-tunable for testnet),
+       and `resale_count` capped at 1 (no speculative chains). Reputation signal: the
+       market surfaces a seller's prior flip count.
+    Mechanism (as built): two-step, non-custodial — `list_for_resale` (seller signs,
+    burns the pass, sets the ask) then `buy_resale` (buyer signs + funds; **both escrows'
+    `guest` reassigned to the buyer**, splits pay out, a fresh soulbound pass is minted).
+    Governance lives in a NEW shared `ResalePolicy` object (Sui upgrade rules forbid
+    adding fields to the existing escrows), so a transfer moves the WHOLE booking, not
+    just the key. See `ARIA_PHASE2C_PLAN.md` for the full build plan.
 
 ### Theme D — AI agent depth (reuse the Grok agent)
 - **Host-ops autopilot** *(medium)* — dynamic pricing, auto-draft replies, listing

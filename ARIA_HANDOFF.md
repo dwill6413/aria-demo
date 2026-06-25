@@ -1,7 +1,26 @@
 # ARIA — Technical Handoff Document
-**Version:** 4.26 | **Updated:** June 24, 2026
+**Version:** 4.27 | **Updated:** June 24, 2026
 
-> **June 24, 2026 (LATEST — v5 published + BookingPass P2a activated):** v5 escrow
+> **June 24, 2026 (LATEST — v6 published + Phase 2c resale market LIVE & VERIFIED):**
+> v6 escrow package `0x897777aa537c6e438dba11c750d5579848e2cd57afb29c3f68531ec6aeb6c901`
+> published — additive upgrade over v5, no compatibility break (existing escrow
+> structs/signatures untouched). Upgrade tx `CRYbygbqkk1HNaTaZfXsZnbXy85adHNUAQd6J4QKXTjD`.
+> Adds the resale market: shared `ResalePolicy` object + `create_resale_policy` /
+> `list_for_resale` / `buy_resale` / `cancel_resale_listing` (52/52 Move, 78/78 JS).
+> Backend: list/cancel/transfer build+confirm routes (`/pass/:ref/…`, `/resale/listings`)
+> + host settings routes, all gated by `RESALE_ENABLED`. Env: Railway + Vercel
+> `*_PACKAGE_ID` on v6, `RESALE_ENABLED=true`, `RESALE_WINDOW_MS=0`,
+> `PAYMENT_RELEASE_OFFSET_MS=86400000` (testnet). **Verified end-to-end in-browser**:
+> booking `ARIA-1-1782390279195-4320e7` listed at $400, bought from a second verified
+> account (buy digest `E9gWpqWGKZh5hJw6kfnF6LfZfrj1son5HbctTVnzpcXg`); on-chain
+> `BookingResold` split **ARIA $0.30 / host $1.35 / seller $398.35** (10% / 45% / face+45%
+> of the upcharge), both escrows reassigned to the buyer, `resale_count`→1, fresh pass
+> minted. Two bug-fixes shipped during QA: confirm routes take `bookingRef` from the URL
+> param (not body), and `isObjectMutated` now detects the real gRPC mutation shape
+> (`idOperation: 'None'`, not the literal `'Mutated'`). Caveat: on testnet the release
+> time is artificial, so `RESALE_WINDOW_MS=0` — mainnet uses the real check-in + 48h.
+>
+> **June 24, 2026 (v5 published + BookingPass P2a activated):** v5 escrow
 > package `0xd825ec2db47c38758974dd9ae64fb4c4fe996ed383ae228052f30ec3351dc9b8`
 > published — additive upgrade over v4, no compatibility break (`seal_approve` +
 > fee/Seal calls unchanged). Upgrade tx `EoGhMXMEA8mDobxh38WT2WR1hxd4GuobfJqupsthE1LX`.
@@ -201,7 +220,8 @@ a `BookingEscrow<SUI>` shared object that holds the deposit on-chain.
 
 | Item | Value |
 |---|---|
-| Package ID (current, **v5**) | `0xd825ec2db47c38758974dd9ae64fb4c4fe996ed383ae228052f30ec3351dc9b8` |
+| Package ID (current, **v6**) | `0x897777aa537c6e438dba11c750d5579848e2cd57afb29c3f68531ec6aeb6c901` |
+| Package ID (prior, v5) | `0xd825ec2db47c38758974dd9ae64fb4c4fe996ed383ae228052f30ec3351dc9b8` |
 | Package ID (prior, v4) | `0xf68a874fbdd3e5aa328f6754bd757edc6c2690510284fa39d5088e44b4cd9e77` |
 | Package ID (older, v3) | `0xec0d6bd45d6bbf3aad04778ace4aacef33c071a30d79090532ba1697644d8fa1` |
 | Package ID (type-defining / original) | `0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe` |
@@ -722,12 +742,17 @@ Railway runs **Node 22** (`nixpacks.toml`: `nodejs_22`). Required by
 ```
 DATABASE_URL, GOOGLE_CLIENT_ID, GOOGLE_CALLBACK_URL, FRONTEND_URL
 HOST_ADDRESSES, SESSION_SECRET, XAI_API_KEY, RESEND_API_KEY, STRIPE_SECRET_KEY
-ESCROW_PACKAGE_ID       = 0xd825ec2db47c38758974dd9ae64fb4c4fe996ed383ae228052f30ec3351dc9b8
-                          (v5 — published June 24, 2026; adds BookingPass mint_booking_pass.
-                          Upgrade tx EoGhMXMEA8mDobxh38WT2WR1hxd4GuobfJqupsthE1LX.
-                          Prior v4: 0xf68a874fbdd3e5aa328f6754bd757edc6c2690510284fa39d5088e44b4cd9e77)
-BOOKING_PASS_ENABLED    = true   (June 24, 2026 — gates the v5 BookingPass mint; set ON
-                          only after both *_PACKAGE_ID vars were on v5)
+ESCROW_PACKAGE_ID       = 0x897777aa537c6e438dba11c750d5579848e2cd57afb29c3f68531ec6aeb6c901
+                          (v6 — published June 24, 2026; adds Phase 2c resale market.
+                          Upgrade tx CRYbygbqkk1HNaTaZfXsZnbXy85adHNUAQd6J4QKXTjD.
+                          Prior v5: 0xd825ec2db47c38758974dd9ae64fb4c4fe996ed383ae228052f30ec3351dc9b8)
+BOOKING_PASS_ENABLED    = true   (June 24, 2026 — gates the BookingPass mint; v6 keeps it)
+RESALE_ENABLED          = true   (June 24, 2026 — gates Phase 2c resale routes +
+                          create_resale_policy mint; set ON after *_PACKAGE_ID on v6)
+RESALE_WINDOW_MS        = 0      (testnet; no-transfer window baked per ResalePolicy.
+                          Mainnet: unset = 48h default, with release = real check-in)
+PAYMENT_RELEASE_OFFSET_MS = 86400000  (1 day testnet, so resale has a usable window;
+                          default 5 min if unset. Mainnet: release = real check-in)
                            (LIVE in Railway since June 18, 2026 — v3 upgrade adding
                            finalize_claim; redeploy confirmed clean via deploy logs
                            (deploy db4f1425, both keypairs loaded, DB initialized).
