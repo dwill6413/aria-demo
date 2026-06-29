@@ -590,7 +590,10 @@ fastify.post('/booking/:bookingRef/escrow/rebuild', {
     fastify.log.error({ err, bookingRef }, '/escrow/rebuild: build failed');
   }
   if (!built?.txBytes)
-    return reply.code(503).send({ error: 'Could not rebuild the escrow transaction. Please try again.' });
+    return reply.code(503).send({
+      error: built?.errorMessage || 'Could not rebuild the escrow transaction. Please try again.',
+      code: built?.errorCode || 'build_failed',
+    });
 
   try {
     if (useCombined) {

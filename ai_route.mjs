@@ -241,6 +241,7 @@ IMPORTANT RULES:
 - Make it clear the deposit is NOT an extra cost — it is returned after a successful stay
 - Dates must be YYYY-MM-DD format. Pass pricePerNight as the exact property price.
 - Be conversational and friendly
+- If create_booking's result has needsVerification: true, the booking was NOT created — the guest hasn't completed identity verification yet. Tell them hosts require this for accountability, that their ID is encrypted client-side and stored on Walrus via Seal (ARIA's backend never sees the plaintext — only their host can decrypt it for that specific booking), and direct them to visit /profile to complete it before trying to book again. Don't retry create_booking until they confirm they've done so.
 
 JURISDICTION TAX RATES (use these for accurate tax calculations):
 ${taxes}
@@ -572,7 +573,12 @@ export async function registerAIRoute(fastify) {
         if (toolName === 'create_booking') {
           try {
             const parsed = JSON.parse(result);
-            if (parsed.success && parsed.escrowTxBytes) {
+            // Build the booking card whenever createBooking() succeeded, even if
+            // the escrow PTB build itself failed (escrowTxBytes null) — previously
+            // this only fired when escrowTxBytes was truthy, so a build failure
+            // meant no card, no sign prompt, and no error EVER reached the guest;
+            // they'd only discover the stranded booking later via My Bookings.
+            if (parsed.success) {
               booking = {
                 bookingRef: parsed.bookingRef, escrowTxBytes: parsed.escrowTxBytes,
                 property: parsed.property, depositAmount: parsed.depositAmount,
@@ -581,6 +587,8 @@ export async function registerAIRoute(fastify) {
                 paymentEscrowBuilt: parsed.paymentEscrowBuilt,
                 subtotal: parsed.subtotal, ariaFee: parsed.ariaFee,
                 taxes: parsed.taxes, chargeAmount: parsed.chargeAmount,
+                escrowBuildErrorCode: parsed.escrowBuildErrorCode,
+                escrowBuildErrorMessage: parsed.escrowBuildErrorMessage,
               };
             }
           } catch {}

@@ -218,6 +218,14 @@ export default function AI() {
       </div>
 
       <div style={{ flex: 1, maxWidth: '800px', width: '100%', margin: '0 auto', padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        {!isHost && user && user.hasGuestProfile === false && (
+          <div style={{ background: '#1a1500', border: '1px solid #443300', borderRadius: '10px', padding: '12px 14px', fontSize: '12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+            <span style={{ color: '#ffaa00' }}>⚠️ Hosts need to verify who's staying — complete identity verification before booking (encrypted via Seal, stored on Walrus, never seen by ARIA).</span>
+            <button onClick={() => router.push('/profile')} style={{ background: 'transparent', color: '#ffaa00', border: '1px solid #ffaa00', borderRadius: '6px', padding: '6px 10px', fontSize: '11px', cursor: 'pointer', flexShrink: 0 }}>
+              Verify now
+            </button>
+          </div>
+        )}
         {messages.length === 0 && (
           <div style={{ textAlign: 'center', padding: '40px 24px' }}>
             <div style={{ fontSize: '48px', marginBottom: '16px' }}>{isHost ? '🏡' : '🤖'}</div>
@@ -258,6 +266,14 @@ export default function AI() {
                 )}
                 {m.booking.status === 'done' ? (
                   <div style={{ color: '#00ff44', fontSize: '13px', fontWeight: '600' }}>{m.booking.paymentEscrowBuilt ? '✅ Payment + deposit escrowed on-chain' : '✅ Escrow deposit confirmed on-chain'}</div>
+                ) : !m.booking.escrowTxBytes ? (
+                  // The backend's best-effort escrow build failed (e.g. the guest's
+                  // wallet has no testnet SUI yet) — there's no tx to sign, so don't
+                  // render a sign button that would just throw. Booking is still
+                  // saved; point the guest at My Bookings to finish once resolved.
+                  <div style={{ color: '#ff4444', fontSize: '12px' }}>
+                    ⚠️ {m.booking.escrowBuildErrorMessage || 'Could not prepare the escrow transaction.'} Your dates are held, but no money has moved — finish this from <strong>My Bookings</strong> once resolved.
+                  </div>
                 ) : (
                   <>
                     <button

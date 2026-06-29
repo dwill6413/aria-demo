@@ -481,6 +481,8 @@ export async function createBooking({ propertyId, checkIn, checkOut, session, lo
   // wallets aren't set, so existing deployments keep working unchanged.
   let escrowTxBytes = null;
   let paymentEscrowBuilt = false;
+  let escrowBuildErrorCode = null;
+  let escrowBuildErrorMessage = null;
   // Testnet: settle ~5 min out so the check-in release sweep is exercisable
   // without waiting for the real check-in date (mirrors the deposit's 5-min
   // testnet expiry window). MAINNET: set releaseMs to the real check-in
@@ -530,10 +532,16 @@ export async function createBooking({ propertyId, checkIn, checkOut, session, lo
           }
         } catch (err) { logger?.warn?.({ err, bookingRef }, 'Failed to persist host_sui_address/payment_release_ms'); }
       } else {
-        logger?.warn?.({ bookingRef, useCombined }, 'Escrow tx build returned null');
+        escrowBuildErrorCode = built?.errorCode || 'build_failed';
+        escrowBuildErrorMessage = built?.errorMessage || 'Could not build the escrow transaction. Please try again.';
+        logger?.warn?.({ bookingRef, useCombined, errorCode: escrowBuildErrorCode }, 'Escrow tx build failed — booking saved, guest must resume from My Bookings');
       }
     }
-  } catch (err) { logger?.warn?.({ err }, 'Escrow tx build failed (non-blocking)'); }
+  } catch (err) {
+    escrowBuildErrorCode = 'build_failed';
+    escrowBuildErrorMessage = 'Could not build the escrow transaction. Please try again.';
+    logger?.warn?.({ err }, 'Escrow tx build failed (non-blocking)');
+  }
 
   try {
     await resend.emails.send({
@@ -554,10 +562,11 @@ export async function createBooking({ propertyId, checkIn, checkOut, session, lo
     jurisdiction: jurisdiction.name, taxRate: `${taxPct}%`,
     depositNote: escrowTxBytes
       ? 'Sign the escrow transaction in your wallet to lock in your refundable security deposit'
-      : 'Refundable security deposit will be held in Sui escrow — no ARIA fee charged on deposit',
+      : (escrowBuildErrorMessage || 'Could not prepare the escrow transaction — finish this from My Bookings once resolved'),
     walletAddress: session.suiAddress, network: 'sui:testnet',
     message: 'Booking confirmed on Sui testnet', walrusBlobId,
     escrowTxBytes,
+    escrowBuildErrorCode, escrowBuildErrorMessage,
     // True when escrowTxBytes is the COMBINED payment+deposit PTB (Phase 1h.5);
     // the frontend reports its digest to the same /escrow/confirm route, which
     // verifies both escrows. False = deposit-only legacy build.

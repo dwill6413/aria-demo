@@ -26,6 +26,28 @@ export const suiClient = new SuiGrpcClient({
   baseUrl: 'https://fullnode.testnet.sui.io:443',
 });
 
+// Both PTB builders below use coinWithBalance(), which resolves a coin from
+// the SENDER'S (guest's) own on-chain balance at tx.build() time. A brand-new
+// zkLogin wallet that's never been funded via the testnet faucet has zero
+// balance, so build() throws here — and previously both builders swallowed
+// that into a bare `return null`, collapsing "guest needs to fund their
+// wallet" and "unrelated build/network failure" into one generic, unhelpful
+// 503. This classifies the thrown error so callers can tell the guest what
+// actually went wrong instead of just "please try again."
+function classifyEscrowBuildError(err) {
+  const msg = String(err?.message || '');
+  if (/no coins|insufficient|not enough|balance/i.test(msg)) {
+    return {
+      errorCode: 'insufficient_balance',
+      errorMessage: 'Your wallet doesn’t have enough testnet SUI to fund this transaction yet. Get testnet SUI from the faucet, then try again.',
+    };
+  }
+  return {
+    errorCode: 'build_failed',
+    errorMessage: 'Could not build the escrow transaction. Please try again in a moment.',
+  };
+}
+
 // BCS layout of the on-chain BookingEscrow<T> struct (escrow.move), used to
 // decode an object's raw `content` bytes and verify its fields actually match
 // the booking before we trust a guest-reported escrow-creation digest. A UID
@@ -258,7 +280,7 @@ export async function buildEscrowTransaction(bookingRef, guestAddr, hostAddr, de
     return { txBytes: toBase64(txBytes) };
   } catch (err) {
     logger?.error?.({ message: err.message, name: err.name, stack: err.stack?.split('\n').slice(0, 4).join(' | ') }, 'buildEscrowTransaction error');
-    return null;
+    return { txBytes: null, ...classifyEscrowBuildError(err) };
   }
 }
 
@@ -897,7 +919,7 @@ export async function buildBookingPaymentTransaction(bookingRef, guestAddr, host
     return { txBytes: toBase64(txBytes), releaseMs: releaseMsBig.toString(), expiryMs: expiryMs.toString() };
   } catch (err) {
     logger?.error?.({ message: err.message, name: err.name, stack: err.stack?.split('\n').slice(0, 4).join(' | ') }, 'buildBookingPaymentTransaction error');
-    return null;
+    return { txBytes: null, ...classifyEscrowBuildError(err) };
   }
 }
 

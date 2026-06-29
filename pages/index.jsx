@@ -196,6 +196,16 @@ export default function Home() {
   const handleBooking = async () => {
     if (!checkIn || !checkOut) { alert('Please select check-in and check-out dates'); return; }
     if (nights < 1) { alert('Check-out must be after check-in'); return; }
+    // Proactive gate: if we already know this guest hasn't completed Seal/Walrus
+    // identity verification, send them to /profile before even hitting the
+    // backend (which will reject it anyway once REQUIRE_GUEST_VERIFICATION is
+    // on). Avoids the guest filling out dates/terms just to get bounced.
+    if (user && user.hasGuestProfile === false) {
+      alert('Please complete identity verification before booking — hosts need this for accountability. Redirecting to your profile.');
+      closeModal();
+      router.push('/profile');
+      return;
+    }
     setBookingLoading(true);
     setEscrowStatus(null);
     setEscrowError('');
@@ -205,6 +215,22 @@ export default function Home() {
     });
     const data = await res.json();
     if (data.error === 'Property not available for selected dates') { alert('Sorry — those dates are already booked. Please select different dates.'); setBookingLoading(false); return; }
+    // Reactive gate: backend rejected because guest_verifications has no row
+    // for this address (covers the proactive check above being stale/skipped,
+    // and is the only gate at all once REQUIRE_GUEST_VERIFICATION flips on for
+    // guests who logged in before this client-side check shipped).
+    if (!res.ok && data.needsVerification) {
+      alert('Complete identity verification first. Redirecting to your profile.');
+      setBookingLoading(false);
+      closeModal();
+      router.push('/profile');
+      return;
+    }
+    if (!res.ok) {
+      alert(data.error || 'Could not create booking. Please try again.');
+      setBookingLoading(false);
+      return;
+    }
     setBooking(data);
     setBookingLoading(false);
     // Non-custodial: the backend only built an unsigned PTB (data.escrowTxBytes)
@@ -658,6 +684,19 @@ export default function Home() {
                 </>
               )}
 
+              {checkIn && checkOut && nights > 0 && user && user.hasGuestProfile === false && (
+                <div style={{ background: '#1a1500', border: '1px solid #443300', borderRadius: '8px', padding: '12px', marginBottom: '12px', fontSize: '12px' }}>
+                  <div style={{ color: '#ffaa00', fontWeight: '600', marginBottom: '4px' }}>⚠️ Identity verification required</div>
+                  <p style={{ color: '#888', margin: '0 0 8px', lineHeight: '1.5' }}>
+                    Hosts need to be able to verify who's staying. Your ID is encrypted client-side and stored on Walrus via Seal — ARIA's backend never sees it; only your host can decrypt it for this booking.
+                  </p>
+                  <button onClick={() => { closeModal(); router.push('/profile'); }}
+                    style={{ background: 'transparent', color: '#ffaa00', border: '1px solid #ffaa00', borderRadius: '6px', padding: '6px 10px', fontSize: '11px', cursor: 'pointer' }}>
+                    Verify identity now
+                  </button>
+                </div>
+              )}
+
               {checkIn && checkOut && nights > 0 && (
                 <label style={{ display: 'flex', alignItems: 'start', gap: '10px', marginBottom: '12px', cursor: 'pointer' }}>
                   <input type="checkbox" checked={termsAccepted} onChange={e => setTermsAccepted(e.target.checked)}
@@ -734,7 +773,13 @@ export default function Home() {
                     </div>
                   )}
                   {booking.depositAmount && !booking.escrowTxBytes && (
-                    <div style={{ marginTop: '8px', color: '#4a9eff', fontSize: '11px' }}>🔒 ${booking.depositAmount} deposit held in Sui escrow — you control release</div>
+                    <div style={{ marginTop: '8px', color: '#ff5555', fontSize: '11px', textAlign: 'left' }}>
+                      ⚠️ {booking.escrowBuildErrorMessage || 'We couldn’t prepare your escrow transaction, so nothing is funded yet.'} Your dates are held, but no money has moved.
+                      <button onClick={() => router.push('/bookings')}
+                        style={{ display: 'block', marginTop: '6px', background: 'transparent', color: '#4a9eff', border: '1px solid #4a9eff', borderRadius: '6px', padding: '6px 10px', fontSize: '11px', cursor: 'pointer' }}>
+                        Go to My Bookings to finish
+                      </button>
+                    </div>
                   )}
                   {booking.walrusBlobId && (
                     <div style={{ marginTop: '10px', background: '#050f05', borderRadius: '6px', padding: '10px' }}>
