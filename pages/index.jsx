@@ -390,6 +390,7 @@ export default function Home() {
         .gallery-thumb:hover { opacity: 1 !important; }
         .gallery-dot { border: none; cursor: pointer; padding: 0; border-radius: 4px; transition: all 0.2s ease; }
         .nav-desktop { display: flex; align-items: center; gap: 12px; }
+        .become-host-link:hover { background: #f7f7f7 !important; }
         .nav-hamburger { display: none !important; }
         .search-pill { display: flex; align-items: center; background: #fff; border: 1px solid #ddd; border-radius: 40px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); max-width: 760px; margin: 0 auto; }
         .search-field { padding: 12px 22px; cursor: pointer; min-width: 0; }
@@ -424,6 +425,13 @@ export default function Home() {
 
         {/* Desktop nav */}
         <div className="nav-desktop">
+          {user.isHost ? (
+            <button onClick={() => router.push('/host')} style={{ background: 'transparent', border: 'none', color: '#222', padding: '10px 12px', borderRadius: '22px', fontSize: '14px', fontWeight: '600', cursor: 'pointer' }}>Host Dashboard</button>
+          ) : user.hostStatus === 'pending' ? (
+            <span style={{ fontSize: '14px', color: '#b06d00', fontWeight: '600', padding: '10px 12px' }}>⏳ Application Pending</span>
+          ) : (
+            <button onClick={() => router.push('/become-host')} className="become-host-link" style={{ background: 'transparent', border: 'none', color: '#222', padding: '10px 12px', borderRadius: '22px', fontSize: '14px', fontWeight: '600', cursor: 'pointer' }}>Become a host</button>
+          )}
           <div style={{ textAlign: 'right' }}>
             <div style={{ fontSize: '13px', fontWeight: '500', color: '#222' }}>{user.name}</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'flex-end' }}>
@@ -439,11 +447,6 @@ export default function Home() {
             🪪 {user.hasGuestProfile === false ? 'Verify Identity' : 'Identity'}
           </button>
           <button onClick={() => router.push('/bookings?market=1')} style={{ background: 'transparent', border: '1px solid #ffd699', color: '#b06d00', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', fontWeight: '600' }}>🏷️ Resale Market</button>
-          {user.isHost && <button onClick={() => router.push('/host')} style={{ background: 'transparent', border: '1px solid #ddd', color: '#444', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>Host Dashboard</button>}
-          {!user.isHost && user.hostStatus !== 'pending' && (
-            <button onClick={() => router.push('/become-host')} style={{ background: 'transparent', border: '1px solid #00913f', color: '#00913f', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', fontWeight: '600' }}>🏡 Become a Host</button>
-          )}
-          {user.hostStatus === 'pending' && <span style={{ fontSize: '12px', color: '#b06d00', fontWeight: '600' }}>⏳ Application Pending</span>}
           <button onClick={() => router.push('/ai')} style={{ background: 'transparent', border: '1px solid #e4d4ff', color: '#8b3dff', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', fontWeight: '600' }}>🤖 AI</button>
           <button onClick={handleLogout} style={{ background: 'transparent', border: '1px solid #ddd', color: '#444', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>Sign out</button>
         </div>
