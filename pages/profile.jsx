@@ -95,32 +95,32 @@ export default function Profile() {
     }
   };
 
-  const wrap = { fontFamily: 'sans-serif', background: '#0a0a0a', color: '#fff', minHeight: '100vh', padding: '24px' };
-  const card = { maxWidth: 560, margin: '0 auto', background: '#111', border: '1px solid #222', borderRadius: 12, padding: 24 };
+  const wrap = { fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', background: '#fff', color: '#222', minHeight: '100vh', padding: '24px' };
+  const card = { maxWidth: 560, margin: '0 auto', background: '#fff', border: '1px solid #ebebeb', borderRadius: 12, padding: 24, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' };
 
   if (loading) return <div style={wrap}><div style={card}>Loading…</div></div>;
 
   return (
     <div style={wrap}>
       <div style={{ maxWidth: 560, margin: '0 auto 16px' }}>
-        <a href="/" style={{ color: '#00ff44', fontSize: 13, textDecoration: 'none' }}>← Back</a>
+        <a href="/" style={{ color: '#717171', fontSize: 13, textDecoration: 'none' }}>← Back</a>
       </div>
       <div style={card}>
-        <h1 style={{ fontSize: 22, margin: '0 0 6px' }}>Identity verification</h1>
-        <p style={{ color: '#888', fontSize: 13, lineHeight: 1.6, margin: '0 0 20px' }}>
+        <h1 style={{ fontSize: 22, margin: '0 0 6px', color: '#222' }}>Identity verification</h1>
+        <p style={{ color: '#717171', fontSize: 13, lineHeight: 1.6, margin: '0 0 20px' }}>
           Your details are encrypted in your browser with Seal and stored on Walrus.
           ARIA never sees them — only the host of a booking you make can decrypt them,
-          and only while that booking is active. <span style={{ color: '#666' }}>Demo data only.</span>
+          and only while that booking is active. <span style={{ color: '#999' }}>Demo data only.</span>
         </p>
 
         {verified ? (
-          <div style={{ background: '#0a1a0a', border: '1px solid #1a3a1a', borderRadius: 8, padding: 16 }}>
-            <div style={{ color: '#00ff44', fontWeight: 700, fontSize: 14 }}>✅ Identity verified</div>
-            <p style={{ color: '#888', fontSize: 12, margin: '6px 0 0' }}>
+          <div style={{ background: '#eafaf0', border: '1px solid #c8ebd9', borderRadius: 8, padding: 16 }}>
+            <div style={{ color: '#00913f', fontWeight: 700, fontSize: 14 }}>✅ Identity verified</div>
+            <p style={{ color: '#5c8a6d', fontSize: 12, margin: '6px 0 0' }}>
               Your encrypted identity is stored. You can re-submit below to update it.
             </p>
             <button onClick={() => setVerified(false)}
-              style={{ marginTop: 12, background: 'transparent', color: '#4a9eff', border: '1px solid #4a9eff', borderRadius: 6, padding: '6px 12px', fontSize: 12, cursor: 'pointer' }}>
+              style={{ marginTop: 12, background: 'transparent', color: '#1f6fd6', border: '1px solid #1f6fd6', borderRadius: 6, padding: '6px 12px', fontSize: 12, cursor: 'pointer' }}>
               Update identity
             </button>
           </div>
@@ -128,36 +128,36 @@ export default function Profile() {
           <>
             {FIELDS.map(f => (
               <div key={f.key} style={{ marginBottom: 12 }}>
-                <label style={{ display: 'block', color: '#aaa', fontSize: 12, marginBottom: 4 }}>{f.label}</label>
+                <label style={{ display: 'block', color: '#717171', fontSize: 12, marginBottom: 4 }}>{f.label}</label>
                 {f.type === 'select' ? (
                   <select value={form[f.key]} onChange={e => setField(f.key, e.target.value)}
-                    style={{ width: '100%', boxSizing: 'border-box', background: '#0a0a0a', border: '1px solid #333', borderRadius: 6, padding: '10px', color: form[f.key] ? '#fff' : '#666', fontSize: 13 }}>
+                    style={{ width: '100%', boxSizing: 'border-box', background: '#fff', border: '1px solid #ddd', borderRadius: 6, padding: '10px', color: form[f.key] ? '#222' : '#999', fontSize: 13 }}>
                     <option value="">{f.placeholder || 'Select…'}</option>
-                    {f.options.map(o => <option key={o} value={o} style={{ color: '#fff' }}>{o}</option>)}
+                    {f.options.map(o => <option key={o} value={o} style={{ color: '#222' }}>{o}</option>)}
                   </select>
                 ) : (
                   <input value={form[f.key]} onChange={e => setField(f.key, e.target.value)} placeholder={f.placeholder}
-                    style={{ width: '100%', boxSizing: 'border-box', background: '#0a0a0a', border: '1px solid #333', borderRadius: 6, padding: '10px', color: '#fff', fontSize: 13 }} />
+                    style={{ width: '100%', boxSizing: 'border-box', background: '#fff', border: '1px solid #ddd', borderRadius: 6, padding: '10px', color: '#222', fontSize: 13 }} />
                 )}
               </div>
             ))}
 
             {status !== 'idle' && status !== 'error' && (
-              <div style={{ color: '#4a9eff', fontSize: 12, margin: '8px 0' }}>
+              <div style={{ color: '#1f6fd6', fontSize: 12, margin: '8px 0' }}>
                 {status === 'encrypting' && '🔐 Encrypting with Seal…'}
                 {status === 'storing' && '🔐 Encrypting & storing on Walrus…'}
                 {status === 'saving' && '💾 Saving your verification…'}
                 {status === 'done' && '✅ Verified!'}
               </div>
             )}
-            {status === 'error' && <div style={{ color: '#ff5555', fontSize: 12, margin: '8px 0' }}>⚠️ {error}</div>}
+            {status === 'error' && <div style={{ color: '#d23f3f', fontSize: 12, margin: '8px 0' }}>⚠️ {error}</div>}
 
             <button onClick={handleSubmit}
               disabled={!allFilled || ['encrypting', 'storing', 'saving'].includes(status)}
               style={{
                 width: '100%', marginTop: 8, borderRadius: 8, padding: 12, fontWeight: 700, fontSize: 14, border: 'none',
-                background: (!allFilled || ['encrypting', 'storing', 'saving'].includes(status)) ? '#1a2a1a' : '#00ff44',
-                color: (!allFilled || ['encrypting', 'storing', 'saving'].includes(status)) ? '#555' : '#000',
+                background: (!allFilled || ['encrypting', 'storing', 'saving'].includes(status)) ? '#eee' : '#ff385c',
+                color: (!allFilled || ['encrypting', 'storing', 'saving'].includes(status)) ? '#999' : '#fff',
                 cursor: (!allFilled || ['encrypting', 'storing', 'saving'].includes(status)) ? 'not-allowed' : 'pointer',
               }}>
               {['encrypting', 'storing', 'saving'].includes(status) ? 'Encrypting…' : 'Encrypt & verify identity'}

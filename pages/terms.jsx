@@ -4,8 +4,8 @@ const LAST_UPDATED = 'May 28, 2026';
 
 const Section = ({ title, children }) => (
   <div style={{ marginBottom: '32px' }}>
-    <h2 style={{ fontSize: '16px', fontWeight: '700', color: '#fff', margin: '0 0 12px', paddingBottom: '8px', borderBottom: '1px solid #222' }}>{title}</h2>
-    <div style={{ color: '#888', fontSize: '14px', lineHeight: '1.8' }}>{children}</div>
+    <h2 style={{ fontSize: '16px', fontWeight: '700', color: '#222', margin: '0 0 12px', paddingBottom: '8px', borderBottom: '1px solid #ebebeb' }}>{title}</h2>
+    <div style={{ color: '#717171', fontSize: '14px', lineHeight: '1.8' }}>{children}</div>
   </div>
 );
 
@@ -16,33 +16,33 @@ export default function Terms() {
   const router = useRouter();
 
   return (
-    <div style={{ minHeight: '100vh', background: '#0a0a0a', color: '#fff' }}>
+    <div style={{ minHeight: '100vh', background: '#fff', color: '#222' }}>
 
       {/* Header */}
-      <div style={{ background: '#111', borderBottom: '1px solid #222', padding: '0 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '60px', position: 'sticky', top: 0, zIndex: 10 }}>
+      <div style={{ background: '#fff', borderBottom: '1px solid #ebebeb', padding: '0 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '60px', position: 'sticky', top: 0, zIndex: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }} onClick={() => router.push('/')}>
           <span style={{ fontSize: '20px' }}>🏠</span>
-          <span style={{ fontWeight: '700', fontSize: '18px' }}>ARIA</span>
-          <span style={{ background: '#00ff44', color: '#000', fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '10px', marginLeft: '4px' }}>BETA</span>
+          <span style={{ fontWeight: '700', fontSize: '18px', color: '#ff385c' }}>ARIA</span>
+          <span style={{ background: '#222', color: '#fff', fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '10px', marginLeft: '4px' }}>BETA</span>
         </div>
-        <button onClick={() => router.back()} style={{ background: 'transparent', border: '1px solid #333', color: '#888', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>← Back</button>
+        <button onClick={() => router.back()} style={{ background: 'transparent', border: '1px solid #ddd', color: '#717171', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>← Back</button>
       </div>
 
       <div style={{ maxWidth: '760px', margin: '0 auto', padding: '48px 24px' }}>
 
         {/* Title */}
         <div style={{ marginBottom: '40px' }}>
-          <h1 style={{ fontSize: '28px', fontWeight: '700', margin: '0 0 8px' }}>Terms of Service</h1>
-          <p style={{ color: '#555', fontSize: '13px', margin: 0 }}>Last updated: {LAST_UPDATED} · ARIA Beta Platform</p>
+          <h1 style={{ fontSize: '28px', fontWeight: '700', margin: '0 0 8px', color: '#222' }}>Terms of Service</h1>
+          <p style={{ color: '#999', fontSize: '13px', margin: 0 }}>Last updated: {LAST_UPDATED} · ARIA Beta Platform</p>
         </div>
 
         {/* Important notice */}
-        <div style={{ background: '#0a0a00', border: '1px solid #3a3000', borderRadius: '12px', padding: '20px', marginBottom: '40px' }}>
+        <div style={{ background: '#fff8e1', border: '1px solid #ffe7a0', borderRadius: '12px', padding: '20px', marginBottom: '40px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
             <span style={{ fontSize: '18px' }}>⚠️</span>
-            <span style={{ fontWeight: '700', fontSize: '15px', color: '#ffaa00' }}>Important — Please Read Carefully</span>
+            <span style={{ fontWeight: '700', fontSize: '15px', color: '#a66a00' }}>Important — Please Read Carefully</span>
           </div>
-          <p style={{ color: '#888', fontSize: '13px', margin: 0, lineHeight: '1.7' }}>
+          <p style={{ color: '#7a6228', fontSize: '13px', margin: 0, lineHeight: '1.7' }}>
             ARIA is a non-custodial blockchain platform. By using ARIA, you acknowledge that all transactions are executed directly on the Sui blockchain, ARIA has no ability to reverse or recover transactions, and you are solely responsible for the security of your wallet and funds.
           </p>
         </div>
@@ -53,7 +53,7 @@ export default function Terms() {
         </Section>
 
         <Section title="2. Non-Custodial Platform Disclosure">
-          <P>ARIA is a <strong style={{ color: '#fff' }}>non-custodial platform</strong>. This means:</P>
+          <P>ARIA is a <strong style={{ color: '#222' }}>non-custodial platform</strong>. This means:</P>
           <ul style={{ paddingLeft: '20px', margin: '8px 0' }}>
             <Li>ARIA does not hold, control, or have access to your funds at any time</Li>
             <Li>All payments are executed directly on the Sui blockchain via smart contracts</Li>
@@ -67,11 +67,11 @@ export default function Terms() {
         <Section title="3. Blockchain and Smart Contract Risks">
           <P>By using ARIA, you acknowledge and accept the following risks:</P>
           <ul style={{ paddingLeft: '20px', margin: '8px 0' }}>
-            <Li><strong style={{ color: '#ccc' }}>Smart Contract Risk:</strong> Smart contracts may contain bugs or vulnerabilities. ARIA makes no warranty that contracts are free of errors.</Li>
-            <Li><strong style={{ color: '#ccc' }}>Network Risk:</strong> The Sui blockchain may experience outages, congestion, or forks that affect transactions.</Li>
-            <Li><strong style={{ color: '#ccc' }}>Wallet Risk:</strong> You are responsible for securing your wallet. ARIA cannot recover lost wallets or private keys.</Li>
-            <Li><strong style={{ color: '#ccc' }}>Finality Risk:</strong> Confirmed blockchain transactions are irreversible. ARIA cannot undo payments or deposits.</Li>
-            <Li><strong style={{ color: '#ccc' }}>Regulatory Risk:</strong> Cryptocurrency regulations vary by jurisdiction and may change. You are responsible for compliance with local laws.</Li>
+            <Li><strong style={{ color: '#222' }}>Smart Contract Risk:</strong> Smart contracts may contain bugs or vulnerabilities. ARIA makes no warranty that contracts are free of errors.</Li>
+            <Li><strong style={{ color: '#222' }}>Network Risk:</strong> The Sui blockchain may experience outages, congestion, or forks that affect transactions.</Li>
+            <Li><strong style={{ color: '#222' }}>Wallet Risk:</strong> You are responsible for securing your wallet. ARIA cannot recover lost wallets or private keys.</Li>
+            <Li><strong style={{ color: '#222' }}>Finality Risk:</strong> Confirmed blockchain transactions are irreversible. ARIA cannot undo payments or deposits.</Li>
+            <Li><strong style={{ color: '#222' }}>Regulatory Risk:</strong> Cryptocurrency regulations vary by jurisdiction and may change. You are responsible for compliance with local laws.</Li>
           </ul>
         </Section>
 
@@ -153,9 +153,9 @@ export default function Terms() {
         </Section>
 
         {/* Footer CTA */}
-        <div style={{ background: '#111', border: '1px solid #222', borderRadius: '12px', padding: '24px', textAlign: 'center', marginTop: '40px' }}>
-          <p style={{ color: '#888', fontSize: '13px', margin: '0 0 16px' }}>By using ARIA, you agree to these Terms of Service.</p>
-          <button onClick={() => router.push('/')} style={{ background: '#00ff44', color: '#000', border: 'none', borderRadius: '8px', padding: '12px 32px', fontWeight: '700', fontSize: '14px', cursor: 'pointer' }}>
+        <div style={{ background: '#f7f7f7', border: '1px solid #ebebeb', borderRadius: '12px', padding: '24px', textAlign: 'center', marginTop: '40px' }}>
+          <p style={{ color: '#717171', fontSize: '13px', margin: '0 0 16px' }}>By using ARIA, you agree to these Terms of Service.</p>
+          <button onClick={() => router.push('/')} style={{ background: '#ff385c', color: '#fff', border: 'none', borderRadius: '8px', padding: '12px 32px', fontWeight: '700', fontSize: '14px', cursor: 'pointer' }}>
             Back to ARIA
           </button>
         </div>

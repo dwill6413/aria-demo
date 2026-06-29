@@ -53,9 +53,9 @@ export default function Callback() {
   }, []);
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#0a0a0a', color: '#fff', flexDirection: 'column', gap: '12px' }}>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#fff', color: '#222', flexDirection: 'column', gap: '12px' }}>
       <div style={{ fontSize: '32px' }}>🏠</div>
-      <p style={{ color: '#888', fontSize: '14px' }}>Completing sign in...</p>
+      <p style={{ color: '#717171', fontSize: '14px' }}>Completing sign in...</p>
     </div>
   );
 }

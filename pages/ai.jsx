@@ -51,15 +51,15 @@ function renderMarkdown(text) {
     line
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
       .replace(/\*(.+?)\*/g, '<em>$1</em>')
-      .replace(/`(.+?)`/g, '<code style="background:#2a2a2a;padding:1px 5px;border-radius:4px;font-size:12px;font-family:monospace">$1</code>');
+      .replace(/`(.+?)`/g, '<code style="background:#f2f2f2;color:#222;padding:1px 5px;border-radius:4px;font-size:12px;font-family:monospace">$1</code>');
   for (const rawLine of lines) {
     const line = escapeHtml(rawLine);
-    if (/^---+$/.test(line.trim())) { flushList(); output.push('<hr style="border:none;border-top:1px solid #333;margin:12px 0"/>'); continue; }
-    if (line.startsWith('### ')) { flushList(); output.push(`<div style="font-size:15px;font-weight:700;color:#fff;margin:14px 0 6px">${inlineFormat(line.slice(4))}</div>`); continue; }
-    if (line.startsWith('## '))  { flushList(); output.push(`<div style="font-size:16px;font-weight:700;color:#fff;margin:16px 0 6px">${inlineFormat(line.slice(3))}</div>`); continue; }
-    if (line.startsWith('# '))   { flushList(); output.push(`<div style="font-size:18px;font-weight:700;color:#fff;margin:16px 0 8px">${inlineFormat(line.slice(2))}</div>`); continue; }
-    if (/^[-*] /.test(line))     { listItems.push(`<li style="margin:3px 0;color:#ccc">${inlineFormat(line.slice(2))}</li>`); continue; }
-    if (/^\d+\. /.test(line))    { listItems.push(`<li style="margin:3px 0;color:#ccc">${inlineFormat(line.replace(/^\d+\. /, ''))}</li>`); continue; }
+    if (/^---+$/.test(line.trim())) { flushList(); output.push('<hr style="border:none;border-top:1px solid #ddd;margin:12px 0"/>'); continue; }
+    if (line.startsWith('### ')) { flushList(); output.push(`<div style="font-size:15px;font-weight:700;color:#222;margin:14px 0 6px">${inlineFormat(line.slice(4))}</div>`); continue; }
+    if (line.startsWith('## '))  { flushList(); output.push(`<div style="font-size:16px;font-weight:700;color:#222;margin:16px 0 6px">${inlineFormat(line.slice(3))}</div>`); continue; }
+    if (line.startsWith('# '))   { flushList(); output.push(`<div style="font-size:18px;font-weight:700;color:#222;margin:16px 0 8px">${inlineFormat(line.slice(2))}</div>`); continue; }
+    if (/^[-*] /.test(line))     { listItems.push(`<li style="margin:3px 0;color:#444">${inlineFormat(line.slice(2))}</li>`); continue; }
+    if (/^\d+\. /.test(line))    { listItems.push(`<li style="margin:3px 0;color:#444">${inlineFormat(line.replace(/^\d+\. /, ''))}</li>`); continue; }
     if (line.trim() === '')      { flushList(); output.push('<div style="height:6px"></div>'); continue; }
     flushList();
     output.push(`<div>${inlineFormat(line)}</div>`);
@@ -72,13 +72,13 @@ function MessageBubble({ message, isHost }) {
   const isUser = message.role === 'user';
   if (isUser) {
     return (
-      <div style={{ background: isHost ? '#ff8800' : '#aa44ff', color: '#fff', padding: '12px 16px', borderRadius: '12px 12px 2px 12px', maxWidth: '85%', fontSize: '14px', lineHeight: '1.6', whiteSpace: 'pre-wrap' }}>
+      <div style={{ background: isHost ? '#ff8800' : '#8b3dff', color: '#fff', padding: '12px 16px', borderRadius: '12px 12px 2px 12px', maxWidth: '85%', fontSize: '14px', lineHeight: '1.6', whiteSpace: 'pre-wrap' }}>
         {message.content}
       </div>
     );
   }
   return (
-    <div style={{ background: '#1a1a1a', color: '#ccc', padding: '12px 16px', borderRadius: '12px 12px 12px 2px', maxWidth: '85%', fontSize: '14px', lineHeight: '1.6', border: '1px solid #333' }}
+    <div style={{ background: '#f7f7f7', color: '#222', padding: '12px 16px', borderRadius: '12px 12px 12px 2px', maxWidth: '85%', fontSize: '14px', lineHeight: '1.6', border: '1px solid #ebebeb' }}
       dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content) }} />
   );
 }
@@ -185,13 +185,13 @@ export default function AI() {
   const SUGGESTIONS = isHost ? HOST_SUGGESTIONS : GUEST_SUGGESTIONS;
 
   if (loading) return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#0a0a0a', color: '#fff' }}>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#fff', color: '#222' }}>
       Loading AI Assistant...
     </div>
   );
 
   return (
-    <div style={{ minHeight: '100vh', background: '#0a0a0a', color: '#fff', display: 'flex', flexDirection: 'column' }}>
+    <div style={{ minHeight: '100vh', background: '#fff', color: '#222', display: 'flex', flexDirection: 'column' }}>
       <style>{`
         .ai-agent-badge { display: inline-flex; }
         @media (max-width: 639px) {
@@ -199,29 +199,29 @@ export default function AI() {
           .ai-nav-back span { display: none; }
         }
       `}</style>
-      <div style={{ background: '#111', borderBottom: '1px solid #222', padding: '0 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '60px', position: 'sticky', top: 0, zIndex: 10 }}>
+      <div style={{ background: '#fff', borderBottom: '1px solid #ebebeb', padding: '0 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '60px', position: 'sticky', top: 0, zIndex: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <span onClick={() => router.push('/')} style={{ fontSize: '20px', cursor: 'pointer' }}>🏠</span>
-          <span style={{ fontWeight: '700', fontSize: '18px', cursor: 'pointer' }} onClick={() => router.push('/')}>ARIA</span>
-          <span style={{ background: '#00ff44', color: '#000', fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '10px', marginLeft: '4px' }}>BETA</span>
-          <span className="ai-agent-badge" style={{ background: isHost ? '#1a0a00' : '#1a0a2e', border: '1px solid #333', color: isHost ? '#ff8800' : '#aa44ff', fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '10px', marginLeft: '4px' }}>
+          <span style={{ fontWeight: '700', fontSize: '18px', cursor: 'pointer', color: '#ff385c' }} onClick={() => router.push('/')}>ARIA</span>
+          <span style={{ background: '#222', color: '#fff', fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '10px', marginLeft: '4px' }}>BETA</span>
+          <span className="ai-agent-badge" style={{ background: isHost ? '#fff4e6' : '#f3e8ff', border: `1px solid ${isHost ? '#ffd9a8' : '#e0c8fa'}`, color: isHost ? '#b35f00' : '#8b3dff', fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '10px', marginLeft: '4px' }}>
             {isHost ? '🏡 HOST AGENT' : '🤖 AI AGENT'}
           </span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <div style={{ display: 'flex', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', overflow: 'hidden' }}>
-            <button onClick={() => toggleMode(false)} style={{ background: !isHost ? '#aa44ff' : 'transparent', color: !isHost ? '#fff' : '#666', border: 'none', padding: '6px 14px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>Guest</button>
-            <button onClick={() => toggleMode(true)} style={{ background: isHost ? '#ff8800' : 'transparent', color: isHost ? '#fff' : '#666', border: 'none', padding: '6px 14px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>Host</button>
+          <div style={{ display: 'flex', background: '#f7f7f7', border: '1px solid #ddd', borderRadius: '8px', overflow: 'hidden' }}>
+            <button onClick={() => toggleMode(false)} style={{ background: !isHost ? '#8b3dff' : 'transparent', color: !isHost ? '#fff' : '#717171', border: 'none', padding: '6px 14px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>Guest</button>
+            <button onClick={() => toggleMode(true)} style={{ background: isHost ? '#ff8800' : 'transparent', color: isHost ? '#fff' : '#717171', border: 'none', padding: '6px 14px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>Host</button>
           </div>
-          <button onClick={() => router.back()} style={{ background: 'transparent', border: '1px solid #333', color: '#888', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>← Back</button>
+          <button onClick={() => router.back()} style={{ background: 'transparent', border: '1px solid #ddd', color: '#717171', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>← Back</button>
         </div>
       </div>
 
       <div style={{ flex: 1, maxWidth: '800px', width: '100%', margin: '0 auto', padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
         {!isHost && user && user.hasGuestProfile === false && (
-          <div style={{ background: '#1a1500', border: '1px solid #443300', borderRadius: '10px', padding: '12px 14px', fontSize: '12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
-            <span style={{ color: '#ffaa00' }}>⚠️ Hosts need to verify who's staying — complete identity verification before booking (encrypted via Seal, stored on Walrus, never seen by ARIA).</span>
-            <button onClick={() => router.push('/profile')} style={{ background: 'transparent', color: '#ffaa00', border: '1px solid #ffaa00', borderRadius: '6px', padding: '6px 10px', fontSize: '11px', cursor: 'pointer', flexShrink: 0 }}>
+          <div style={{ background: '#fff8e1', border: '1px solid #ffe7a0', borderRadius: '10px', padding: '12px 14px', fontSize: '12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+            <span style={{ color: '#a66a00' }}>⚠️ Hosts need to verify who's staying — complete identity verification before booking (encrypted via Seal, stored on Walrus, never seen by ARIA).</span>
+            <button onClick={() => router.push('/profile')} style={{ background: 'transparent', color: '#a66a00', border: '1px solid #a66a00', borderRadius: '6px', padding: '6px 10px', fontSize: '11px', cursor: 'pointer', flexShrink: 0 }}>
               Verify now
             </button>
           </div>
@@ -229,15 +229,15 @@ export default function AI() {
         {messages.length === 0 && (
           <div style={{ textAlign: 'center', padding: '40px 24px' }}>
             <div style={{ fontSize: '48px', marginBottom: '16px' }}>{isHost ? '🏡' : '🤖'}</div>
-            <h2 style={{ fontSize: '22px', fontWeight: '700', margin: '0 0 8px' }}>{isHost ? 'ARIA Host Agent' : 'ARIA AI Agent'}</h2>
-            <p style={{ color: '#666', fontSize: '14px', margin: '0 0 4px' }}>Powered by Grok — built into ARIA</p>
-            <p style={{ color: isHost ? '#ff8800' : '#aa44ff', fontSize: '13px', margin: '0 0 24px', fontWeight: '600' }}>
+            <h2 style={{ fontSize: '22px', fontWeight: '700', margin: '0 0 8px', color: '#222' }}>{isHost ? 'ARIA Host Agent' : 'ARIA AI Agent'}</h2>
+            <p style={{ color: '#717171', fontSize: '14px', margin: '0 0 4px' }}>Powered by Grok — built into ARIA</p>
+            <p style={{ color: isHost ? '#b35f00' : '#8b3dff', fontSize: '13px', margin: '0 0 24px', fontWeight: '600' }}>
               {isHost ? '⚡ Check messages, view revenue, release deposits, manage bookings' : '⚡ Book, cancel, message hosts, and manage your reservations'}
             </p>
-            <p style={{ color: '#555', fontSize: '13px', margin: '0 0 16px' }}>Try asking:</p>
+            <p style={{ color: '#999', fontSize: '13px', margin: '0 0 16px' }}>Try asking:</p>
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'center' }}>
               {SUGGESTIONS.map((s, i) => (
-                <button key={i} onClick={() => setInput(s)} style={{ background: '#111', border: '1px solid #333', color: '#888', fontSize: '12px', padding: '8px 14px', borderRadius: '20px', cursor: 'pointer' }}>{s}</button>
+                <button key={i} onClick={() => setInput(s)} style={{ background: '#fff', border: '1px solid #ddd', color: '#717171', fontSize: '12px', padding: '8px 14px', borderRadius: '20px', cursor: 'pointer' }}>{s}</button>
               ))}
             </div>
           </div>
@@ -245,33 +245,33 @@ export default function AI() {
 
         {messages.map((m, i) => (
           <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: m.role === 'user' ? 'flex-end' : 'flex-start' }}>
-            <div style={{ fontSize: '11px', color: '#555', marginBottom: '4px' }}>{m.role === 'user' ? 'You' : isHost ? '🏡 ARIA Host Agent' : '🤖 ARIA Agent'}</div>
+            <div style={{ fontSize: '11px', color: '#999', marginBottom: '4px' }}>{m.role === 'user' ? 'You' : isHost ? '🏡 ARIA Host Agent' : '🤖 ARIA Agent'}</div>
             <MessageBubble message={m} isHost={isHost} />
             {m.booking && (
-              <div style={{ marginTop: '8px', background: '#0a1a0a', border: '1px solid #1a3a1a', borderRadius: '10px', padding: '12px 14px', maxWidth: '85%' }}>
+              <div style={{ marginTop: '8px', background: '#eafaf0', border: '1px solid #c8ebd9', borderRadius: '10px', padding: '12px 14px', maxWidth: '85%' }}>
                 {m.booking.paymentEscrowBuilt ? (
-                  <div style={{ fontSize: '12px', color: '#888', marginBottom: '8px' }}>
-                    <div style={{ color: '#fff', fontWeight: 600, marginBottom: '4px' }}>{m.booking.property} — review before you sign</div>
-                    <div style={{ color: '#9bb', fontSize: '11px', lineHeight: 1.6 }}>
+                  <div style={{ fontSize: '12px', color: '#5c8a6d', marginBottom: '8px' }}>
+                    <div style={{ color: '#222', fontWeight: 600, marginBottom: '4px' }}>{m.booking.property} — review before you sign</div>
+                    <div style={{ color: '#5c8a6d', fontSize: '11px', lineHeight: 1.6 }}>
                       Rental → host ${m.booking.subtotal} · ARIA fee → ARIA ${m.booking.ariaFee} · taxes → remittance ${m.booking.taxes}, all released to those destinations at check-in. Refundable deposit ${m.booking.depositAmount} returned after checkout. One signature funds it all from your own wallet (${m.booking.chargeAmount} SuiUSD total).
                     </div>
-                    <div style={{ color: '#789', fontSize: '10px', marginTop: '4px' }}>
+                    <div style={{ color: '#5c8a6d', fontSize: '10px', marginTop: '4px' }}>
                       Cancel 15+ days before check-in for a full refund (fee included); within 14 days, the stay cost is non-refundable — list it on the resale market instead of losing the funds.
                     </div>
                   </div>
                 ) : (
-                  <div style={{ fontSize: '12px', color: '#888', marginBottom: '8px' }}>
-                    🔒 Refundable deposit for <strong style={{ color: '#fff' }}>{m.booking.property}</strong>: ${m.booking.depositAmount} SuiUSD
+                  <div style={{ fontSize: '12px', color: '#5c8a6d', marginBottom: '8px' }}>
+                    🔒 Refundable deposit for <strong style={{ color: '#222' }}>{m.booking.property}</strong>: ${m.booking.depositAmount} SuiUSD
                   </div>
                 )}
                 {m.booking.status === 'done' ? (
-                  <div style={{ color: '#00ff44', fontSize: '13px', fontWeight: '600' }}>{m.booking.paymentEscrowBuilt ? '✅ Payment + deposit escrowed on-chain' : '✅ Escrow deposit confirmed on-chain'}</div>
+                  <div style={{ color: '#00913f', fontSize: '13px', fontWeight: '600' }}>{m.booking.paymentEscrowBuilt ? '✅ Payment + deposit escrowed on-chain' : '✅ Escrow deposit confirmed on-chain'}</div>
                 ) : !m.booking.escrowTxBytes ? (
                   // The backend's best-effort escrow build failed (e.g. the guest's
                   // wallet has no testnet SUI yet) — there's no tx to sign, so don't
                   // render a sign button that would just throw. Booking is still
                   // saved; point the guest at My Bookings to finish once resolved.
-                  <div style={{ color: '#ff4444', fontSize: '12px' }}>
+                  <div style={{ color: '#d23f3f', fontSize: '12px' }}>
                     ⚠️ {m.booking.escrowBuildErrorMessage || 'Could not prepare the escrow transaction.'} Your dates are held, but no money has moved — finish this from <strong>My Bookings</strong> once resolved.
                   </div>
                 ) : (
@@ -280,15 +280,15 @@ export default function AI() {
                       onClick={() => handleEscrowSign(i, m.booking.bookingRef, m.booking.escrowTxBytes)}
                       disabled={['signing', 'submitting', 'confirming'].includes(m.booking.status)}
                       style={{
-                        background: ['signing', 'submitting', 'confirming'].includes(m.booking.status) ? '#1a1a1a' : '#00ff44',
-                        color: ['signing', 'submitting', 'confirming'].includes(m.booking.status) ? '#555' : '#000',
+                        background: ['signing', 'submitting', 'confirming'].includes(m.booking.status) ? '#eee' : '#00913f',
+                        color: ['signing', 'submitting', 'confirming'].includes(m.booking.status) ? '#999' : '#fff',
                         border: 'none', borderRadius: '6px', padding: '8px 16px', fontWeight: '700', fontSize: '13px',
                         cursor: ['signing', 'submitting', 'confirming'].includes(m.booking.status) ? 'not-allowed' : 'pointer'
                       }}>
                       {m.booking.status === 'signing' ? 'Signing...' : m.booking.status === 'submitting' ? 'Submitting...' : m.booking.status === 'confirming' ? 'Confirming...' : (m.booking.paymentEscrowBuilt ? 'Approve & sign in wallet' : 'Sign to lock deposit in escrow')}
                     </button>
                     {m.booking.status === 'error' && (
-                      <div style={{ color: '#ff4444', fontSize: '12px', marginTop: '6px' }}>{m.booking.error}</div>
+                      <div style={{ color: '#d23f3f', fontSize: '12px', marginTop: '6px' }}>{m.booking.error}</div>
                     )}
                   </>
                 )}
@@ -299,7 +299,7 @@ export default function AI() {
 
         {sending && (
           <div style={{ display: 'flex', alignItems: 'flex-start' }}>
-            <div style={{ background: isHost ? '#1a0f00' : '#0a0a1a', border: `1px solid ${isHost ? '#3a2000' : '#1a1a3a'}`, borderRadius: '12px 12px 12px 2px', padding: '10px 14px', fontSize: '13px', color: isHost ? '#ff8800' : '#aa44ff' }}>
+            <div style={{ background: isHost ? '#fff4e6' : '#f3e8ff', border: `1px solid ${isHost ? '#ffd9a8' : '#e0c8fa'}`, borderRadius: '12px 12px 12px 2px', padding: '10px 14px', fontSize: '13px', color: isHost ? '#b35f00' : '#8b3dff' }}>
               {isHost ? '🏡 Thinking...' : '🤖 Thinking...'}
             </div>
           </div>
@@ -307,18 +307,18 @@ export default function AI() {
         <div ref={bottomRef} />
       </div>
 
-      <div style={{ background: '#111', borderTop: '1px solid #222', padding: '16px 24px', position: 'sticky', bottom: 0 }}>
+      <div style={{ background: '#fff', borderTop: '1px solid #ebebeb', padding: '16px 24px', position: 'sticky', bottom: 0 }}>
         <div style={{ maxWidth: '800px', margin: '0 auto', display: 'flex', gap: '8px' }}>
           <textarea value={input} onChange={e => setInput(e.target.value)} onKeyDown={handleKeyDown}
             placeholder={isHost ? 'Ask anything — check messages, revenue, release deposits...' : 'Ask anything or say "Book the Mountain Cabin for June 10–13"...'}
             disabled={sending} rows={2}
-            style={{ flex: 1, background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '10px 14px', color: '#fff', fontSize: '14px', outline: 'none', resize: 'none', fontFamily: 'inherit', lineHeight: '1.5' }} />
+            style={{ flex: 1, background: '#fff', border: '1px solid #ddd', borderRadius: '8px', padding: '10px 14px', color: '#222', fontSize: '14px', outline: 'none', resize: 'none', fontFamily: 'inherit', lineHeight: '1.5' }} />
           <button onClick={sendMessage} disabled={sending || !input.trim()}
-            style={{ background: (sending || !input.trim()) ? '#1a1a1a' : (isHost ? '#ff8800' : '#aa44ff'), color: (sending || !input.trim()) ? '#555' : '#fff', border: 'none', borderRadius: '8px', padding: '0 20px', fontWeight: '700', fontSize: '14px', cursor: (sending || !input.trim()) ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}>
+            style={{ background: (sending || !input.trim()) ? '#eee' : (isHost ? '#ff8800' : '#8b3dff'), color: (sending || !input.trim()) ? '#999' : '#fff', border: 'none', borderRadius: '8px', padding: '0 20px', fontWeight: '700', fontSize: '14px', cursor: (sending || !input.trim()) ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}>
             {sending ? '...' : 'Send →'}
           </button>
         </div>
-        <div style={{ maxWidth: '800px', margin: '8px auto 0', fontSize: '11px', color: '#333', textAlign: 'center' }}>
+        <div style={{ maxWidth: '800px', margin: '8px auto 0', fontSize: '11px', color: '#999', textAlign: 'center' }}>
           ⚡ Powered by Grok · Agent can take real actions on ARIA
         </div>
       </div>

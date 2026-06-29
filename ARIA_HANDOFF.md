@@ -1,7 +1,69 @@
 # ARIA — Technical Handoff Document
-**Version:** 4.28 | **Updated:** June 25, 2026
+**Version:** 4.29 | **Updated:** June 29, 2026
 
-> **June 25, 2026 (LATEST — v7 pre-mainnet hardening):** v7 escrow package
+> **June 29, 2026 (LATEST — resale self-heal fix + property-id collision bug + host
+> edit/delete listings):** Three pieces of work, off-chain only (no new Move package).
+>
+> 1. **Resale-listing 502 fix (Task #16).** `/pass/:ref/list-resale` and
+> `/cancel-resale` BUILD routes now read the live on-chain `ResalePolicy` object
+> first (new `readResalePolicyObject` + `ResalePolicyBcs` in `escrow.mjs`) and
+> short-circuit/reconcile the DB directly if the action already happened on-chain
+> but failed to persist — mirrors `/escrow/rebuild`'s existing `alreadyConfirmed`
+> pattern, but reads chain state instead of DB state. Verification fns now return
+> `{ok:false, retryable:true}` for transient RPC failures → routes map that to HTTP
+> 503 (not 400/502) with `retryable:true` in the body. Verified end-to-end: booking
+> `ARIA-1-1782743184823-9cfb5b` self-healed to "Listed for $443."
+>
+> 2. **Property-id collision bug (found via live testing of the Phase 3a AI-paste
+> import, found in `ARIA_HANDOFF.md`'s own Phase 3a section below).** The
+> `properties` DB table is a plain `SERIAL PRIMARY KEY` starting at 1 — same id
+> space as the 6 fixed catalog properties (`catalog.mjs` `PROPERTIES`, ids 1-6,
+> code-only, no DB row). The first-ever host-created listing got id=1, colliding
+> with the Oceanfront Villa demo property. Two surfaces were affected: (a)
+> `pages/host.jsx`/`index.jsx`'s `PROPERTY_DISPLAY` merge matched by id alone, so
+> the new listing's title/price rendered with the wrong location/beds/baths/tag/
+> photo; (b) more seriously, the per-listing BOOKINGS/REVENUE stats cards filtered
+> `activeBookings` by `propertyId === p.id`, so the new (never-booked) listing
+> displayed — and was affected by cancelling — the *real* Oceanfront Villa
+> booking. No actual data was duplicated or lost; it was a single booking row
+> rendered/wired twice due to the id collision. **Fix:** `GET /properties` now
+> returns a `source` field (`'catalog'` | `'db'`); both frontend merges and the
+> stats logic should key off `source`, not raw id (display merges fixed in this
+> pass; verify the BOOKINGS/REVENUE filter at `host.jsx` ~line 822 was also
+> updated — see TODO below). `db.mjs`'s `initDB()` now also bumps
+> `properties_id_seq` to `GREATEST(1000, MAX(id))` on every boot so no *future*
+> listing can land in the 1-6 range. **Did not fix the already-existing colliding
+> row** (the test "Pool House Oasis" listing, parked at id=1) — that's what the
+> new edit/delete feature (next item) is for.
+>
+> 3. **Host listing edit + delete (new, no prior task #).** Hosts had no way to
+> modify or remove a published listing. Added `PATCH /host/properties/:id` (edit,
+> reuses `propertyCreateSchema` + the same clamping as create) and `PATCH
+> /host/properties/:id/deactivate` (soft-delete via `active=false`, same flag
+> `getAllProperties()` already filters on) — both ownership-checked against
+> `session.suiAddress` via `normalizeAddr`, both 404 for the 6 fixed catalog ids
+> (no DB row to act on). `host.jsx`: Edit/Remove buttons now show on
+> `source==='db'` cards only; Edit reopens the Add-Property modal pre-filled
+> (`openEditModal`), `handlePublish` branches PATCH vs POST off a new `editingId`
+> state. **TODO next session:** use the new Remove button to deactivate the
+> stray "Pool House Oasis" test listing (id=1) instead of the raw SQL workaround
+> discussed mid-session (`UPDATE properties SET id = 1000 WHERE id = 1`) — either
+> works, Remove is cleaner.
+>
+> **Deploy status: code written + verified via Read, NOT YET pushed/deployed as of
+> this entry** (sandbox can't reliably run git — see recurring note in
+> ARIA_ROADMAP.md tech debt). Files touched: `escrow.mjs`, `server.mjs`,
+> `pages/bookings.jsx`, `pages/host.jsx`, `pages/index.jsx`, `db.mjs`. User needs
+> to `git add escrow.mjs server.mjs pages/bookings.jsx pages/host.jsx
+> pages/index.jsx db.mjs && git commit && git push` themselves, then confirm in
+> Railway/Vercel.
+>
+> **Still pending, explicitly parked by user:** Task #4 — reconcile the booking
+> wallet-funding root-cause hypothesis for `ARIA-2-1782401744020-a944c8` (a
+> friend's booking). Blocked on the friend being available to retest. Do not
+> resume until the user raises it again.
+
+> **June 25, 2026 (v7 pre-mainnet hardening):** v7 escrow package
 > `0xadd5ac7867a69200d632e858193549b6fa94abff7d80397a1ab4c418f99d3e60` published —
 > resale split (`aria_cut`/`host_cut`) and the Rail 2 price-cap comparison now use u128
 > intermediates so the multiply-then-divide can't overflow u64 at extreme values (per an

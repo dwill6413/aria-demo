@@ -55,8 +55,8 @@ export default function Scan() {
 
   const reset = () => { setToken(''); setStatus('idle'); setResult(null); };
 
-  const wrap = { fontFamily: 'sans-serif', background: '#0a0a0a', color: '#fff', minHeight: '100vh', padding: '24px' };
-  const card = { maxWidth: 520, margin: '0 auto', background: '#111', border: '1px solid #222', borderRadius: 12, padding: 24 };
+  const wrap = { fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', background: '#fff', color: '#222', minHeight: '100vh', padding: '24px' };
+  const card = { maxWidth: 520, margin: '0 auto', background: '#fff', border: '1px solid #ebebeb', borderRadius: 12, padding: 24, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' };
 
   if (loading) return <div style={wrap}><div style={card}>Loading…</div></div>;
   if (user?.notHost) return <div style={wrap}><div style={card}>This scanner is for hosts / front-desk only.</div></div>;
@@ -64,18 +64,18 @@ export default function Scan() {
   return (
     <div style={wrap}>
       <div style={{ maxWidth: 520, margin: '0 auto 16px' }}>
-        <a href="/host" style={{ color: '#00ff44', fontSize: 13, textDecoration: 'none' }}>← Host Dashboard</a>
+        <a href="/host" style={{ color: '#717171', fontSize: 13, textDecoration: 'none' }}>← Host Dashboard</a>
       </div>
       <div style={card}>
-        <h1 style={{ fontSize: 22, margin: '0 0 4px' }}>🛂 Check-in Scanner</h1>
-        <p style={{ color: '#888', fontSize: 13, lineHeight: 1.6, margin: '0 0 18px' }}>
-          Ask the guest to open their <strong style={{ color: '#a98aff' }}>Check-in Pass</strong> and scan the QR — or paste its code below.
+        <h1 style={{ fontSize: 22, margin: '0 0 4px', color: '#222' }}>🛂 Check-in Scanner</h1>
+        <p style={{ color: '#717171', fontSize: 13, lineHeight: 1.6, margin: '0 0 18px' }}>
+          Ask the guest to open their <strong style={{ color: '#8b3dff' }}>Check-in Pass</strong> and scan the QR — or paste its code below.
           A valid pass is a fresh, wallet-signed proof for a live on-chain booking; stale screenshots and cancelled bookings fail.
         </p>
 
         {status === 'valid' ? (
-          <div style={{ background: '#0a1a0a', border: '1px solid #1a3a1a', borderRadius: 12, padding: 20 }}>
-            <div style={{ color: '#00ff44', fontWeight: 800, fontSize: 20, marginBottom: 12 }}>✅ Valid check-in</div>
+          <div style={{ background: '#eafaf0', border: '1px solid #c8ebd9', borderRadius: 12, padding: 20 }}>
+            <div style={{ color: '#00913f', fontWeight: 800, fontSize: 20, marginBottom: 12 }}>✅ Valid check-in</div>
             <div style={{ display: 'grid', gap: 6 }}>
               <Row k="Guest" v={result.guestName || '—'} />
               <Row k="Property" v={result.property} />
@@ -83,25 +83,25 @@ export default function Scan() {
               <Row k="Check-out" v={fmtDay(result.checkOut)} />
               <Row k="Ref" v={result.bookingRef} mono />
             </div>
-            <button onClick={reset} style={{ width: '100%', marginTop: 16, background: '#00ff44', border: 'none', color: '#000', borderRadius: 8, padding: 12, fontWeight: 700, cursor: 'pointer' }}>
+            <button onClick={reset} style={{ width: '100%', marginTop: 16, background: '#00913f', border: 'none', color: '#fff', borderRadius: 8, padding: 12, fontWeight: 700, cursor: 'pointer' }}>
               Scan next guest
             </button>
           </div>
         ) : status === 'invalid' ? (
-          <div style={{ background: '#1a1212', border: '1px solid #3a1a1a', borderRadius: 12, padding: 20 }}>
-            <div style={{ color: '#ff5555', fontWeight: 800, fontSize: 20, marginBottom: 8 }}>⛔ Not valid</div>
-            <div style={{ color: '#ffaaaa', fontSize: 13 }}>{result?.reason}</div>
-            <button onClick={reset} style={{ width: '100%', marginTop: 16, background: 'transparent', border: '1px solid #333', color: '#888', borderRadius: 8, padding: 12, cursor: 'pointer' }}>
+          <div style={{ background: '#fdeeee', border: '1px solid #f5d0d0', borderRadius: 12, padding: 20 }}>
+            <div style={{ color: '#d23f3f', fontWeight: 800, fontSize: 20, marginBottom: 8 }}>⛔ Not valid</div>
+            <div style={{ color: '#a35353', fontSize: 13 }}>{result?.reason}</div>
+            <button onClick={reset} style={{ width: '100%', marginTop: 16, background: 'transparent', border: '1px solid #ddd', color: '#717171', borderRadius: 8, padding: 12, cursor: 'pointer' }}>
               Try again
             </button>
           </div>
         ) : (
           <>
             <textarea value={token} onChange={e => setToken(e.target.value)} placeholder="Paste the guest's check-in code…" rows={4}
-              style={{ width: '100%', boxSizing: 'border-box', background: '#0a0a0a', border: '1px solid #333', borderRadius: 8, padding: 12, color: '#fff', fontSize: 12, fontFamily: 'monospace', resize: 'none' }} />
+              style={{ width: '100%', boxSizing: 'border-box', background: '#fff', border: '1px solid #ddd', borderRadius: 8, padding: 12, color: '#222', fontSize: 12, fontFamily: 'monospace', resize: 'none' }} />
             <button onClick={verify} disabled={!token.trim() || status === 'verifying'}
               style={{ width: '100%', marginTop: 10, borderRadius: 8, padding: 12, fontWeight: 700, fontSize: 14, border: 'none',
-                background: (!token.trim() || status === 'verifying') ? '#1a1a2a' : '#a98aff', color: (!token.trim() || status === 'verifying') ? '#555' : '#000',
+                background: (!token.trim() || status === 'verifying') ? '#eee' : '#8b3dff', color: (!token.trim() || status === 'verifying') ? '#999' : '#fff',
                 cursor: (!token.trim() || status === 'verifying') ? 'not-allowed' : 'pointer' }}>
               {status === 'verifying' ? 'Verifying…' : '🛂 Verify check-in'}
             </button>
@@ -115,8 +115,8 @@ export default function Scan() {
 function Row({ k, v, mono }) {
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-      <span style={{ color: '#778', fontSize: 12 }}>{k}</span>
-      <span style={{ color: '#cfe', fontSize: 12, fontFamily: mono ? 'monospace' : 'inherit', textAlign: 'right', wordBreak: 'break-all' }}>{v}</span>
+      <span style={{ color: '#717171', fontSize: 12 }}>{k}</span>
+      <span style={{ color: '#222', fontSize: 12, fontFamily: mono ? 'monospace' : 'inherit', textAlign: 'right', wordBreak: 'break-all' }}>{v}</span>
     </div>
   );
 }

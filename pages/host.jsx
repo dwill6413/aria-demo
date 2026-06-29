@@ -533,9 +533,9 @@ export default function Host() {
   }));
 
   const tabStyle = (tab) => ({
-    background: activeTab === tab ? '#00ff44' : 'transparent',
-    color: activeTab === tab ? '#000' : '#888',
-    border: `1px solid ${activeTab === tab ? '#00ff44' : '#333'}`,
+    background: activeTab === tab ? '#ff385c' : 'transparent',
+    color: activeTab === tab ? '#fff' : '#717171',
+    border: `1px solid ${activeTab === tab ? '#ff385c' : '#ddd'}`,
     padding: '8px 20px', borderRadius: '6px', fontSize: '13px', fontWeight: '600', cursor: 'pointer'
   });
 
@@ -543,9 +543,9 @@ export default function Host() {
 
   const WalrusReceipts = ({ b }) => (
     <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-      {b.walrusBlobId && <a href={`https://aggregator.walrus-testnet.walrus.space/v1/blobs/${b.walrusBlobId}`} target="_blank" rel="noreferrer" style={{ background: '#0a1a0a', border: '1px solid #1a3a1a', color: '#00ff44', fontSize: '11px', padding: '4px 10px', borderRadius: '6px', textDecoration: 'none', fontWeight: '600' }}>📄 Booking</a>}
-      {b.cancellationWalrusBlobId && <a href={`https://aggregator.walrus-testnet.walrus.space/v1/blobs/${b.cancellationWalrusBlobId}`} target="_blank" rel="noreferrer" style={{ background: '#1a0a0a', border: '1px solid #3a1a1a', color: '#ff6666', fontSize: '11px', padding: '4px 10px', borderRadius: '6px', textDecoration: 'none', fontWeight: '600' }}>❌ Cancellation</a>}
-      {b.depositReleaseWalrusBlobId && <a href={`https://aggregator.walrus-testnet.walrus.space/v1/blobs/${b.depositReleaseWalrusBlobId}`} target="_blank" rel="noreferrer" style={{ background: '#0a0a1a', border: '1px solid #1a1a3a', color: '#4a9eff', fontSize: '11px', padding: '4px 10px', borderRadius: '6px', textDecoration: 'none', fontWeight: '600' }}>🔓 Deposit</a>}
+      {b.walrusBlobId && <a href={`https://aggregator.walrus-testnet.walrus.space/v1/blobs/${b.walrusBlobId}`} target="_blank" rel="noreferrer" style={{ background: '#eafaf0', border: '1px solid #c8ebd9', color: '#00913f', fontSize: '11px', padding: '4px 10px', borderRadius: '6px', textDecoration: 'none', fontWeight: '600' }}>📄 Booking</a>}
+      {b.cancellationWalrusBlobId && <a href={`https://aggregator.walrus-testnet.walrus.space/v1/blobs/${b.cancellationWalrusBlobId}`} target="_blank" rel="noreferrer" style={{ background: '#fdeeee', border: '1px solid #f5d0d0', color: '#d23f3f', fontSize: '11px', padding: '4px 10px', borderRadius: '6px', textDecoration: 'none', fontWeight: '600' }}>❌ Cancellation</a>}
+      {b.depositReleaseWalrusBlobId && <a href={`https://aggregator.walrus-testnet.walrus.space/v1/blobs/${b.depositReleaseWalrusBlobId}`} target="_blank" rel="noreferrer" style={{ background: '#eaf2fc', border: '1px solid #cfe0f5', color: '#1f6fd6', fontSize: '11px', padding: '4px 10px', borderRadius: '6px', textDecoration: 'none', fontWeight: '600' }}>🔓 Deposit</a>}
     </div>
   );
 
@@ -555,10 +555,10 @@ export default function Host() {
     return true;
   }) || [];
 
-  if (loading) return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#0a0a0a', color: '#fff' }}>Loading host dashboard...</div>;
+  if (loading) return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#fff', color: '#222' }}>Loading host dashboard...</div>;
 
   return (
-    <div style={{ minHeight: '100vh', background: '#0a0a0a', color: '#fff' }}>
+    <div style={{ minHeight: '100vh', background: '#fff', color: '#222' }}>
       <style>{`
         .hs-nav-desktop { display: flex; align-items: center; gap: 12px; }
         .hs-nav-hamburger { display: none !important; }
@@ -570,50 +570,50 @@ export default function Host() {
       `}</style>
 
       {/* Header */}
-      <div style={{ background: '#111', borderBottom: '1px solid #222', padding: '0 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '60px', position: 'sticky', top: 0, zIndex: 100 }}>
+      <div style={{ background: '#fff', borderBottom: '1px solid #ebebeb', padding: '0 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '60px', position: 'sticky', top: 0, zIndex: 100 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <span onClick={() => router.push('/')} style={{ fontSize: '20px', cursor: 'pointer' }}>🏠</span>
-          <span style={{ fontWeight: '700', fontSize: '18px', cursor: 'pointer' }} onClick={() => router.push('/')}>ARIA</span>
-          <span style={{ background: '#00ff44', color: '#000', fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '10px', marginLeft: '4px' }}>BETA</span>
-          <span style={{ background: '#1a1a2e', border: '1px solid #333', color: '#4a9eff', fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '10px', marginLeft: '4px' }}>HOST VIEW</span>
+          <span style={{ fontWeight: '700', fontSize: '18px', cursor: 'pointer', color: '#ff385c' }} onClick={() => router.push('/')}>ARIA</span>
+          <span style={{ background: '#222', color: '#fff', fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '10px', marginLeft: '4px' }}>BETA</span>
+          <span style={{ background: '#eaf2fc', border: '1px solid #cfe0f5', color: '#1f6fd6', fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '10px', marginLeft: '4px' }}>HOST VIEW</span>
         </div>
         {/* Desktop */}
         <div className="hs-nav-desktop">
           <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: '13px', fontWeight: '500' }}>{user?.name}</div>
+            <div style={{ fontSize: '13px', fontWeight: '500', color: '#222' }}>{user?.name}</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'flex-end' }}>
-              <div style={{ fontSize: '11px', color: '#00ff44', fontFamily: 'monospace', wordBreak: 'break-all' }}>{user?.address}</div>
-              <button onClick={copyAddr} title="Copy address" style={{ background: 'none', border: 'none', cursor: 'pointer', color: addrCopied ? '#00ff44' : '#555', fontSize: '12px', padding: '0 2px', flexShrink: 0 }}>
+              <div style={{ fontSize: '11px', color: '#717171', fontFamily: 'monospace', wordBreak: 'break-all' }}>{user?.address}</div>
+              <button onClick={copyAddr} title="Copy address" style={{ background: 'none', border: 'none', cursor: 'pointer', color: addrCopied ? '#00913f' : '#999', fontSize: '12px', padding: '0 2px', flexShrink: 0 }}>
                 {addrCopied ? '✓' : '⧉'}
               </button>
             </div>
           </div>
-          <button onClick={() => router.push('/bookings')} style={{ background: 'transparent', border: '1px solid #333', color: '#888', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>Guest View</button>
-          <button onClick={() => router.push('/')} style={{ background: 'transparent', border: '1px solid #333', color: '#888', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>Back to Search</button>
+          <button onClick={() => router.push('/bookings')} style={{ background: 'transparent', border: '1px solid #ddd', color: '#717171', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>Guest View</button>
+          <button onClick={() => router.push('/')} style={{ background: 'transparent', border: '1px solid #ddd', color: '#717171', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>Back to Search</button>
         </div>
         {/* Mobile */}
         <div className="hs-nav-hamburger">
           <button onClick={copyAddr} title="Copy address" style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', gap: '3px' }}>
-            <span style={{ fontSize: '11px', color: '#00ff44', fontFamily: 'monospace' }}>{user?.address?.slice(0, 6)}…{user?.address?.slice(-4)}</span>
-            <span style={{ color: addrCopied ? '#00ff44' : '#555', fontSize: '11px' }}>{addrCopied ? '✓' : '⧉'}</span>
+            <span style={{ fontSize: '11px', color: '#717171', fontFamily: 'monospace' }}>{user?.address?.slice(0, 6)}…{user?.address?.slice(-4)}</span>
+            <span style={{ color: addrCopied ? '#00913f' : '#999', fontSize: '11px' }}>{addrCopied ? '✓' : '⧉'}</span>
           </button>
-          <button onClick={() => setMenuOpen(o => !o)} style={{ background: 'transparent', border: '1px solid #333', color: '#fff', borderRadius: '6px', width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', cursor: 'pointer' }}>
+          <button onClick={() => setMenuOpen(o => !o)} style={{ background: 'transparent', border: '1px solid #ddd', color: '#222', borderRadius: '6px', width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', cursor: 'pointer' }}>
             {menuOpen ? '×' : '☰'}
           </button>
         </div>
       </div>
 
       {menuOpen && (
-        <div style={{ background: '#111', borderBottom: '1px solid #222', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '8px', position: 'sticky', top: '60px', zIndex: 99 }}>
-          <div style={{ paddingBottom: '8px', borderBottom: '1px solid #1a1a1a' }}>
-            <div style={{ fontSize: '13px', fontWeight: '600', color: '#fff' }}>{user?.name}</div>
-            <div style={{ fontSize: '11px', color: '#4a9eff', marginTop: '2px', fontWeight: '700' }}>Host Dashboard</div>
+        <div style={{ background: '#fff', borderBottom: '1px solid #ebebeb', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '8px', position: 'sticky', top: '60px', zIndex: 99 }}>
+          <div style={{ paddingBottom: '8px', borderBottom: '1px solid #ebebeb' }}>
+            <div style={{ fontSize: '13px', fontWeight: '600', color: '#222' }}>{user?.name}</div>
+            <div style={{ fontSize: '11px', color: '#1f6fd6', marginTop: '2px', fontWeight: '700' }}>Host Dashboard</div>
           </div>
           {[
             { label: '👤 Guest View', path: '/bookings' },
             { label: '🏠 Back to Search', path: '/' },
           ].map((item, i) => (
-            <button key={i} onClick={() => { router.push(item.path); setMenuOpen(false); }} style={{ background: '#1a1a1a', border: '1px solid #2a2a2a', color: '#fff', borderRadius: '8px', padding: '12px 16px', fontSize: '14px', textAlign: 'left', cursor: 'pointer' }}>
+            <button key={i} onClick={() => { router.push(item.path); setMenuOpen(false); }} style={{ background: '#f7f7f7', border: '1px solid #ebebeb', color: '#222', borderRadius: '8px', padding: '12px 16px', fontSize: '14px', textAlign: 'left', cursor: 'pointer' }}>
               {item.label}
             </button>
           ))}
@@ -622,27 +622,27 @@ export default function Host() {
 
       <div style={{ maxWidth: '1100px', margin: '0 auto', padding: '40px 24px' }}>
         <div style={{ marginBottom: '32px' }}>
-          <h1 style={{ fontSize: '24px', fontWeight: '700', margin: '0 0 4px' }}>Host Dashboard</h1>
-          <p style={{ color: '#666', fontSize: '14px', margin: 0 }}>Manage your listings, bookings, and payouts</p>
+          <h1 style={{ fontSize: '24px', fontWeight: '700', margin: '0 0 4px', color: '#222' }}>Host Dashboard</h1>
+          <p style={{ color: '#717171', fontSize: '14px', margin: 0 }}>Manage your listings, bookings, and payouts</p>
         </div>
 
         {/* Stats */}
         <div className="hs-stats-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '16px', marginBottom: '32px' }}>
           {[
-            { label: 'TOTAL BOOKINGS', value: activeBookings.length, color: '#00ff44', sub: `${cancelledBookings.length} cancelled` },
-            { label: 'GROSS REVENUE', value: `$${totalRevenue.toLocaleString()}`, color: '#00ff44', sub: 'SuiUSD' },
-            { label: 'ARIA FEES (5%)', value: `$${totalAriaFees.toLocaleString()}`, color: '#ff4444', sub: 'vs 15% Airbnb' },
-            { label: 'YOUR EARNINGS', value: `$${hostEarnings.toLocaleString()}`, color: '#4a9eff', sub: 'net payout' },
-            { label: 'ACTIVE LISTINGS', value: properties.length, color: '#00ff44', sub: 'properties' },
-            { label: 'TAXES COLLECTED', value: `$${totalTaxes.toLocaleString()}`, color: '#ffaa00', sub: 'occupancy tax, varies by jurisdiction' },
-            { label: 'DEPOSITS HELD', value: depositsHeld, color: '#4a9eff', sub: 'in Sui escrow' },
-            { label: 'MESSAGES', value: totalUnread, color: totalUnread > 0 ? '#ff4444' : '#555', sub: totalUnread > 0 ? 'need attention' : 'all caught up' },
-            { label: 'AVG RATING', value: avgRating > 0 ? `${avgRating} ⭐` : '—', color: '#ffaa00', sub: `${reviews.length} review${reviews.length !== 1 ? 's' : ''}` },
+            { label: 'TOTAL BOOKINGS', value: activeBookings.length, color: '#00913f', sub: `${cancelledBookings.length} cancelled` },
+            { label: 'GROSS REVENUE', value: `$${totalRevenue.toLocaleString()}`, color: '#00913f', sub: 'SuiUSD' },
+            { label: 'ARIA FEES (5%)', value: `$${totalAriaFees.toLocaleString()}`, color: '#d23f3f', sub: 'vs 15% Airbnb' },
+            { label: 'YOUR EARNINGS', value: `$${hostEarnings.toLocaleString()}`, color: '#1f6fd6', sub: 'net payout' },
+            { label: 'ACTIVE LISTINGS', value: properties.length, color: '#00913f', sub: 'properties' },
+            { label: 'TAXES COLLECTED', value: `$${totalTaxes.toLocaleString()}`, color: '#a66a00', sub: 'occupancy tax, varies by jurisdiction' },
+            { label: 'DEPOSITS HELD', value: depositsHeld, color: '#1f6fd6', sub: 'in Sui escrow' },
+            { label: 'MESSAGES', value: totalUnread, color: totalUnread > 0 ? '#d23f3f' : '#999', sub: totalUnread > 0 ? 'need attention' : 'all caught up' },
+            { label: 'AVG RATING', value: avgRating > 0 ? `${avgRating} ⭐` : '—', color: '#a66a00', sub: `${reviews.length} review${reviews.length !== 1 ? 's' : ''}` },
           ].map((s, i) => (
-            <div key={i} style={{ background: '#111', border: `1px solid ${i === 7 && totalUnread > 0 ? '#3a1a1a' : '#222'}`, borderRadius: '12px', padding: '20px' }}>
-              <div style={{ fontSize: '10px', color: '#555', marginBottom: '8px', fontWeight: '600' }}>{s.label}</div>
+            <div key={i} style={{ background: '#fff', border: `1px solid ${i === 7 && totalUnread > 0 ? '#f5d0d0' : '#ebebeb'}`, borderRadius: '12px', padding: '20px', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+              <div style={{ fontSize: '10px', color: '#999', marginBottom: '8px', fontWeight: '600' }}>{s.label}</div>
               <div style={{ fontSize: '24px', fontWeight: '700', color: s.color, marginBottom: '4px' }}>{s.value}</div>
-              <div style={{ fontSize: '11px', color: '#555' }}>{s.sub}</div>
+              <div style={{ fontSize: '11px', color: '#999' }}>{s.sub}</div>
             </div>
           ))}
         </div>
@@ -652,12 +652,12 @@ export default function Host() {
           {['overview', 'bookings', 'listings', 'calendar', 'reviews', 'tax', 'applications'].map(tab => (
             <button key={tab} onClick={() => setActiveTab(tab)} style={tabStyle(tab)}>
               {tab === 'overview'      ? '📊 Overview' :
-               tab === 'bookings'     ? <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>📋 Bookings {totalUnread > 0 && <span style={{ background: '#ff4444', color: '#fff', borderRadius: '50%', fontSize: '10px', fontWeight: '700', padding: '1px 5px' }}>{totalUnread}</span>}</span> :
+               tab === 'bookings'     ? <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>📋 Bookings {totalUnread > 0 && <span style={{ background: '#d23f3f', color: '#fff', borderRadius: '50%', fontSize: '10px', fontWeight: '700', padding: '1px 5px' }}>{totalUnread}</span>}</span> :
                tab === 'listings'     ? '🏠 Listings' :
                tab === 'calendar'     ? '📅 Calendar Sync' :
                tab === 'reviews'      ? '⭐ Reviews' :
                tab === 'tax'          ? '💰 Tax' :
-               <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>👥 Applications {pendingApps > 0 && <span style={{ background: '#ffaa00', color: '#000', borderRadius: '50%', fontSize: '10px', fontWeight: '700', padding: '1px 5px' }}>{pendingApps}</span>}</span>}
+               <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>👥 Applications {pendingApps > 0 && <span style={{ background: '#a66a00', color: '#fff', borderRadius: '50%', fontSize: '10px', fontWeight: '700', padding: '1px 5px' }}>{pendingApps}</span>}</span>}
             </button>
           ))}
         </div>
@@ -665,42 +665,42 @@ export default function Host() {
         {/* Overview */}
         {activeTab === 'overview' && (
           <div>
-            <h3 style={{ fontSize: '16px', fontWeight: '600', margin: '0 0 16px' }}>Revenue by Property</h3>
+            <h3 style={{ fontSize: '16px', fontWeight: '600', margin: '0 0 16px', color: '#222' }}>Revenue by Property</h3>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               {bookingsByProperty.map(p => (
-                <div key={p.id} style={{ background: '#111', border: '1px solid #222', borderRadius: '12px', padding: '16px', display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+                <div key={p.id} style={{ background: '#fff', border: '1px solid #ebebeb', borderRadius: '12px', padding: '16px', display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
                   <img src={p.image} alt={p.title} style={{ width: '60px', height: '60px', objectFit: 'cover', borderRadius: '8px' }} />
                   <div style={{ flex: 1, minWidth: '150px' }}>
-                    <div style={{ fontSize: '15px', fontWeight: '600', marginBottom: '2px' }}>{p.title}</div>
-                    <div style={{ fontSize: '12px', color: '#666' }}>{p.location}</div>
+                    <div style={{ fontSize: '15px', fontWeight: '600', marginBottom: '2px', color: '#222' }}>{p.title}</div>
+                    <div style={{ fontSize: '12px', color: '#717171' }}>{p.location}</div>
                   </div>
                   <div style={{ textAlign: 'center', minWidth: '80px' }}>
-                    <div style={{ fontSize: '20px', fontWeight: '700', color: '#00ff44' }}>{p.bookings.length}</div>
-                    <div style={{ fontSize: '10px', color: '#555' }}>BOOKINGS</div>
+                    <div style={{ fontSize: '20px', fontWeight: '700', color: '#00913f' }}>{p.bookings.length}</div>
+                    <div style={{ fontSize: '10px', color: '#999' }}>BOOKINGS</div>
                   </div>
                   <div style={{ textAlign: 'center', minWidth: '100px' }}>
-                    <div style={{ fontSize: '20px', fontWeight: '700', color: '#4a9eff' }}>${p.revenue.toLocaleString()}</div>
-                    <div style={{ fontSize: '10px', color: '#555' }}>REVENUE</div>
+                    <div style={{ fontSize: '20px', fontWeight: '700', color: '#1f6fd6' }}>${p.revenue.toLocaleString()}</div>
+                    <div style={{ fontSize: '10px', color: '#999' }}>REVENUE</div>
                   </div>
                   <div style={{ textAlign: 'center', minWidth: '80px' }}>
-                    <div style={{ fontSize: '16px', fontWeight: '700', color: '#888' }}>${p.price}</div>
-                    <div style={{ fontSize: '10px', color: '#555' }}>PER NIGHT</div>
+                    <div style={{ fontSize: '16px', fontWeight: '700', color: '#717171' }}>${p.price}</div>
+                    <div style={{ fontSize: '10px', color: '#999' }}>PER NIGHT</div>
                   </div>
-                  {p.bookings.length > 0 && <div style={{ background: '#0a1a0a', border: '1px solid #1a3a1a', borderRadius: '6px', padding: '4px 10px' }}><span style={{ fontSize: '11px', color: '#00ff44', fontWeight: '600' }}>● Active</span></div>}
+                  {p.bookings.length > 0 && <div style={{ background: '#eafaf0', border: '1px solid #c8ebd9', borderRadius: '6px', padding: '4px 10px' }}><span style={{ fontSize: '11px', color: '#00913f', fontWeight: '600' }}>● Active</span></div>}
                 </div>
               ))}
             </div>
-            <div style={{ background: '#0a0a1a', border: '1px solid #1a1a3a', borderRadius: '12px', padding: '20px', marginTop: '24px' }}>
+            <div style={{ background: '#eaf2fc', border: '1px solid #cfe0f5', borderRadius: '12px', padding: '20px', marginTop: '24px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
                 <span style={{ fontSize: '16px' }}>⚡</span>
-                <span style={{ fontWeight: '600', fontSize: '15px' }}>DeepBook Settlement</span>
-                <span style={{ background: '#1a1a3a', border: '1px solid #2a2a5a', color: '#4a9eff', fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '10px' }}>LIVE</span>
+                <span style={{ fontWeight: '600', fontSize: '15px', color: '#222' }}>DeepBook Settlement</span>
+                <span style={{ background: '#fff', border: '1px solid #cfe0f5', color: '#1f6fd6', fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '10px' }}>LIVE</span>
               </div>
-              <p style={{ color: '#888', fontSize: '13px', margin: '0 0 12px', lineHeight: '1.6' }}>Host payouts settle instantly via DeepBook on Sui. No 3–5 day bank delays.</p>
+              <p style={{ color: '#717171', fontSize: '13px', margin: '0 0 12px', lineHeight: '1.6' }}>Host payouts settle instantly via DeepBook on Sui. No 3–5 day bank delays.</p>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '12px' }}>
-                {[['Settlement Time','< 1 second','#00ff44'],['Airbnb Payout Delay','3–5 days','#ff4444'],['Your Net Rate','95% of booking','#4a9eff'],['Airbnb Net Rate','85% of booking','#ff4444']].map(([label, val, color], i) => (
-                  <div key={i} style={{ background: '#111', borderRadius: '8px', padding: '12px' }}>
-                    <div style={{ fontSize: '10px', color: '#555', marginBottom: '4px' }}>{label}</div>
+                {[['Settlement Time','< 1 second','#00913f'],['Airbnb Payout Delay','3–5 days','#d23f3f'],['Your Net Rate','95% of booking','#1f6fd6'],['Airbnb Net Rate','85% of booking','#d23f3f']].map(([label, val, color], i) => (
+                  <div key={i} style={{ background: '#fff', borderRadius: '8px', padding: '12px' }}>
+                    <div style={{ fontSize: '10px', color: '#999', marginBottom: '4px' }}>{label}</div>
                     <div style={{ fontSize: '16px', fontWeight: '700', color }}>{val}</div>
                   </div>
                 ))}
@@ -713,25 +713,25 @@ export default function Host() {
         {activeTab === 'bookings' && (
           <div>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
-              <h3 style={{ fontSize: '16px', fontWeight: '600', margin: 0 }}>All Bookings</h3>
-              <span style={{ fontSize: '13px', color: '#666' }}>{bookings.length} total</span>
+              <h3 style={{ fontSize: '16px', fontWeight: '600', margin: 0, color: '#222' }}>All Bookings</h3>
+              <span style={{ fontSize: '13px', color: '#717171' }}>{bookings.length} total</span>
             </div>
             {bookings.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '60px 24px', background: '#111', borderRadius: '12px', border: '1px solid #222' }}>
+              <div style={{ textAlign: 'center', padding: '60px 24px', background: '#f7f7f7', borderRadius: '12px', border: '1px solid #ebebeb' }}>
                 <div style={{ fontSize: '48px', marginBottom: '16px' }}>📋</div>
-                <h3 style={{ fontSize: '18px', fontWeight: '600', margin: '0 0 8px' }}>No bookings yet</h3>
-                <p style={{ color: '#666', fontSize: '14px', margin: 0 }}>Bookings will appear here once guests start booking</p>
+                <h3 style={{ fontSize: '18px', fontWeight: '600', margin: '0 0 8px', color: '#222' }}>No bookings yet</h3>
+                <p style={{ color: '#717171', fontSize: '14px', margin: 0 }}>Bookings will appear here once guests start booking</p>
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 {bookings.map((b, i) => (
-                  <div key={i} style={{ background: '#111', border: `1px solid ${b.paymentStatus === 'cancelled' ? '#2a1a1a' : '#222'}`, borderRadius: '12px', padding: '20px', opacity: b.paymentStatus === 'cancelled' ? 0.75 : 1 }}>
+                  <div key={i} style={{ background: '#fff', border: `1px solid ${b.paymentStatus === 'cancelled' ? '#f5d0d0' : '#ebebeb'}`, borderRadius: '12px', padding: '20px', opacity: b.paymentStatus === 'cancelled' ? 0.75 : 1, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' }}>
                       <div>
-                        <div style={{ fontSize: '15px', fontWeight: '600', marginBottom: '4px' }}>{b.property}</div>
-                        <div style={{ fontSize: '12px', color: '#666', marginBottom: '6px' }}>{b.guestName || 'Guest'} · {b.guestEmail || ''}</div>
+                        <div style={{ fontSize: '15px', fontWeight: '600', marginBottom: '4px', color: '#222' }}>{b.property}</div>
+                        <div style={{ fontSize: '12px', color: '#717171', marginBottom: '6px' }}>{b.guestName || 'Guest'} · {b.guestEmail || ''}</div>
                         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                          <span style={{ background: b.paymentStatus === 'cancelled' ? '#1a0a0a' : '#0a1a0a', border: `1px solid ${b.paymentStatus === 'cancelled' ? '#3a1a1a' : '#1a3a1a'}`, color: b.paymentStatus === 'cancelled' ? '#ff4444' : '#00ff44', fontSize: '11px', fontWeight: '600', padding: '2px 8px', borderRadius: '20px' }}>
+                          <span style={{ background: b.paymentStatus === 'cancelled' ? '#fdeeee' : '#eafaf0', border: `1px solid ${b.paymentStatus === 'cancelled' ? '#f5d0d0' : '#c8ebd9'}`, color: b.paymentStatus === 'cancelled' ? '#d23f3f' : '#00913f', fontSize: '11px', fontWeight: '600', padding: '2px 8px', borderRadius: '20px' }}>
                             {b.paymentStatus === 'cancelled' ? '✕ cancelled' : '✅ confirmed'}
                           </span>
                           {b.depositAmount && b.paymentStatus !== 'cancelled' && (
@@ -739,26 +739,26 @@ export default function Host() {
                             // depositStatus instead of just "!= released", so a
                             // never-verified escrow (depositStatus still 'pending')
                             // doesn't get shown to the host as funds already held.
-                            <span style={{ background: b.depositStatus === 'released' ? '#0a1a0a' : b.depositStatus === 'held' ? '#0a0a1a' : '#1a1505', border: `1px solid ${b.depositStatus === 'released' ? '#1a3a1a' : b.depositStatus === 'held' ? '#1a1a3a' : '#3a2f0a'}`, color: b.depositStatus === 'released' ? '#00ff44' : b.depositStatus === 'held' ? '#4a9eff' : '#ffb84a', fontSize: '11px', fontWeight: '600', padding: '2px 8px', borderRadius: '20px' }}>
+                            <span style={{ background: b.depositStatus === 'released' ? '#eafaf0' : b.depositStatus === 'held' ? '#eaf2fc' : '#fff8e1', border: `1px solid ${b.depositStatus === 'released' ? '#c8ebd9' : b.depositStatus === 'held' ? '#cfe0f5' : '#ffe7a0'}`, color: b.depositStatus === 'released' ? '#00913f' : b.depositStatus === 'held' ? '#1f6fd6' : '#a66a00', fontSize: '11px', fontWeight: '600', padding: '2px 8px', borderRadius: '20px' }}>
                               {b.depositStatus === 'released' ? '🔓 Deposit released' : b.depositStatus === 'held' ? `🔒 Deposit $${b.depositAmount} held` : '⏳ Deposit not yet confirmed'}
                             </span>
                           )}
                         </div>
                       </div>
                       <div style={{ textAlign: 'right' }}>
-                        <div style={{ fontSize: '18px', fontWeight: '700', color: b.paymentStatus === 'cancelled' ? '#555' : '#00ff44', textDecoration: b.paymentStatus === 'cancelled' ? 'line-through' : 'none' }}>{b.breakdown?.totalPaid || `$${b.totalAmount}`}</div>
-                        <div style={{ fontSize: '11px', color: '#555' }}>{fmtDay(b.checkIn)} → {fmtDay(b.checkOut)}</div>
-                        <div style={{ fontSize: '11px', color: '#555' }}>{b.nights} night{b.nights > 1 ? 's' : ''}</div>
+                        <div style={{ fontSize: '18px', fontWeight: '700', color: b.paymentStatus === 'cancelled' ? '#999' : '#00913f', textDecoration: b.paymentStatus === 'cancelled' ? 'line-through' : 'none' }}>{b.breakdown?.totalPaid || `$${b.totalAmount}`}</div>
+                        <div style={{ fontSize: '11px', color: '#999' }}>{fmtDay(b.checkIn)} → {fmtDay(b.checkOut)}</div>
+                        <div style={{ fontSize: '11px', color: '#999' }}>{b.nights} night{b.nights > 1 ? 's' : ''}</div>
                       </div>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
-                      <div style={{ fontSize: '11px', color: '#555', fontFamily: 'monospace' }}>Ref: {b.bookingRef}</div>
+                      <div style={{ fontSize: '11px', color: '#999', fontFamily: 'monospace' }}>Ref: {b.bookingRef}</div>
                       <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
                         <WalrusReceipts b={b} />
                         {b.paymentStatus !== 'cancelled' && (
                           <button onClick={() => router.push(`/messages?bookingRef=${b.bookingRef}&property=${encodeURIComponent(b.property)}`)}
-                            style={{ background: messageCounts[b.bookingRef] > 0 ? '#1a0a0a' : 'transparent', border: `1px solid ${messageCounts[b.bookingRef] > 0 ? '#3a1a1a' : '#1a1a3a'}`, color: '#4a9eff', fontSize: '11px', padding: '4px 10px', borderRadius: '6px', cursor: 'pointer', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                            💬 Messages {messageCounts[b.bookingRef] > 0 && <span style={{ background: '#ff4444', color: '#fff', borderRadius: '50%', fontSize: '10px', fontWeight: '700', padding: '1px 5px' }}>{messageCounts[b.bookingRef]}</span>}
+                            style={{ background: messageCounts[b.bookingRef] > 0 ? '#fdeeee' : 'transparent', border: `1px solid ${messageCounts[b.bookingRef] > 0 ? '#f5d0d0' : '#cfe0f5'}`, color: '#1f6fd6', fontSize: '11px', padding: '4px 10px', borderRadius: '6px', cursor: 'pointer', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            💬 Messages {messageCounts[b.bookingRef] > 0 && <span style={{ background: '#d23f3f', color: '#fff', borderRadius: '50%', fontSize: '10px', fontWeight: '700', padding: '1px 5px' }}>{messageCounts[b.bookingRef]}</span>}
                           </button>
                         )}
                         {/* Was "!== 'released'", which also matched 'pending' —
@@ -768,13 +768,13 @@ export default function Host() {
                             showing the button at all was misleading. */}
                         {b.depositAmount && b.depositStatus === 'held' && (
                           <button onClick={() => handleReleaseDeposit(b.bookingRef)} disabled={releasingId === b.bookingRef}
-                            style={{ background: '#0a0a1a', border: '1px solid #1a1a3a', color: releasingId === b.bookingRef ? '#555' : '#4a9eff', fontSize: '11px', padding: '4px 10px', borderRadius: '6px', cursor: releasingId === b.bookingRef ? 'not-allowed' : 'pointer', fontWeight: '600' }}>
+                            style={{ background: '#eaf2fc', border: '1px solid #cfe0f5', color: releasingId === b.bookingRef ? '#999' : '#1f6fd6', fontSize: '11px', padding: '4px 10px', borderRadius: '6px', cursor: releasingId === b.bookingRef ? 'not-allowed' : 'pointer', fontWeight: '600' }}>
                             {releasingId === b.bookingRef ? 'Releasing...' : '🔓 Release Deposit'}
                           </button>
                         )}
                         {b.paymentStatus !== 'cancelled' && (
                           <button onClick={() => handleViewIdentity(b)}
-                            style={{ background: 'transparent', border: '1px solid #2a2a3a', color: '#a98aff', fontSize: '11px', padding: '4px 10px', borderRadius: '6px', cursor: 'pointer', fontWeight: '600' }}>
+                            style={{ background: 'transparent', border: '1px solid #e0c8fa', color: '#8b3dff', fontSize: '11px', padding: '4px 10px', borderRadius: '6px', cursor: 'pointer', fontWeight: '600' }}>
                             🪪 View Guest Identity
                           </button>
                         )}
@@ -791,50 +791,50 @@ export default function Host() {
         {activeTab === 'listings' && (
           <div>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', flexWrap: 'wrap', gap: '8px' }}>
-              <h3 style={{ fontSize: '16px', fontWeight: '600', margin: 0 }}>Your Listings</h3>
+              <h3 style={{ fontSize: '16px', fontWeight: '600', margin: 0, color: '#222' }}>Your Listings</h3>
               <div style={{ display: 'flex', gap: '8px' }}>
-                <button onClick={() => openAddModal('import')} style={{ background: '#00ff44', color: '#000', border: 'none', borderRadius: '6px', padding: '8px 16px', fontSize: '12px', fontWeight: '700', cursor: 'pointer' }}>
+                <button onClick={() => openAddModal('import')} style={{ background: '#ff385c', color: '#fff', border: 'none', borderRadius: '6px', padding: '8px 16px', fontSize: '12px', fontWeight: '700', cursor: 'pointer' }}>
                   + Add Property
                 </button>
-                <button onClick={() => openAddModal('bulk')} style={{ background: 'transparent', border: '1px solid #333', color: '#888', borderRadius: '6px', padding: '8px 16px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
+                <button onClick={() => openAddModal('bulk')} style={{ background: 'transparent', border: '1px solid #ddd', color: '#717171', borderRadius: '6px', padding: '8px 16px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
                   Bulk Import
                 </button>
               </div>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '16px' }}>
               {properties.map(p => (
-                <div key={p.id} style={{ background: '#111', border: '1px solid #222', borderRadius: '12px', overflow: 'hidden' }}>
+                <div key={p.id} style={{ background: '#fff', border: '1px solid #ebebeb', borderRadius: '12px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
                   <div style={{ height: '160px', overflow: 'hidden', position: 'relative' }}>
                     <img src={p.image} alt={p.title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                     <span style={{ position: 'absolute', top: '10px', left: '10px', background: 'rgba(0,0,0,0.7)', color: '#fff', fontSize: '11px', fontWeight: '600', padding: '3px 8px', borderRadius: '6px' }}>{p.tag}</span>
-                    <span style={{ position: 'absolute', top: '10px', right: '10px', background: '#0a1a0a', border: '1px solid #1a3a1a', color: '#00ff44', fontSize: '11px', fontWeight: '600', padding: '3px 8px', borderRadius: '6px' }}>● Listed</span>
+                    <span style={{ position: 'absolute', top: '10px', right: '10px', background: '#eafaf0', border: '1px solid #c8ebd9', color: '#00913f', fontSize: '11px', fontWeight: '600', padding: '3px 8px', borderRadius: '6px' }}>● Listed</span>
                   </div>
                   <div style={{ padding: '16px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                      <h4 style={{ margin: 0, fontSize: '15px', fontWeight: '600' }}>{p.title}</h4>
-                      <span style={{ fontSize: '15px', fontWeight: '700', color: '#00ff44' }}>${p.price}<span style={{ fontSize: '11px', color: '#555' }}>/night</span></span>
+                      <h4 style={{ margin: 0, fontSize: '15px', fontWeight: '600', color: '#222' }}>{p.title}</h4>
+                      <span style={{ fontSize: '15px', fontWeight: '700', color: '#00913f' }}>${p.price}<span style={{ fontSize: '11px', color: '#999' }}>/night</span></span>
                     </div>
-                    <p style={{ color: '#666', fontSize: '12px', margin: '0 0 12px' }}>{p.location} · {p.beds} beds · {p.baths} baths</p>
+                    <p style={{ color: '#717171', fontSize: '12px', margin: '0 0 12px' }}>{p.location} · {p.beds} beds · {p.baths} baths</p>
                     {/* Edit/Remove only apply to host-created listings (a DB
                         row to act on) — the 6 fixed catalog demo properties
                         are code constants with no row behind them. */}
                     {p.source === 'db' && (
                       <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
                         <button onClick={() => openEditModal(p)}
-                          style={{ flex: 1, background: 'transparent', border: '1px solid #333', color: '#888', borderRadius: '6px', padding: '6px', fontSize: '11px', fontWeight: '600', cursor: 'pointer' }}>
+                          style={{ flex: 1, background: 'transparent', border: '1px solid #ddd', color: '#717171', borderRadius: '6px', padding: '6px', fontSize: '11px', fontWeight: '600', cursor: 'pointer' }}>
                           ✏️ Edit Listing
                         </button>
                         <button onClick={() => handleDeactivate(p)} disabled={deactivatingId === p.id}
-                          style={{ flex: 1, background: 'transparent', border: '1px solid #3a1a1a', color: deactivatingId === p.id ? '#555' : '#ff6666', borderRadius: '6px', padding: '6px', fontSize: '11px', fontWeight: '600', cursor: deactivatingId === p.id ? 'wait' : 'pointer' }}>
+                          style={{ flex: 1, background: 'transparent', border: '1px solid #f5d0d0', color: deactivatingId === p.id ? '#999' : '#d23f3f', borderRadius: '6px', padding: '6px', fontSize: '11px', fontWeight: '600', cursor: deactivatingId === p.id ? 'wait' : 'pointer' }}>
                           {deactivatingId === p.id ? 'Removing...' : '🗑️ Remove'}
                         </button>
                       </div>
                     )}
-                    <div style={{ background: '#1a1a1a', borderRadius: '8px', padding: '10px', marginBottom: '10px' }}>
-                      <div style={{ fontSize: '10px', color: '#555', marginBottom: '6px', fontWeight: '600' }}>ICAL EXPORT</div>
+                    <div style={{ background: '#f7f7f7', borderRadius: '8px', padding: '10px', marginBottom: '10px' }}>
+                      <div style={{ fontSize: '10px', color: '#999', marginBottom: '6px', fontWeight: '600' }}>ICAL EXPORT</div>
                       <div style={{ display: 'flex', gap: '6px' }}>
-                        <div style={{ flex: 1, background: '#111', border: '1px solid #333', borderRadius: '6px', padding: '6px 10px', fontSize: '11px', color: '#666', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{API}/ical/{p.id}</div>
-                        <button onClick={() => copyICal(p.id)} style={{ background: copiedId === p.id ? '#0a1a0a' : '#1a1a1a', border: `1px solid ${copiedId === p.id ? '#00ff44' : '#333'}`, color: copiedId === p.id ? '#00ff44' : '#888', fontSize: '11px', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontWeight: '600', whiteSpace: 'nowrap' }}>
+                        <div style={{ flex: 1, background: '#fff', border: '1px solid #ddd', borderRadius: '6px', padding: '6px 10px', fontSize: '11px', color: '#717171', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{API}/ical/{p.id}</div>
+                        <button onClick={() => copyICal(p.id)} style={{ background: copiedId === p.id ? '#eafaf0' : '#fff', border: `1px solid ${copiedId === p.id ? '#00913f' : '#ddd'}`, color: copiedId === p.id ? '#00913f' : '#717171', fontSize: '11px', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontWeight: '600', whiteSpace: 'nowrap' }}>
                           {copiedId === p.id ? '✓ Copied' : 'Copy'}
                         </button>
                       </div>
@@ -844,19 +844,19 @@ export default function Host() {
                       const rs = resaleSettings[p.id] || { transferAllowed: false, maxPremiumBps: 0 };
                       const saving = !!savingResale[p.id];
                       return (
-                        <div style={{ background: '#1a140a', border: '1px solid #2e2410', borderRadius: '8px', padding: '10px', marginBottom: '10px' }}>
+                        <div style={{ background: '#fff8e1', border: '1px solid #ffe7a0', borderRadius: '8px', padding: '10px', marginBottom: '10px' }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <div style={{ fontSize: '10px', color: '#ffaa00', fontWeight: '700' }}>🏷️ GUEST RESALE</div>
+                            <div style={{ fontSize: '10px', color: '#a66a00', fontWeight: '700' }}>🏷️ GUEST RESALE</div>
                             <button onClick={() => saveResaleSettings(p.id, { transferAllowed: !rs.transferAllowed })} disabled={saving}
-                              style={{ background: rs.transferAllowed ? '#3a2e1a' : '#1a1a1a', border: `1px solid ${rs.transferAllowed ? '#ffaa00' : '#333'}`, color: rs.transferAllowed ? '#ffaa00' : '#888', fontSize: '11px', padding: '4px 10px', borderRadius: '6px', cursor: saving ? 'wait' : 'pointer', fontWeight: '600' }}>
+                              style={{ background: rs.transferAllowed ? '#ffe7a0' : '#fff', border: `1px solid ${rs.transferAllowed ? '#a66a00' : '#ddd'}`, color: rs.transferAllowed ? '#a66a00' : '#717171', fontSize: '11px', padding: '4px 10px', borderRadius: '6px', cursor: saving ? 'wait' : 'pointer', fontWeight: '600' }}>
                               {rs.transferAllowed ? '● On' : '○ Off'}
                             </button>
                           </div>
                           {rs.transferAllowed && (
                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '8px' }}>
-                              <span style={{ fontSize: '11px', color: '#888' }}>Max markup</span>
+                              <span style={{ fontSize: '11px', color: '#717171' }}>Max markup</span>
                               <select value={rs.maxPremiumBps} onChange={e => saveResaleSettings(p.id, { maxPremiumBps: Number(e.target.value) })} disabled={saving}
-                                style={{ flex: 1, background: '#111', border: '1px solid #333', borderRadius: '6px', padding: '5px 8px', fontSize: '11px', color: '#fff', outline: 'none' }}>
+                                style={{ flex: 1, background: '#fff', border: '1px solid #ddd', borderRadius: '6px', padding: '5px 8px', fontSize: '11px', color: '#222', outline: 'none' }}>
                                 <option value={0}>Face value only (0%)</option>
                                 <option value={1000}>+10%</option>
                                 <option value={2500}>+25%</option>
@@ -865,18 +865,18 @@ export default function Host() {
                               </select>
                             </div>
                           )}
-                          <p style={{ color: '#6a5a3a', fontSize: '10px', margin: '8px 0 0', lineHeight: 1.5 }}>
+                          <p style={{ color: '#a66a00', fontSize: '10px', margin: '8px 0 0', lineHeight: 1.5 }}>
                             {resaleEnabled ? 'Applies to future bookings. Any markup splits ARIA 10% / you 45% / seller 45%.' : 'Resale is globally disabled until launch — this just stages your preference.'}
                           </p>
                         </div>
                       );
                     })()}
                     <div style={{ display: 'flex', gap: '8px' }}>
-                      {[['BOOKINGS', activeBookings.filter(b => b.propertyId === p.id || b.propertyId === String(p.id)).length, '#00ff44'],
-                        ['REVENUE', `$${activeBookings.filter(b => b.propertyId === p.id || b.propertyId === String(p.id)).reduce((s, b) => s + (b.totalAmount || 0), 0).toLocaleString()}`, '#4a9eff'],
-                        ['ARIA FEE', '5%', '#00ff44']].map(([label, val, color]) => (
-                        <div key={label} style={{ flex: 1, background: '#1a1a1a', borderRadius: '6px', padding: '8px', textAlign: 'center' }}>
-                          <div style={{ fontSize: '10px', color: '#555', marginBottom: '2px' }}>{label}</div>
+                      {[['BOOKINGS', activeBookings.filter(b => b.propertyId === p.id || b.propertyId === String(p.id)).length, '#00913f'],
+                        ['REVENUE', `$${activeBookings.filter(b => b.propertyId === p.id || b.propertyId === String(p.id)).reduce((s, b) => s + (b.totalAmount || 0), 0).toLocaleString()}`, '#1f6fd6'],
+                        ['ARIA FEE', '5%', '#00913f']].map(([label, val, color]) => (
+                        <div key={label} style={{ flex: 1, background: '#f7f7f7', borderRadius: '6px', padding: '8px', textAlign: 'center' }}>
+                          <div style={{ fontSize: '10px', color: '#999', marginBottom: '2px' }}>{label}</div>
                           <div style={{ fontWeight: '700', color }}>{val}</div>
                         </div>
                       ))}
@@ -891,30 +891,30 @@ export default function Host() {
         {/* Calendar */}
         {activeTab === 'calendar' && (
           <div>
-            <div style={{ background: '#0a0a1a', border: '1px solid #1a1a3a', borderRadius: '12px', padding: '20px', marginBottom: '24px' }}>
-              <h3 style={{ fontSize: '16px', fontWeight: '600', margin: '0 0 8px' }}>📅 Two-Way Calendar Sync</h3>
-              <p style={{ color: '#888', fontSize: '13px', margin: 0, lineHeight: '1.6' }}>Export your ARIA calendar to Airbnb/VRBO, and import their calendars here.</p>
+            <div style={{ background: '#eaf2fc', border: '1px solid #cfe0f5', borderRadius: '12px', padding: '20px', marginBottom: '24px' }}>
+              <h3 style={{ fontSize: '16px', fontWeight: '600', margin: '0 0 8px', color: '#222' }}>📅 Two-Way Calendar Sync</h3>
+              <p style={{ color: '#717171', fontSize: '13px', margin: 0, lineHeight: '1.6' }}>Export your ARIA calendar to Airbnb/VRBO, and import their calendars here.</p>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               {properties.map(p => (
-                <div key={p.id} style={{ background: '#111', border: '1px solid #222', borderRadius: '12px', padding: '20px' }}>
+                <div key={p.id} style={{ background: '#fff', border: '1px solid #ebebeb', borderRadius: '12px', padding: '20px', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
                     <img src={p.image} alt={p.title} style={{ width: '48px', height: '48px', objectFit: 'cover', borderRadius: '8px' }} />
-                    <div><div style={{ fontSize: '15px', fontWeight: '600' }}>{p.title}</div><div style={{ fontSize: '12px', color: '#666' }}>{p.location}</div></div>
+                    <div><div style={{ fontSize: '15px', fontWeight: '600', color: '#222' }}>{p.title}</div><div style={{ fontSize: '12px', color: '#717171' }}>{p.location}</div></div>
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                    <div style={{ background: '#1a1a1a', borderRadius: '8px', padding: '12px' }}>
-                      <div style={{ fontSize: '11px', color: '#00ff44', fontWeight: '600', marginBottom: '6px' }}>↑ EXPORT</div>
+                    <div style={{ background: '#f7f7f7', borderRadius: '8px', padding: '12px' }}>
+                      <div style={{ fontSize: '11px', color: '#00913f', fontWeight: '600', marginBottom: '6px' }}>↑ EXPORT</div>
                       <div style={{ display: 'flex', gap: '6px' }}>
-                        <div style={{ flex: 1, background: '#111', border: '1px solid #333', borderRadius: '6px', padding: '6px 8px', fontSize: '10px', color: '#666', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{API}/ical/{p.id}</div>
-                        <button onClick={() => copyICal(p.id)} style={{ background: copiedId === p.id ? '#0a1a0a' : '#111', border: `1px solid ${copiedId === p.id ? '#00ff44' : '#333'}`, color: copiedId === p.id ? '#00ff44' : '#888', fontSize: '11px', padding: '6px 8px', borderRadius: '6px', cursor: 'pointer', fontWeight: '600' }}>{copiedId === p.id ? '✓' : 'Copy'}</button>
+                        <div style={{ flex: 1, background: '#fff', border: '1px solid #ddd', borderRadius: '6px', padding: '6px 8px', fontSize: '10px', color: '#717171', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{API}/ical/{p.id}</div>
+                        <button onClick={() => copyICal(p.id)} style={{ background: copiedId === p.id ? '#eafaf0' : '#fff', border: `1px solid ${copiedId === p.id ? '#00913f' : '#ddd'}`, color: copiedId === p.id ? '#00913f' : '#717171', fontSize: '11px', padding: '6px 8px', borderRadius: '6px', cursor: 'pointer', fontWeight: '600' }}>{copiedId === p.id ? '✓' : 'Copy'}</button>
                       </div>
                     </div>
-                    <div style={{ background: '#1a1a1a', borderRadius: '8px', padding: '12px' }}>
-                      <div style={{ fontSize: '11px', color: '#4a9eff', fontWeight: '600', marginBottom: '6px' }}>↓ IMPORT</div>
+                    <div style={{ background: '#f7f7f7', borderRadius: '8px', padding: '12px' }}>
+                      <div style={{ fontSize: '11px', color: '#1f6fd6', fontWeight: '600', marginBottom: '6px' }}>↓ IMPORT</div>
                       <div style={{ display: 'flex', gap: '6px' }}>
-                        <input value={icalInputs[p.id] || ''} onChange={e => setIcalInputs(prev => ({ ...prev, [p.id]: e.target.value }))} placeholder="https://airbnb.com/calendar/ical/..." style={{ flex: 1, background: '#111', border: '1px solid #333', borderRadius: '6px', padding: '6px 8px', fontSize: '10px', color: '#fff', outline: 'none' }} />
-                        <button onClick={() => handleIcalImport(p.id)} disabled={icalSaving[p.id] || !icalInputs[p.id]} style={{ background: icalSaved[p.id] ? '#0a1a0a' : '#111', border: `1px solid ${icalSaved[p.id] ? '#00ff44' : '#333'}`, color: icalSaved[p.id] ? '#00ff44' : '#888', fontSize: '11px', padding: '6px 8px', borderRadius: '6px', cursor: 'pointer', fontWeight: '600' }}>{icalSaving[p.id] ? '...' : icalSaved[p.id] ? '✓' : 'Sync'}</button>
+                        <input value={icalInputs[p.id] || ''} onChange={e => setIcalInputs(prev => ({ ...prev, [p.id]: e.target.value }))} placeholder="https://airbnb.com/calendar/ical/..." style={{ flex: 1, background: '#fff', border: '1px solid #ddd', borderRadius: '6px', padding: '6px 8px', fontSize: '10px', color: '#222', outline: 'none' }} />
+                        <button onClick={() => handleIcalImport(p.id)} disabled={icalSaving[p.id] || !icalInputs[p.id]} style={{ background: icalSaved[p.id] ? '#eafaf0' : '#fff', border: `1px solid ${icalSaved[p.id] ? '#00913f' : '#ddd'}`, color: icalSaved[p.id] ? '#00913f' : '#717171', fontSize: '11px', padding: '6px 8px', borderRadius: '6px', cursor: 'pointer', fontWeight: '600' }}>{icalSaving[p.id] ? '...' : icalSaved[p.id] ? '✓' : 'Sync'}</button>
                       </div>
                     </div>
                   </div>
@@ -928,40 +928,40 @@ export default function Host() {
         {activeTab === 'reviews' && (
           <div>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
-              <h3 style={{ fontSize: '16px', fontWeight: '600', margin: 0 }}>Guest Reviews</h3>
-              <span style={{ fontSize: '13px', color: '#666' }}>{reviews.length} total · avg {avgRating} ⭐</span>
+              <h3 style={{ fontSize: '16px', fontWeight: '600', margin: 0, color: '#222' }}>Guest Reviews</h3>
+              <span style={{ fontSize: '13px', color: '#717171' }}>{reviews.length} total · avg {avgRating} ⭐</span>
             </div>
             {reviews.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '60px 24px', background: '#111', borderRadius: '12px', border: '1px solid #222' }}>
+              <div style={{ textAlign: 'center', padding: '60px 24px', background: '#f7f7f7', borderRadius: '12px', border: '1px solid #ebebeb' }}>
                 <div style={{ fontSize: '48px', marginBottom: '16px' }}>⭐</div>
-                <p style={{ color: '#666', fontSize: '14px', margin: 0 }}>Guest reviews will appear here after their stay</p>
+                <p style={{ color: '#717171', fontSize: '14px', margin: 0 }}>Guest reviews will appear here after their stay</p>
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 {reviews.map((r, i) => {
                   const prop = properties.find(p => p.id === r.propertyId || String(p.id) === String(r.propertyId));
                   return (
-                    <div key={i} style={{ background: '#111', border: '1px solid #222', borderRadius: '12px', padding: '20px' }}>
+                    <div key={i} style={{ background: '#fff', border: '1px solid #ebebeb', borderRadius: '12px', padding: '20px', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
                         <div>
-                          <div style={{ fontSize: '15px', fontWeight: '600', marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                          <div style={{ fontSize: '15px', fontWeight: '600', marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', color: '#222' }}>
                             {prop?.title || `Property ${r.propertyId}`}
                             {r.verified && (
-                              <span title="Backed by a real on-chain escrow booking" style={{ background: '#0a1a0a', border: '1px solid #1a3a1a', color: '#00ff44', fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '20px' }}>
+                              <span title="Backed by a real on-chain escrow booking" style={{ background: '#eafaf0', border: '1px solid #c8ebd9', color: '#00913f', fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '20px' }}>
                                 ✓ Verified stay
                               </span>
                             )}
                           </div>
-                          <div style={{ fontSize: '12px', color: '#666' }}>{r.guestName} · {fmtDate(r.timestamp)}</div>
+                          <div style={{ fontSize: '12px', color: '#717171' }}>{r.guestName} · {fmtDate(r.timestamp)}</div>
                         </div>
                         <div style={{ fontSize: '20px' }}>{stars(r.rating)}</div>
                       </div>
-                      <p style={{ color: '#ccc', fontSize: '14px', margin: '0 0 8px', lineHeight: '1.6' }}>{r.review}</p>
-                      <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', fontSize: '11px', color: '#555', fontFamily: 'monospace' }}>
+                      <p style={{ color: '#222', fontSize: '14px', margin: '0 0 8px', lineHeight: '1.6' }}>{r.review}</p>
+                      <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', fontSize: '11px', color: '#999', fontFamily: 'monospace' }}>
                         <span>Ref: {r.bookingRef}</span>
                         {r.walrusBlobId && (
                           <a href={`https://aggregator.walrus-testnet.walrus.space/v1/blobs/${r.walrusBlobId}`} target="_blank" rel="noreferrer"
-                            style={{ color: '#00ff44', textDecoration: 'none' }}>🔗 on-chain proof</a>
+                            style={{ color: '#00913f', textDecoration: 'none' }}>🔗 on-chain proof</a>
                         )}
                       </div>
                     </div>
@@ -975,32 +975,32 @@ export default function Host() {
         {/* Tax */}
         {activeTab === 'tax' && (
           <div>
-            <div style={{ background: '#0a0a0a', border: '1px solid #2a1a00', borderRadius: '12px', padding: '16px', marginBottom: '24px' }}>
+            <div style={{ background: '#fff8e1', border: '1px solid #ffe7a0', borderRadius: '12px', padding: '16px', marginBottom: '24px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
                 <span style={{ fontSize: '16px' }}>⚖️</span>
-                <span style={{ fontWeight: '600', fontSize: '14px', color: '#ffaa00' }}>Occupancy Tax Compliance</span>
+                <span style={{ fontWeight: '600', fontSize: '14px', color: '#a66a00' }}>Occupancy Tax Compliance</span>
               </div>
-              <p style={{ color: '#888', fontSize: '12px', margin: 0, lineHeight: '1.6' }}>ARIA collects occupancy tax on every booking at the rate set by each property's jurisdiction (rates vary, typically 8–17%). As the host, you are responsible for remitting these taxes to the appropriate local jurisdiction.</p>
+              <p style={{ color: '#7a6228', fontSize: '12px', margin: 0, lineHeight: '1.6' }}>ARIA collects occupancy tax on every booking at the rate set by each property's jurisdiction (rates vary, typically 8–17%). As the host, you are responsible for remitting these taxes to the appropriate local jurisdiction.</p>
             </div>
             {taxLoading ? (
-              <div style={{ textAlign: 'center', padding: '60px', color: '#555' }}>Loading tax data...</div>
+              <div style={{ textAlign: 'center', padding: '60px', color: '#999' }}>Loading tax data...</div>
             ) : !taxData ? (
               <div style={{ textAlign: 'center', padding: '60px' }}>
-                <button onClick={loadTaxData} style={{ background: '#00ff44', color: '#000', border: 'none', borderRadius: '8px', padding: '12px 24px', fontWeight: '700', cursor: 'pointer' }}>Load Tax Data</button>
+                <button onClick={loadTaxData} style={{ background: '#ff385c', color: '#fff', border: 'none', borderRadius: '8px', padding: '12px 24px', fontWeight: '700', cursor: 'pointer' }}>Load Tax Data</button>
               </div>
             ) : (
               <>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '16px', marginBottom: '24px' }}>
                   {[
-                    { label: 'TOTAL COLLECTED', value: `$${taxData.summary.totalCollected.toLocaleString()}`, color: '#ffaa00', sub: `${taxData.summary.bookingCount} bookings` },
-                    { label: 'REMITTED', value: `$${taxData.summary.totalRemitted.toLocaleString()}`, color: '#00ff44', sub: `${taxData.summary.remittedCount} bookings` },
-                    { label: 'OUTSTANDING', value: `$${taxData.summary.totalOutstanding.toLocaleString()}`, color: taxData.summary.totalOutstanding > 0 ? '#ff4444' : '#555', sub: `${taxData.summary.pendingCount} pending` },
-                    { label: 'TAX RATE', value: 'Varies', color: '#888', sub: 'set per jurisdiction' },
+                    { label: 'TOTAL COLLECTED', value: `$${taxData.summary.totalCollected.toLocaleString()}`, color: '#a66a00', sub: `${taxData.summary.bookingCount} bookings` },
+                    { label: 'REMITTED', value: `$${taxData.summary.totalRemitted.toLocaleString()}`, color: '#00913f', sub: `${taxData.summary.remittedCount} bookings` },
+                    { label: 'OUTSTANDING', value: `$${taxData.summary.totalOutstanding.toLocaleString()}`, color: taxData.summary.totalOutstanding > 0 ? '#d23f3f' : '#999', sub: `${taxData.summary.pendingCount} pending` },
+                    { label: 'TAX RATE', value: 'Varies', color: '#717171', sub: 'set per jurisdiction' },
                   ].map((s, i) => (
-                    <div key={i} style={{ background: '#111', border: `1px solid ${i === 2 && taxData.summary.totalOutstanding > 0 ? '#3a1a00' : '#222'}`, borderRadius: '12px', padding: '20px' }}>
-                      <div style={{ fontSize: '10px', color: '#555', marginBottom: '8px', fontWeight: '600' }}>{s.label}</div>
+                    <div key={i} style={{ background: '#fff', border: `1px solid ${i === 2 && taxData.summary.totalOutstanding > 0 ? '#f5d0d0' : '#ebebeb'}`, borderRadius: '12px', padding: '20px', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+                      <div style={{ fontSize: '10px', color: '#999', marginBottom: '8px', fontWeight: '600' }}>{s.label}</div>
                       <div style={{ fontSize: '24px', fontWeight: '700', color: s.color, marginBottom: '4px' }}>{s.value}</div>
-                      <div style={{ fontSize: '11px', color: '#555' }}>{s.sub}</div>
+                      <div style={{ fontSize: '11px', color: '#999' }}>{s.sub}</div>
                     </div>
                   ))}
                 </div>
@@ -1008,46 +1008,46 @@ export default function Host() {
                   <div style={{ display: 'flex', gap: '8px' }}>
                     {['all', 'pending', 'remitted'].map(f => (
                       <button key={f} onClick={() => setTaxFilter(f)}
-                        style={{ background: taxFilter === f ? '#ffaa00' : 'transparent', color: taxFilter === f ? '#000' : '#888', border: `1px solid ${taxFilter === f ? '#ffaa00' : '#333'}`, padding: '6px 14px', borderRadius: '6px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
+                        style={{ background: taxFilter === f ? '#a66a00' : 'transparent', color: taxFilter === f ? '#fff' : '#717171', border: `1px solid ${taxFilter === f ? '#a66a00' : '#ddd'}`, padding: '6px 14px', borderRadius: '6px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
                         {f === 'all' ? `All (${taxData.summary.bookingCount})` : f === 'pending' ? `Pending (${taxData.summary.pendingCount})` : `Remitted (${taxData.summary.remittedCount})`}
                       </button>
                     ))}
                   </div>
-                  <button onClick={exportCSV} style={{ background: 'transparent', border: '1px solid #333', color: '#888', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>⬇ Export CSV</button>
+                  <button onClick={exportCSV} style={{ background: 'transparent', border: '1px solid #ddd', color: '#717171', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>⬇ Export CSV</button>
                 </div>
                 {filteredTaxBookings.length === 0 ? (
-                  <div style={{ textAlign: 'center', padding: '40px', background: '#111', borderRadius: '12px', border: '1px solid #222', color: '#555' }}>No bookings in this category</div>
+                  <div style={{ textAlign: 'center', padding: '40px', background: '#f7f7f7', borderRadius: '12px', border: '1px solid #ebebeb', color: '#999' }}>No bookings in this category</div>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                     {filteredTaxBookings.map((b, i) => (
-                      <div key={i} style={{ background: '#111', border: `1px solid ${b.remitted ? '#1a2a1a' : '#2a1a00'}`, borderRadius: '12px', padding: '16px 20px' }}>
+                      <div key={i} style={{ background: '#fff', border: `1px solid ${b.remitted ? '#c8ebd9' : '#ffe7a0'}`, borderRadius: '12px', padding: '16px 20px', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', flexWrap: 'wrap', gap: '8px' }}>
                           <div style={{ flex: 1, minWidth: '200px' }}>
-                            <div style={{ fontSize: '14px', fontWeight: '600', marginBottom: '2px' }}>{b.property}</div>
-                            <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>{b.guestName} · {fmtDay(b.checkIn)} → {fmtDay(b.checkOut)} · {b.nights} night{b.nights > 1 ? 's' : ''}</div>
-                            <div style={{ fontSize: '11px', color: '#555', fontFamily: 'monospace' }}>{b.bookingRef}</div>
+                            <div style={{ fontSize: '14px', fontWeight: '600', marginBottom: '2px', color: '#222' }}>{b.property}</div>
+                            <div style={{ fontSize: '12px', color: '#717171', marginBottom: '4px' }}>{b.guestName} · {fmtDay(b.checkIn)} → {fmtDay(b.checkOut)} · {b.nights} night{b.nights > 1 ? 's' : ''}</div>
+                            <div style={{ fontSize: '11px', color: '#999', fontFamily: 'monospace' }}>{b.bookingRef}</div>
                           </div>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
                             <div style={{ textAlign: 'center' }}>
-                              <div style={{ fontSize: '10px', color: '#555', marginBottom: '2px' }}>SUBTOTAL</div>
-                              <div style={{ fontSize: '14px', fontWeight: '600' }}>${b.subtotal}</div>
+                              <div style={{ fontSize: '10px', color: '#999', marginBottom: '2px' }}>SUBTOTAL</div>
+                              <div style={{ fontSize: '14px', fontWeight: '600', color: '#222' }}>${b.subtotal}</div>
                             </div>
                             <div style={{ textAlign: 'center' }}>
-                              <div style={{ fontSize: '10px', color: '#555', marginBottom: '2px' }}>
+                              <div style={{ fontSize: '10px', color: '#999', marginBottom: '2px' }}>
                                 TAX{b.subtotal > 0 ? ` (${Math.round((b.taxAmount / b.subtotal) * 100)}%)` : ''}
                               </div>
-                              <div style={{ fontSize: '16px', fontWeight: '700', color: '#ffaa00' }}>${b.taxAmount}</div>
+                              <div style={{ fontSize: '16px', fontWeight: '700', color: '#a66a00' }}>${b.taxAmount}</div>
                             </div>
                             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
                               {b.remitted ? (
                                 <>
-                                  <span style={{ background: '#0a1a0a', border: '1px solid #1a3a1a', color: '#00ff44', fontSize: '11px', fontWeight: '600', padding: '3px 10px', borderRadius: '20px' }}>✅ Remitted {b.remittedAt ? fmtDate(b.remittedAt) : ''}</span>
-                                  {b.jurisdiction && <span style={{ fontSize: '11px', color: '#555' }}>{b.jurisdiction}</span>}
-                                  <button onClick={() => handleUnremit(b.bookingRef)} style={{ background: 'transparent', border: '1px solid #333', color: '#555', fontSize: '10px', padding: '2px 8px', borderRadius: '4px', cursor: 'pointer' }}>Undo</button>
+                                  <span style={{ background: '#eafaf0', border: '1px solid #c8ebd9', color: '#00913f', fontSize: '11px', fontWeight: '600', padding: '3px 10px', borderRadius: '20px' }}>✅ Remitted {b.remittedAt ? fmtDate(b.remittedAt) : ''}</span>
+                                  {b.jurisdiction && <span style={{ fontSize: '11px', color: '#999' }}>{b.jurisdiction}</span>}
+                                  <button onClick={() => handleUnremit(b.bookingRef)} style={{ background: 'transparent', border: '1px solid #ddd', color: '#717171', fontSize: '10px', padding: '2px 8px', borderRadius: '4px', cursor: 'pointer' }}>Undo</button>
                                 </>
                               ) : (
                                 <button onClick={() => { setRemitModal(b); setRemitJurisdiction(''); setRemitNotes(''); }}
-                                  style={{ background: '#ffaa00', color: '#000', border: 'none', borderRadius: '6px', padding: '6px 14px', fontSize: '12px', fontWeight: '700', cursor: 'pointer' }}>
+                                  style={{ background: '#a66a00', color: '#fff', border: 'none', borderRadius: '6px', padding: '6px 14px', fontSize: '12px', fontWeight: '700', cursor: 'pointer' }}>
                                   Mark Remitted
                                 </button>
                               )}
@@ -1067,59 +1067,59 @@ export default function Host() {
         {activeTab === 'applications' && (
           <div>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
-              <h3 style={{ fontSize: '16px', fontWeight: '600', margin: 0 }}>Host Applications</h3>
-              <button onClick={() => loadApplications()} style={{ background: 'transparent', border: '1px solid #333', color: '#888', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>↻ Refresh</button>
+              <h3 style={{ fontSize: '16px', fontWeight: '600', margin: 0, color: '#222' }}>Host Applications</h3>
+              <button onClick={() => loadApplications()} style={{ background: 'transparent', border: '1px solid #ddd', color: '#717171', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>↻ Refresh</button>
             </div>
 
             {applicationsLoading ? (
-              <div style={{ textAlign: 'center', padding: '60px', color: '#555' }}>Loading applications...</div>
+              <div style={{ textAlign: 'center', padding: '60px', color: '#999' }}>Loading applications...</div>
             ) : applications.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '60px 24px', background: '#111', borderRadius: '12px', border: '1px solid #222' }}>
+              <div style={{ textAlign: 'center', padding: '60px 24px', background: '#f7f7f7', borderRadius: '12px', border: '1px solid #ebebeb' }}>
                 <div style={{ fontSize: '48px', marginBottom: '16px' }}>👥</div>
-                <h3 style={{ fontSize: '18px', fontWeight: '600', margin: '0 0 8px' }}>No applications yet</h3>
-                <p style={{ color: '#666', fontSize: '14px', margin: 0 }}>Host applications will appear here when users sign up</p>
+                <h3 style={{ fontSize: '18px', fontWeight: '600', margin: '0 0 8px', color: '#222' }}>No applications yet</h3>
+                <p style={{ color: '#717171', fontSize: '14px', margin: 0 }}>Host applications will appear here when users sign up</p>
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 <div style={{ display: 'flex', gap: '12px', marginBottom: '8px' }}>
                   {[
-                    { label: 'TOTAL', value: applications.length, color: '#888' },
-                    { label: 'PENDING', value: applications.filter(a => a.status === 'pending').length, color: '#ffaa00' },
-                    { label: 'APPROVED', value: applications.filter(a => a.status === 'approved').length, color: '#00ff44' },
+                    { label: 'TOTAL', value: applications.length, color: '#717171' },
+                    { label: 'PENDING', value: applications.filter(a => a.status === 'pending').length, color: '#a66a00' },
+                    { label: 'APPROVED', value: applications.filter(a => a.status === 'approved').length, color: '#00913f' },
                   ].map((s, i) => (
-                    <div key={i} style={{ background: '#111', border: '1px solid #222', borderRadius: '8px', padding: '12px 20px', textAlign: 'center' }}>
-                      <div style={{ fontSize: '10px', color: '#555', marginBottom: '4px', fontWeight: '600' }}>{s.label}</div>
+                    <div key={i} style={{ background: '#fff', border: '1px solid #ebebeb', borderRadius: '8px', padding: '12px 20px', textAlign: 'center', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+                      <div style={{ fontSize: '10px', color: '#999', marginBottom: '4px', fontWeight: '600' }}>{s.label}</div>
                       <div style={{ fontSize: '20px', fontWeight: '700', color: s.color }}>{s.value}</div>
                     </div>
                   ))}
                 </div>
 
                 {applications.map((a, i) => (
-                  <div key={i} style={{ background: '#111', border: `1px solid ${a.status === 'pending' ? '#2a2000' : '#1a2a1a'}`, borderRadius: '12px', padding: '20px' }}>
+                  <div key={i} style={{ background: '#fff', border: `1px solid ${a.status === 'pending' ? '#ffe7a0' : '#c8ebd9'}`, borderRadius: '12px', padding: '20px', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', flexWrap: 'wrap', gap: '12px' }}>
                       <div style={{ flex: 1, minWidth: '200px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
-                          <div style={{ fontSize: '15px', fontWeight: '600' }}>{a.name}</div>
+                          <div style={{ fontSize: '15px', fontWeight: '600', color: '#222' }}>{a.name}</div>
                           <span style={{
-                            background: a.status === 'pending' ? '#1a1a00' : '#0a1a0a',
-                            border: `1px solid ${a.status === 'pending' ? '#3a3000' : '#1a3a1a'}`,
-                            color: a.status === 'pending' ? '#ffaa00' : '#00ff44',
+                            background: a.status === 'pending' ? '#fff8e1' : '#eafaf0',
+                            border: `1px solid ${a.status === 'pending' ? '#ffe7a0' : '#c8ebd9'}`,
+                            color: a.status === 'pending' ? '#a66a00' : '#00913f',
                             fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '10px'
                           }}>
                             {a.status === 'pending' ? '⏳ Pending' : '✅ Approved'}
                           </span>
                         </div>
-                        <div style={{ fontSize: '13px', color: '#888', marginBottom: '4px' }}>{a.email}</div>
-                        {a.city && <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>📍 {a.city}{a.state ? ', ' + a.state : ''}{a.jurisdiction ? ` · ${a.jurisdiction}` : ''}</div>}
-                        {a.str_permit && <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>🪪 STR Permit: {a.str_permit}</div>}
-                        <div style={{ fontSize: '11px', color: '#555', fontFamily: 'monospace', marginTop: '4px' }}>{a.sui_address}</div>
-                        <div style={{ fontSize: '11px', color: '#555', marginTop: '4px' }}>Applied {fmtDateTime(a.created_at)}</div>
-                        {a.approved_at && <div style={{ fontSize: '11px', color: '#00ff44', marginTop: '2px' }}>Approved {fmtDateTime(a.approved_at)}</div>}
+                        <div style={{ fontSize: '13px', color: '#717171', marginBottom: '4px' }}>{a.email}</div>
+                        {a.city && <div style={{ fontSize: '12px', color: '#717171', marginBottom: '4px' }}>📍 {a.city}{a.state ? ', ' + a.state : ''}{a.jurisdiction ? ` · ${a.jurisdiction}` : ''}</div>}
+                        {a.str_permit && <div style={{ fontSize: '12px', color: '#717171', marginBottom: '4px' }}>🪪 STR Permit: {a.str_permit}</div>}
+                        <div style={{ fontSize: '11px', color: '#999', fontFamily: 'monospace', marginTop: '4px' }}>{a.sui_address}</div>
+                        <div style={{ fontSize: '11px', color: '#999', marginTop: '4px' }}>Applied {fmtDateTime(a.created_at)}</div>
+                        {a.approved_at && <div style={{ fontSize: '11px', color: '#00913f', marginTop: '2px' }}>Approved {fmtDateTime(a.approved_at)}</div>}
                       </div>
 
                       {a.status === 'pending' && (
                         <button onClick={() => handleApprove(a.sui_address, a.name)} disabled={approvingId === a.sui_address}
-                          style={{ background: approvingId === a.sui_address ? '#333' : '#00ff44', color: approvingId === a.sui_address ? '#555' : '#000', border: 'none', borderRadius: '8px', padding: '10px 20px', fontSize: '13px', fontWeight: '700', cursor: approvingId === a.sui_address ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}>
+                          style={{ background: approvingId === a.sui_address ? '#eee' : '#00913f', color: approvingId === a.sui_address ? '#999' : '#fff', border: 'none', borderRadius: '8px', padding: '10px 20px', fontSize: '13px', fontWeight: '700', cursor: approvingId === a.sui_address ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}>
                           {approvingId === a.sui_address ? 'Approving...' : '✅ Approve Host'}
                         </button>
                       )}
@@ -1135,36 +1135,36 @@ export default function Host() {
 
       {/* Remit Modal */}
       {remitModal && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '24px' }}>
-          <div style={{ background: '#111', border: '1px solid #333', borderRadius: '16px', width: '100%', maxWidth: '480px', padding: '32px' }}>
-            <h3 style={{ margin: '0 0 4px', fontSize: '20px', fontWeight: '700' }}>Mark Tax as Remitted</h3>
-            <p style={{ color: '#666', fontSize: '14px', margin: '0 0 20px' }}>{remitModal.property} · {fmtDay(remitModal.checkIn)}</p>
-            <div style={{ background: '#1a1a0a', border: '1px solid #3a3a00', borderRadius: '8px', padding: '12px', marginBottom: '20px' }}>
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '24px' }}>
+          <div style={{ background: '#fff', border: '1px solid #ebebeb', borderRadius: '16px', width: '100%', maxWidth: '480px', padding: '32px', boxShadow: '0 8px 32px rgba(0,0,0,0.18)' }}>
+            <h3 style={{ margin: '0 0 4px', fontSize: '20px', fontWeight: '700', color: '#222' }}>Mark Tax as Remitted</h3>
+            <p style={{ color: '#717171', fontSize: '14px', margin: '0 0 20px' }}>{remitModal.property} · {fmtDay(remitModal.checkIn)}</p>
+            <div style={{ background: '#fff8e1', border: '1px solid #ffe7a0', borderRadius: '8px', padding: '12px', marginBottom: '20px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                <span style={{ color: '#888', fontSize: '13px' }}>Subtotal</span>
-                <span style={{ fontSize: '13px' }}>${remitModal.subtotal}</span>
+                <span style={{ color: '#717171', fontSize: '13px' }}>Subtotal</span>
+                <span style={{ fontSize: '13px', color: '#222' }}>${remitModal.subtotal}</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: '#ffaa00', fontSize: '14px', fontWeight: '600' }}>
+                <span style={{ color: '#a66a00', fontSize: '14px', fontWeight: '600' }}>
                   Occupancy Tax{remitModal.subtotal > 0 ? ` (${Math.round((remitModal.taxAmount / remitModal.subtotal) * 100)}%)` : ''}
                 </span>
-                <span style={{ color: '#ffaa00', fontSize: '16px', fontWeight: '700' }}>${remitModal.taxAmount}</span>
+                <span style={{ color: '#a66a00', fontSize: '16px', fontWeight: '700' }}>${remitModal.taxAmount}</span>
               </div>
             </div>
             <div style={{ marginBottom: '16px' }}>
-              <div style={{ fontSize: '12px', color: '#888', marginBottom: '6px', fontWeight: '600' }}>JURISDICTION (optional)</div>
+              <div style={{ fontSize: '12px', color: '#717171', marginBottom: '6px', fontWeight: '600' }}>JURISDICTION (optional)</div>
               <input value={remitJurisdiction} onChange={e => setRemitJurisdiction(e.target.value)} placeholder="e.g. Miami-Dade County, FL"
-                style={{ width: '100%', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '10px 12px', color: '#fff', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
+                style={{ width: '100%', background: '#fff', border: '1px solid #ddd', borderRadius: '8px', padding: '10px 12px', color: '#222', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
             </div>
             <div style={{ marginBottom: '24px' }}>
-              <div style={{ fontSize: '12px', color: '#888', marginBottom: '6px', fontWeight: '600' }}>NOTES (optional)</div>
+              <div style={{ fontSize: '12px', color: '#717171', marginBottom: '6px', fontWeight: '600' }}>NOTES (optional)</div>
               <input value={remitNotes} onChange={e => setRemitNotes(e.target.value)} placeholder="e.g. Confirmation #12345"
-                style={{ width: '100%', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '10px 12px', color: '#fff', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
+                style={{ width: '100%', background: '#fff', border: '1px solid #ddd', borderRadius: '8px', padding: '10px 12px', color: '#222', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
             </div>
             <div style={{ display: 'flex', gap: '8px' }}>
-              <button onClick={() => setRemitModal(null)} style={{ flex: 1, background: 'transparent', border: '1px solid #333', color: '#888', borderRadius: '8px', padding: '12px', fontSize: '14px', cursor: 'pointer' }}>Cancel</button>
+              <button onClick={() => setRemitModal(null)} style={{ flex: 1, background: 'transparent', border: '1px solid #ddd', color: '#717171', borderRadius: '8px', padding: '12px', fontSize: '14px', cursor: 'pointer' }}>Cancel</button>
               <button onClick={handleRemit} disabled={!!remittingId}
-                style={{ flex: 2, background: remittingId ? '#333' : '#ffaa00', color: remittingId ? '#555' : '#000', border: 'none', borderRadius: '8px', padding: '12px', fontSize: '14px', fontWeight: '700', cursor: remittingId ? 'not-allowed' : 'pointer' }}>
+                style={{ flex: 2, background: remittingId ? '#eee' : '#a66a00', color: remittingId ? '#999' : '#fff', border: 'none', borderRadius: '8px', padding: '12px', fontSize: '14px', fontWeight: '700', cursor: remittingId ? 'not-allowed' : 'pointer' }}>
                 {remittingId ? 'Recording...' : `Confirm Remittance — $${remitModal.taxAmount}`}
               </button>
             </div>
@@ -1174,15 +1174,15 @@ export default function Host() {
 
       {/* Phase 2h: Guest Identity (Seal decrypt) Modal */}
       {identityModal && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '24px' }}>
-          <div style={{ background: '#111', border: '1px solid #2a2a3a', borderRadius: '16px', width: '100%', maxWidth: '460px', padding: '28px' }}>
-            <h3 style={{ margin: '0 0 4px', fontSize: '19px', fontWeight: '700' }}>🪪 Guest Identity</h3>
-            <p style={{ color: '#666', fontSize: '13px', margin: '0 0 18px' }}>
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '24px' }}>
+          <div style={{ background: '#fff', border: '1px solid #ebebeb', borderRadius: '16px', width: '100%', maxWidth: '460px', padding: '28px', boxShadow: '0 8px 32px rgba(0,0,0,0.18)' }}>
+            <h3 style={{ margin: '0 0 4px', fontSize: '19px', fontWeight: '700', color: '#222' }}>🪪 Guest Identity</h3>
+            <p style={{ color: '#717171', fontSize: '13px', margin: '0 0 18px' }}>
               {identityModal.guestName || 'Guest'} · Ref {identityModal.bookingRef}
             </p>
 
             {identityStatus !== 'done' && identityStatus !== 'error' && (
-              <div style={{ color: '#a98aff', fontSize: '13px', padding: '16px 0' }}>
+              <div style={{ color: '#8b3dff', fontSize: '13px', padding: '16px 0' }}>
                 {identityStatus === 'loading' && '🔎 Loading encrypted record…'}
                 {identityStatus === 'signing' && '🖊️ Approve the decryption request in your wallet…'}
                 {identityStatus === 'decrypting' && '🔐 Decrypting with Seal…'}
@@ -1190,20 +1190,20 @@ export default function Host() {
             )}
 
             {identityStatus === 'error' && (
-              <div style={{ background: '#1a1212', border: '1px solid #2a1a1a', borderRadius: '8px', padding: '12px', color: '#ff6666', fontSize: '12px', lineHeight: 1.5 }}>
+              <div style={{ background: '#fdeeee', border: '1px solid #f5d0d0', borderRadius: '8px', padding: '12px', color: '#d23f3f', fontSize: '12px', lineHeight: 1.5 }}>
                 ⚠️ {identityError}
               </div>
             )}
 
             {identityStatus === 'done' && identityData && (
-              <div style={{ background: '#0a0a14', border: '1px solid #1d1d3a', borderRadius: '8px', padding: '14px' }}>
+              <div style={{ background: '#f3e8ff', border: '1px solid #e0c8fa', borderRadius: '8px', padding: '14px' }}>
                 {Object.entries(identityData).map(([k, v]) => (
-                  <div key={k} style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', padding: '5px 0', borderBottom: '1px solid #15152a' }}>
-                    <span style={{ color: '#778', fontSize: '12px', textTransform: 'capitalize' }}>{k.replace(/([A-Z])/g, ' $1')}</span>
-                    <span style={{ color: '#cfe', fontSize: '12px', textAlign: 'right', wordBreak: 'break-word' }}>{String(v)}</span>
+                  <div key={k} style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', padding: '5px 0', borderBottom: '1px solid #e0c8fa' }}>
+                    <span style={{ color: '#717171', fontSize: '12px', textTransform: 'capitalize' }}>{k.replace(/([A-Z])/g, ' $1')}</span>
+                    <span style={{ color: '#222', fontSize: '12px', textAlign: 'right', wordBreak: 'break-word' }}>{String(v)}</span>
                   </div>
                 ))}
-                <p style={{ color: '#566', fontSize: '10px', margin: '10px 0 0', lineHeight: 1.5 }}>
+                <p style={{ color: '#717171', fontSize: '10px', margin: '10px 0 0', lineHeight: 1.5 }}>
                   Decrypted in your browser via Seal. ARIA never sees this data. Access ends automatically when the booking settles.
                 </p>
               </div>
@@ -1211,12 +1211,12 @@ export default function Host() {
 
             <div style={{ display: 'flex', gap: '8px', marginTop: '18px' }}>
               <button onClick={() => { setIdentityModal(null); setIdentityData(null); setIdentityStatus('idle'); setIdentityError(''); }}
-                style={{ flex: 1, background: 'transparent', border: '1px solid #333', color: '#888', borderRadius: '8px', padding: '11px', fontSize: '13px', cursor: 'pointer' }}>
+                style={{ flex: 1, background: 'transparent', border: '1px solid #ddd', color: '#717171', borderRadius: '8px', padding: '11px', fontSize: '13px', cursor: 'pointer' }}>
                 Close
               </button>
               {identityStatus === 'error' && (
                 <button onClick={() => handleViewIdentity(identityModal)}
-                  style={{ flex: 1, background: '#2a2a3a', border: 'none', color: '#cfc', borderRadius: '8px', padding: '11px', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>
+                  style={{ flex: 1, background: '#8b3dff', border: 'none', color: '#fff', borderRadius: '8px', padding: '11px', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>
                   Retry
                 </button>
               )}
@@ -1227,13 +1227,13 @@ export default function Host() {
 
       {/* Phase 3a: Add Property — paste-from-Airbnb/VRBO, manual entry, or bulk import */}
       {showAddModal && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '24px', overflowY: 'auto' }}>
-          <div style={{ background: '#111', border: '1px solid #333', borderRadius: '16px', width: '100%', maxWidth: '640px', padding: '28px', maxHeight: '90vh', overflowY: 'auto' }}>
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '24px', overflowY: 'auto' }}>
+          <div style={{ background: '#fff', border: '1px solid #ebebeb', borderRadius: '16px', width: '100%', maxWidth: '640px', padding: '28px', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 8px 32px rgba(0,0,0,0.18)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '4px' }}>
-              <h3 style={{ margin: 0, fontSize: '19px', fontWeight: '700' }}>{editingId ? 'Edit Listing' : 'Add Property'}</h3>
-              <button onClick={() => { setShowAddModal(false); setEditingId(null); }} style={{ background: 'none', border: 'none', color: '#666', fontSize: '20px', cursor: 'pointer', lineHeight: 1 }}>×</button>
+              <h3 style={{ margin: 0, fontSize: '19px', fontWeight: '700', color: '#222' }}>{editingId ? 'Edit Listing' : 'Add Property'}</h3>
+              <button onClick={() => { setShowAddModal(false); setEditingId(null); }} style={{ background: 'none', border: 'none', color: '#717171', fontSize: '20px', cursor: 'pointer', lineHeight: 1 }}>×</button>
             </div>
-            <p style={{ color: '#666', fontSize: '13px', margin: '0 0 18px' }}>
+            <p style={{ color: '#717171', fontSize: '13px', margin: '0 0 18px' }}>
               {editingId ? 'Update any fields below and save — changes apply immediately.' : addMode === 'bulk' ? 'Paste several listings at once — useful if you have dozens to onboard.' : 'Paste your existing Airbnb/VRBO listing text, or fill it in by hand.'}
             </p>
 
@@ -1241,7 +1241,7 @@ export default function Host() {
               <div style={{ display: 'flex', gap: '8px', marginBottom: '20px' }}>
                 {[['import', '📋 Paste Listing'], ['manual', '✏️ Manual Entry'], ['bulk', '📚 Bulk Import']].map(([m, label]) => (
                   <button key={m} onClick={() => openAddModal(m)}
-                    style={{ flex: 1, background: addMode === m ? '#00ff44' : 'transparent', color: addMode === m ? '#000' : '#888', border: `1px solid ${addMode === m ? '#00ff44' : '#333'}`, borderRadius: '6px', padding: '8px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
+                    style={{ flex: 1, background: addMode === m ? '#ff385c' : 'transparent', color: addMode === m ? '#fff' : '#717171', border: `1px solid ${addMode === m ? '#ff385c' : '#ddd'}`, borderRadius: '6px', padding: '8px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
                     {label}
                   </button>
                 ))}
@@ -1252,19 +1252,19 @@ export default function Host() {
             {addMode === 'import' && !draft && (
               <div>
                 <div style={{ marginBottom: '14px' }}>
-                  <div style={{ fontSize: '12px', color: '#888', marginBottom: '6px', fontWeight: '600' }}>AIRBNB/VRBO LISTING URL (optional, for your reference)</div>
+                  <div style={{ fontSize: '12px', color: '#717171', marginBottom: '6px', fontWeight: '600' }}>AIRBNB/VRBO LISTING URL (optional, for your reference)</div>
                   <input value={importUrl} onChange={e => setImportUrl(e.target.value)} placeholder="https://airbnb.com/rooms/..."
-                    style={{ width: '100%', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '10px 12px', color: '#fff', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
+                    style={{ width: '100%', background: '#fff', border: '1px solid #ddd', borderRadius: '8px', padding: '10px 12px', color: '#222', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
                 </div>
                 <div style={{ marginBottom: '14px' }}>
-                  <div style={{ fontSize: '12px', color: '#888', marginBottom: '6px', fontWeight: '600' }}>PASTE YOUR LISTING DESCRIPTION</div>
+                  <div style={{ fontSize: '12px', color: '#717171', marginBottom: '6px', fontWeight: '600' }}>PASTE YOUR LISTING DESCRIPTION</div>
                   <textarea value={importText} onChange={e => setImportText(e.target.value)} rows={7} placeholder="Copy the title, description, and amenities from your Airbnb/VRBO page and paste them here..."
-                    style={{ width: '100%', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '10px 12px', color: '#fff', fontSize: '13px', outline: 'none', boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit' }} />
-                  <p style={{ color: '#555', fontSize: '11px', margin: '6px 0 0', lineHeight: 1.5 }}>We never fetch or scrape the URL — it's stored only as a reference. AI reads the text you paste to fill in the listing fields below for you to review.</p>
+                    style={{ width: '100%', background: '#fff', border: '1px solid #ddd', borderRadius: '8px', padding: '10px 12px', color: '#222', fontSize: '13px', outline: 'none', boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit' }} />
+                  <p style={{ color: '#999', fontSize: '11px', margin: '6px 0 0', lineHeight: 1.5 }}>We never fetch or scrape the URL — it's stored only as a reference. AI reads the text you paste to fill in the listing fields below for you to review.</p>
                 </div>
-                {extractError && <div style={{ background: '#1a1212', border: '1px solid #2a1a1a', borderRadius: '8px', padding: '10px 12px', color: '#ff6666', fontSize: '12px', marginBottom: '14px' }}>⚠️ {extractError}</div>}
+                {extractError && <div style={{ background: '#fdeeee', border: '1px solid #f5d0d0', borderRadius: '8px', padding: '10px 12px', color: '#d23f3f', fontSize: '12px', marginBottom: '14px' }}>⚠️ {extractError}</div>}
                 <button onClick={handleExtract} disabled={extracting || !importText.trim()}
-                  style={{ width: '100%', background: extracting ? '#333' : '#00ff44', color: extracting ? '#888' : '#000', border: 'none', borderRadius: '8px', padding: '12px', fontSize: '14px', fontWeight: '700', cursor: extracting ? 'wait' : 'pointer' }}>
+                  style={{ width: '100%', background: extracting ? '#eee' : '#ff385c', color: extracting ? '#999' : '#fff', border: 'none', borderRadius: '8px', padding: '12px', fontSize: '14px', fontWeight: '700', cursor: extracting ? 'wait' : 'pointer' }}>
                   {extracting ? '🤖 Extracting...' : '🤖 Extract with AI'}
                 </button>
               </div>
@@ -1274,72 +1274,72 @@ export default function Host() {
             {(addMode === 'manual' || (addMode === 'import' && draft)) && draft && (
               <div>
                 {addMode === 'import' && (
-                  <div style={{ background: '#0a1a0a', border: '1px solid #1a3a1a', borderRadius: '8px', padding: '10px 12px', color: '#00ff44', fontSize: '12px', marginBottom: '16px' }}>
+                  <div style={{ background: '#eafaf0', border: '1px solid #c8ebd9', borderRadius: '8px', padding: '10px 12px', color: '#00913f', fontSize: '12px', marginBottom: '16px' }}>
                     ✓ Extracted — review and edit anything below before publishing.
                   </div>
                 )}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   <div>
-                    <div style={{ fontSize: '11px', color: '#888', marginBottom: '4px', fontWeight: '600' }}>TITLE</div>
+                    <div style={{ fontSize: '11px', color: '#717171', marginBottom: '4px', fontWeight: '600' }}>TITLE</div>
                     <input value={draft.title} onChange={e => setDraft({ ...draft, title: e.target.value })}
-                      style={{ width: '100%', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '9px 12px', color: '#fff', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
+                      style={{ width: '100%', background: '#fff', border: '1px solid #ddd', borderRadius: '8px', padding: '9px 12px', color: '#222', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
                   </div>
                   <div>
-                    <div style={{ fontSize: '11px', color: '#888', marginBottom: '4px', fontWeight: '600' }}>DESCRIPTION</div>
+                    <div style={{ fontSize: '11px', color: '#717171', marginBottom: '4px', fontWeight: '600' }}>DESCRIPTION</div>
                     <textarea value={draft.description} onChange={e => setDraft({ ...draft, description: e.target.value })} rows={4}
-                      style={{ width: '100%', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '9px 12px', color: '#fff', fontSize: '13px', outline: 'none', boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit' }} />
+                      style={{ width: '100%', background: '#fff', border: '1px solid #ddd', borderRadius: '8px', padding: '9px 12px', color: '#222', fontSize: '13px', outline: 'none', boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit' }} />
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '12px' }}>
                     <div>
-                      <div style={{ fontSize: '11px', color: '#888', marginBottom: '4px', fontWeight: '600' }}>LOCATION</div>
+                      <div style={{ fontSize: '11px', color: '#717171', marginBottom: '4px', fontWeight: '600' }}>LOCATION</div>
                       <input value={draft.location} onChange={e => setDraft({ ...draft, location: e.target.value })} placeholder="City, State"
-                        style={{ width: '100%', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '9px 12px', color: '#fff', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
+                        style={{ width: '100%', background: '#fff', border: '1px solid #ddd', borderRadius: '8px', padding: '9px 12px', color: '#222', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
                     </div>
                     <div>
-                      <div style={{ fontSize: '11px', color: '#888', marginBottom: '4px', fontWeight: '600' }}>PRICE/NIGHT ($)</div>
+                      <div style={{ fontSize: '11px', color: '#717171', marginBottom: '4px', fontWeight: '600' }}>PRICE/NIGHT ($)</div>
                       <input type="number" min="1" value={draft.price} onChange={e => setDraft({ ...draft, price: Number(e.target.value) })}
-                        style={{ width: '100%', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '9px 12px', color: '#fff', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
+                        style={{ width: '100%', background: '#fff', border: '1px solid #ddd', borderRadius: '8px', padding: '9px 12px', color: '#222', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
                     </div>
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '12px' }}>
                     {[['beds', 'BEDS'], ['baths', 'BATHS'], ['maxGuests', 'MAX GUESTS']].map(([field, label]) => (
                       <div key={field}>
-                        <div style={{ fontSize: '11px', color: '#888', marginBottom: '4px', fontWeight: '600' }}>{label}</div>
+                        <div style={{ fontSize: '11px', color: '#717171', marginBottom: '4px', fontWeight: '600' }}>{label}</div>
                         <input type="number" min="1" value={draft[field]} onChange={e => setDraft({ ...draft, [field]: Number(e.target.value) })}
-                          style={{ width: '100%', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '9px 12px', color: '#fff', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
+                          style={{ width: '100%', background: '#fff', border: '1px solid #ddd', borderRadius: '8px', padding: '9px 12px', color: '#222', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
                       </div>
                     ))}
                     <div>
-                      <div style={{ fontSize: '11px', color: '#888', marginBottom: '4px', fontWeight: '600' }}>TAG</div>
+                      <div style={{ fontSize: '11px', color: '#717171', marginBottom: '4px', fontWeight: '600' }}>TAG</div>
                       <input value={draft.tag} onChange={e => setDraft({ ...draft, tag: e.target.value })}
-                        style={{ width: '100%', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '9px 12px', color: '#fff', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
+                        style={{ width: '100%', background: '#fff', border: '1px solid #ddd', borderRadius: '8px', padding: '9px 12px', color: '#222', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
                     </div>
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '12px' }}>
                     <div>
-                      <div style={{ fontSize: '11px', color: '#888', marginBottom: '4px', fontWeight: '600' }}>TAX JURISDICTION</div>
+                      <div style={{ fontSize: '11px', color: '#717171', marginBottom: '4px', fontWeight: '600' }}>TAX JURISDICTION</div>
                       <input value={draft.taxJurisdiction} onChange={e => setDraft({ ...draft, taxJurisdiction: e.target.value })} placeholder="e.g. Buncombe County, NC"
-                        style={{ width: '100%', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '9px 12px', color: '#fff', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
+                        style={{ width: '100%', background: '#fff', border: '1px solid #ddd', borderRadius: '8px', padding: '9px 12px', color: '#222', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
                     </div>
                     <div>
-                      <div style={{ fontSize: '11px', color: '#888', marginBottom: '4px', fontWeight: '600' }}>TAX RATE (%)</div>
+                      <div style={{ fontSize: '11px', color: '#717171', marginBottom: '4px', fontWeight: '600' }}>TAX RATE (%)</div>
                       <input type="number" min="0" max="20" step="0.1" value={(draft.taxRate * 100).toFixed(2)} onChange={e => setDraft({ ...draft, taxRate: Math.min(20, Math.max(0, Number(e.target.value))) / 100 })}
-                        style={{ width: '100%', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '9px 12px', color: '#fff', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
+                        style={{ width: '100%', background: '#fff', border: '1px solid #ddd', borderRadius: '8px', padding: '9px 12px', color: '#222', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
                     </div>
                   </div>
-                  <p style={{ color: '#555', fontSize: '11px', margin: 0, lineHeight: 1.5 }}>You're responsible for the tax rate being correct and for remitting it — ARIA just collects what you declare here (capped at 20%) at booking time.</p>
+                  <p style={{ color: '#999', fontSize: '11px', margin: 0, lineHeight: 1.5 }}>You're responsible for the tax rate being correct and for remitting it — ARIA just collects what you declare here (capped at 20%) at booking time.</p>
                   <div>
-                    <div style={{ fontSize: '11px', color: '#888', marginBottom: '6px', fontWeight: '600' }}>PHOTOS</div>
+                    <div style={{ fontSize: '11px', color: '#717171', marginBottom: '6px', fontWeight: '600' }}>PHOTOS</div>
                     <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '8px' }}>
                       {(draft.images || []).map((url, i) => (
                         <div key={i} style={{ position: 'relative' }}>
-                          <img src={url} alt="" style={{ width: '64px', height: '64px', objectFit: 'cover', borderRadius: '6px', border: '1px solid #333' }} />
+                          <img src={url} alt="" style={{ width: '64px', height: '64px', objectFit: 'cover', borderRadius: '6px', border: '1px solid #ddd' }} />
                           <button onClick={() => setDraft({ ...draft, images: draft.images.filter((_, idx) => idx !== i) })}
-                            style={{ position: 'absolute', top: '-6px', right: '-6px', background: '#ff4444', color: '#fff', border: 'none', borderRadius: '50%', width: '18px', height: '18px', fontSize: '11px', cursor: 'pointer', lineHeight: '18px' }}>×</button>
+                            style={{ position: 'absolute', top: '-6px', right: '-6px', background: '#d23f3f', color: '#fff', border: 'none', borderRadius: '50%', width: '18px', height: '18px', fontSize: '11px', cursor: 'pointer', lineHeight: '18px' }}>×</button>
                         </div>
                       ))}
                     </div>
-                    <label style={{ display: 'inline-block', background: '#1a1a1a', border: '1px solid #333', borderRadius: '6px', padding: '8px 14px', fontSize: '12px', color: '#888', cursor: 'pointer' }}>
+                    <label style={{ display: 'inline-block', background: '#fff', border: '1px solid #ddd', borderRadius: '6px', padding: '8px 14px', fontSize: '12px', color: '#717171', cursor: 'pointer' }}>
                       {uploadingPhoto ? 'Uploading...' : '+ Upload Photo'}
                       <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" style={{ display: 'none' }} disabled={uploadingPhoto}
                         onChange={e => { uploadPhoto(e.target.files?.[0], url => setDraft(d => ({ ...d, images: [...(d.images || []), url] }))); e.target.value = ''; }} />
@@ -1347,9 +1347,9 @@ export default function Host() {
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: '8px', marginTop: '22px' }}>
-                  <button onClick={() => { setShowAddModal(false); setEditingId(null); }} style={{ flex: 1, background: 'transparent', border: '1px solid #333', color: '#888', borderRadius: '8px', padding: '12px', fontSize: '14px', cursor: 'pointer' }}>Cancel</button>
+                  <button onClick={() => { setShowAddModal(false); setEditingId(null); }} style={{ flex: 1, background: 'transparent', border: '1px solid #ddd', color: '#717171', borderRadius: '8px', padding: '12px', fontSize: '14px', cursor: 'pointer' }}>Cancel</button>
                   <button onClick={handlePublish} disabled={publishing}
-                    style={{ flex: 2, background: publishing ? '#333' : '#00ff44', color: publishing ? '#888' : '#000', border: 'none', borderRadius: '8px', padding: '12px', fontSize: '14px', fontWeight: '700', cursor: publishing ? 'wait' : 'pointer' }}>
+                    style={{ flex: 2, background: publishing ? '#eee' : '#ff385c', color: publishing ? '#999' : '#fff', border: 'none', borderRadius: '8px', padding: '12px', fontSize: '14px', fontWeight: '700', cursor: publishing ? 'wait' : 'pointer' }}>
                     {publishing ? (editingId ? 'Saving...' : 'Publishing...') : (editingId ? '✓ Save Changes' : '✓ Publish Listing')}
                   </button>
                 </div>
@@ -1363,58 +1363,58 @@ export default function Host() {
                   <div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', maxHeight: '40vh', overflowY: 'auto', marginBottom: '14px' }}>
                       {bulkBlocks.map((b, i) => (
-                        <div key={i} style={{ background: '#0d0d0d', border: '1px solid #222', borderRadius: '8px', padding: '12px' }}>
+                        <div key={i} style={{ background: '#f7f7f7', border: '1px solid #ebebeb', borderRadius: '8px', padding: '12px' }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                            <span style={{ fontSize: '11px', color: '#888', fontWeight: '600' }}>LISTING {i + 1}</span>
+                            <span style={{ fontSize: '11px', color: '#717171', fontWeight: '600' }}>LISTING {i + 1}</span>
                             {bulkBlocks.length > 1 && (
-                              <button onClick={() => setBulkBlocks(prev => prev.filter((_, idx) => idx !== i))} style={{ background: 'none', border: 'none', color: '#666', fontSize: '12px', cursor: 'pointer' }}>Remove</button>
+                              <button onClick={() => setBulkBlocks(prev => prev.filter((_, idx) => idx !== i))} style={{ background: 'none', border: 'none', color: '#999', fontSize: '12px', cursor: 'pointer' }}>Remove</button>
                             )}
                           </div>
                           <input value={b.url} onChange={e => updateBulkBlock(i, 'url', e.target.value)} placeholder="Listing URL (optional)"
-                            style={{ width: '100%', background: '#1a1a1a', border: '1px solid #333', borderRadius: '6px', padding: '8px 10px', color: '#fff', fontSize: '12px', outline: 'none', boxSizing: 'border-box', marginBottom: '8px' }} />
+                            style={{ width: '100%', background: '#fff', border: '1px solid #ddd', borderRadius: '6px', padding: '8px 10px', color: '#222', fontSize: '12px', outline: 'none', boxSizing: 'border-box', marginBottom: '8px' }} />
                           <textarea value={b.text} onChange={e => updateBulkBlock(i, 'text', e.target.value)} rows={3} placeholder="Paste listing description..."
-                            style={{ width: '100%', background: '#1a1a1a', border: '1px solid #333', borderRadius: '6px', padding: '8px 10px', color: '#fff', fontSize: '12px', outline: 'none', boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit' }} />
+                            style={{ width: '100%', background: '#fff', border: '1px solid #ddd', borderRadius: '6px', padding: '8px 10px', color: '#222', fontSize: '12px', outline: 'none', boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit' }} />
                         </div>
                       ))}
                     </div>
                     <button onClick={() => setBulkBlocks(prev => [...prev, { url: '', text: '' }])}
-                      style={{ background: 'transparent', border: '1px dashed #333', color: '#888', borderRadius: '8px', padding: '10px', fontSize: '12px', cursor: 'pointer', width: '100%', marginBottom: '14px' }}>
+                      style={{ background: 'transparent', border: '1px dashed #ddd', color: '#717171', borderRadius: '8px', padding: '10px', fontSize: '12px', cursor: 'pointer', width: '100%', marginBottom: '14px' }}>
                       + Add another listing
                     </button>
                     <button onClick={handleBulkExtract} disabled={bulkExtracting || !bulkBlocks.some(b => b.text.trim())}
-                      style={{ width: '100%', background: bulkExtracting ? '#333' : '#00ff44', color: bulkExtracting ? '#888' : '#000', border: 'none', borderRadius: '8px', padding: '12px', fontSize: '14px', fontWeight: '700', cursor: bulkExtracting ? 'wait' : 'pointer' }}>
+                      style={{ width: '100%', background: bulkExtracting ? '#eee' : '#ff385c', color: bulkExtracting ? '#999' : '#fff', border: 'none', borderRadius: '8px', padding: '12px', fontSize: '14px', fontWeight: '700', cursor: bulkExtracting ? 'wait' : 'pointer' }}>
                       {bulkExtracting ? `🤖 Extracting ${bulkBlocks.filter(b => b.text.trim()).length} listings...` : `🤖 Extract All (${bulkBlocks.filter(b => b.text.trim()).length})`}
                     </button>
                   </div>
                 ) : (
                   <div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                      <span style={{ fontSize: '12px', color: '#888' }}>
+                      <span style={{ fontSize: '12px', color: '#717171' }}>
                         {bulkDrafts.filter(d => d.draft).length} extracted · {bulkDrafts.filter(d => d.published).length} published · {bulkDrafts.filter(d => d.error).length} failed
                       </span>
-                      <button onClick={() => { setBulkBlocks([{ url: '', text: '' }]); setBulkDrafts([]); }} style={{ background: 'none', border: 'none', color: '#666', fontSize: '12px', cursor: 'pointer' }}>← Start over</button>
+                      <button onClick={() => { setBulkBlocks([{ url: '', text: '' }]); setBulkDrafts([]); }} style={{ background: 'none', border: 'none', color: '#999', fontSize: '12px', cursor: 'pointer' }}>← Start over</button>
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '45vh', overflowY: 'auto', marginBottom: '14px' }}>
                       {bulkDrafts.map((d, i) => (
-                        <div key={i} style={{ background: '#0d0d0d', border: `1px solid ${d.published ? '#1a3a1a' : d.error ? '#3a1a1a' : '#222'}`, borderRadius: '8px', padding: '12px' }}>
+                        <div key={i} style={{ background: '#f7f7f7', border: `1px solid ${d.published ? '#c8ebd9' : d.error ? '#f5d0d0' : '#ebebeb'}`, borderRadius: '8px', padding: '12px' }}>
                           {d.error ? (
-                            <div style={{ color: '#ff6666', fontSize: '12px' }}>⚠️ Listing {i + 1}: {d.error}</div>
+                            <div style={{ color: '#d23f3f', fontSize: '12px' }}>⚠️ Listing {i + 1}: {d.error}</div>
                           ) : (
                             <>
                               <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
                                 <input value={d.draft.title} onChange={e => updateBulkDraftField(i, 'title', e.target.value)} disabled={d.published}
-                                  style={{ flex: 2, background: '#1a1a1a', border: '1px solid #333', borderRadius: '6px', padding: '7px 10px', color: '#fff', fontSize: '12px', outline: 'none' }} />
+                                  style={{ flex: 2, background: '#fff', border: '1px solid #ddd', borderRadius: '6px', padding: '7px 10px', color: '#222', fontSize: '12px', outline: 'none' }} />
                                 <input type="number" value={d.draft.price} onChange={e => updateBulkDraftField(i, 'price', Number(e.target.value))} disabled={d.published}
-                                  style={{ flex: 1, background: '#1a1a1a', border: '1px solid #333', borderRadius: '6px', padding: '7px 10px', color: '#fff', fontSize: '12px', outline: 'none' }} />
+                                  style={{ flex: 1, background: '#fff', border: '1px solid #ddd', borderRadius: '6px', padding: '7px 10px', color: '#222', fontSize: '12px', outline: 'none' }} />
                               </div>
                               <input value={d.draft.location} onChange={e => updateBulkDraftField(i, 'location', e.target.value)} disabled={d.published}
-                                style={{ width: '100%', background: '#1a1a1a', border: '1px solid #333', borderRadius: '6px', padding: '7px 10px', color: '#fff', fontSize: '12px', outline: 'none', boxSizing: 'border-box', marginBottom: '8px' }} />
+                                style={{ width: '100%', background: '#fff', border: '1px solid #ddd', borderRadius: '6px', padding: '7px 10px', color: '#222', fontSize: '12px', outline: 'none', boxSizing: 'border-box', marginBottom: '8px' }} />
                               <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                                 {d.published ? (
-                                  <span style={{ color: '#00ff44', fontSize: '12px', fontWeight: '600' }}>✓ Published</span>
+                                  <span style={{ color: '#00913f', fontSize: '12px', fontWeight: '600' }}>✓ Published</span>
                                 ) : (
                                   <button onClick={() => handleBulkPublishOne(i)} disabled={d.publishing}
-                                    style={{ background: d.publishing ? '#333' : '#00ff44', color: d.publishing ? '#888' : '#000', border: 'none', borderRadius: '6px', padding: '6px 14px', fontSize: '11px', fontWeight: '700', cursor: d.publishing ? 'wait' : 'pointer' }}>
+                                    style={{ background: d.publishing ? '#eee' : '#ff385c', color: d.publishing ? '#999' : '#fff', border: 'none', borderRadius: '6px', padding: '6px 14px', fontSize: '11px', fontWeight: '700', cursor: d.publishing ? 'wait' : 'pointer' }}>
                                     {d.publishing ? 'Publishing...' : 'Publish'}
                                   </button>
                                 )}
@@ -1425,9 +1425,9 @@ export default function Host() {
                       ))}
                     </div>
                     <div style={{ display: 'flex', gap: '8px' }}>
-                      <button onClick={() => setShowAddModal(false)} style={{ flex: 1, background: 'transparent', border: '1px solid #333', color: '#888', borderRadius: '8px', padding: '12px', fontSize: '14px', cursor: 'pointer' }}>Close</button>
+                      <button onClick={() => setShowAddModal(false)} style={{ flex: 1, background: 'transparent', border: '1px solid #ddd', color: '#717171', borderRadius: '8px', padding: '12px', fontSize: '14px', cursor: 'pointer' }}>Close</button>
                       <button onClick={handleBulkPublishAll} disabled={!bulkDrafts.some(d => d.draft && !d.published)}
-                        style={{ flex: 2, background: '#00ff44', color: '#000', border: 'none', borderRadius: '8px', padding: '12px', fontSize: '14px', fontWeight: '700', cursor: 'pointer' }}>
+                        style={{ flex: 2, background: '#ff385c', color: '#fff', border: 'none', borderRadius: '8px', padding: '12px', fontSize: '14px', fontWeight: '700', cursor: 'pointer' }}>
                         Publish All Remaining
                       </button>
                     </div>
