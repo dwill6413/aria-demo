@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/router';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
@@ -99,6 +99,10 @@ export default function Home() {
   // backend can verify on-chain before recording anything.
   const [escrowStatus, setEscrowStatus] = useState(null);
   const [escrowError, setEscrowError] = useState('');
+  // Horizontal scroll row (Airbnb-style "Popular homes" carousel) — ref lets
+  // the arrow buttons scroll the row without re-rendering on every scroll event.
+  const scrollRowRef = useRef(null);
+  const scrollRow = (dir) => { scrollRowRef.current?.scrollBy({ left: dir * 320, behavior: 'smooth' }); };
 
   const copyAddr = () => {
     navigator.clipboard.writeText(user.address);
@@ -392,7 +396,14 @@ export default function Home() {
         .search-divider { width: 1px; height: 32px; background: #ddd; flex-shrink: 0; }
         .search-step-btn { width: 26px; height: 26px; border-radius: 50%; border: 1px solid #ccc; background: #fff; color: #222; cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; }
         .search-step-btn:disabled { color: #ccc; cursor: not-allowed; }
+        .property-scroll-row { scrollbar-width: none; -ms-overflow-style: none; }
+        .property-scroll-row::-webkit-scrollbar { display: none; }
+        .scroll-arrow { position: absolute; top: 96px; transform: translateY(-50%); background: #fff; border: 1px solid #ddd; color: #222; font-size: 20px; cursor: pointer; border-radius: 50%; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 8px rgba(0,0,0,0.15); z-index: 2; transition: transform 0.15s ease; }
+        .scroll-arrow:hover { transform: translateY(-50%) scale(1.08); }
+        .scroll-arrow-left { left: -14px; }
+        .scroll-arrow-right { right: -14px; }
         @media (max-width: 639px) {
+          .scroll-arrow { display: none; }
           .nav-desktop { display: none !important; }
           .nav-hamburger { display: flex !important; align-items: center; gap: 8px; }
           .search-pill { flex-direction: column !important; border-radius: 16px !important; max-width: 100% !important; }
@@ -555,39 +566,43 @@ export default function Home() {
       </div>
 
       {/* Property Grid */}
-      <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '32px 24px', flex: 1 }}>
+      <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '32px 24px', flex: 1, position: 'relative' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px' }}>
           <h3 style={{ fontSize: '18px', fontWeight: '600', margin: 0, color: '#222' }}>Popular homes</h3>
           <span style={{ fontSize: '13px', color: '#717171' }}>{filteredProperties.length} properties available</span>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(260px,1fr))', gap: '28px 20px' }}>
-          {filteredProperties.map(p => {
-            const { rating, count, verifiedCount, isLive } = getDisplayRating(p);
-            return (
-              <div key={p.id} className="property-card" onClick={() => openModal(p)} style={{ cursor: 'pointer', borderRadius: '12px' }}>
-                <div style={{ height: '220px', background: '#eee', overflow: 'hidden', position: 'relative', borderRadius: '12px' }}>
-                  <img src={p.image} alt={p.title} className="property-img" />
-                  {isLive && <span style={{ position: 'absolute', top: '12px', left: '12px', background: '#fff', color: '#8b3dff', fontSize: '10px', fontWeight: '700', padding: '4px 9px', borderRadius: '6px', boxShadow: '0 1px 4px rgba(0,0,0,0.2)' }}>ARIA Verified</span>}
-                  <span style={{ position: 'absolute', bottom: '10px', right: '10px', background: 'rgba(0,0,0,0.55)', color: '#fff', fontSize: '10px', fontWeight: '600', padding: '3px 8px', borderRadius: '6px', backdropFilter: 'blur(4px)' }}>📷 {p.images.length}</span>
-                </div>
-                <div style={{ padding: '10px 2px 0' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '2px' }}>
-                    <h4 style={{ margin: 0, fontSize: '14px', fontWeight: '600', color: '#222' }}>{p.title}</h4>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '13px', flexShrink: 0, marginLeft: '8px' }}>
-                      <span style={{ color: '#222' }}>★</span>
-                      <span style={{ color: '#222' }}>{rating}</span>
-                      {verifiedCount > 0 && (
-                        <span title={`${verifiedCount} review${verifiedCount > 1 ? 's' : ''} from a real on-chain-escrow stay`} style={{ color: '#00913f', fontSize: '11px', fontWeight: '700' }}>✓{verifiedCount}</span>
-                      )}
-                    </div>
+        <div style={{ position: 'relative' }}>
+          <button type="button" aria-label="Scroll left" onClick={() => scrollRow(-1)} className="scroll-arrow scroll-arrow-left">‹</button>
+          <div ref={scrollRowRef} className="property-scroll-row" style={{ display: 'flex', gap: '20px', overflowX: 'auto', scrollSnapType: 'x mandatory', paddingBottom: '8px' }}>
+            {filteredProperties.map(p => {
+              const { rating, count, verifiedCount, isLive } = getDisplayRating(p);
+              return (
+                <div key={p.id} className="property-card" onClick={() => openModal(p)} style={{ cursor: 'pointer', borderRadius: '12px', flex: '0 0 260px', minWidth: '260px', maxWidth: '260px', scrollSnapAlign: 'start' }}>
+                  <div style={{ height: '220px', background: '#eee', overflow: 'hidden', position: 'relative', borderRadius: '12px' }}>
+                    <img src={p.image} alt={p.title} className="property-img" />
+                    {isLive && <span style={{ position: 'absolute', top: '12px', left: '12px', background: '#fff', color: '#8b3dff', fontSize: '10px', fontWeight: '700', padding: '4px 9px', borderRadius: '6px', boxShadow: '0 1px 4px rgba(0,0,0,0.2)' }}>ARIA Verified</span>}
+                    <span style={{ position: 'absolute', bottom: '10px', right: '10px', background: 'rgba(0,0,0,0.55)', color: '#fff', fontSize: '10px', fontWeight: '600', padding: '3px 8px', borderRadius: '6px', backdropFilter: 'blur(4px)' }}>📷 {p.images.length}</span>
                   </div>
-                  <p style={{ color: '#717171', fontSize: '13px', margin: '0 0 2px' }}>{p.location}</p>
-                  <p style={{ color: '#717171', fontSize: '13px', margin: '0 0 6px' }}>{p.tag}</p>
-                  <div style={{ fontSize: '14px', color: '#222' }}><span style={{ fontWeight: '600' }}>${p.price}</span> night</div>
+                  <div style={{ padding: '10px 2px 0' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '2px' }}>
+                      <h4 style={{ margin: 0, fontSize: '14px', fontWeight: '600', color: '#222' }}>{p.title}</h4>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '13px', flexShrink: 0, marginLeft: '8px' }}>
+                        <span style={{ color: '#222' }}>★</span>
+                        <span style={{ color: '#222' }}>{rating}</span>
+                        {verifiedCount > 0 && (
+                          <span title={`${verifiedCount} review${verifiedCount > 1 ? 's' : ''} from a real on-chain-escrow stay`} style={{ color: '#00913f', fontSize: '11px', fontWeight: '700' }}>✓{verifiedCount}</span>
+                        )}
+                      </div>
+                    </div>
+                    <p style={{ color: '#717171', fontSize: '13px', margin: '0 0 2px' }}>{p.location}</p>
+                    <p style={{ color: '#717171', fontSize: '13px', margin: '0 0 6px' }}>{p.tag}</p>
+                    <div style={{ fontSize: '14px', color: '#222' }}><span style={{ fontWeight: '600' }}>${p.price}</span> night</div>
+                  </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
+          <button type="button" aria-label="Scroll right" onClick={() => scrollRow(1)} className="scroll-arrow scroll-arrow-right">›</button>
         </div>
       </div>
 
