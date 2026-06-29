@@ -130,6 +130,10 @@ export async function initDB() {
 
   // Idempotent column additions for existing deployments
   await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS escrow_object_id TEXT`);
+  // Guest-declared party size at booking time (June 29, 2026) — previously
+  // never collected; createBooking() clamps/validates this against the
+  // property's maxGuests before writing it here.
+  await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS guests INTEGER DEFAULT 1`);
 
   // P2 / Phase 1i + 1j: host address actually baked into this booking's
   // on-chain escrow (see bookings.mjs getPropertyHostAddress), and the

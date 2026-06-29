@@ -200,8 +200,13 @@ fastify.get('/properties', async () => {
     // catalog's location/beds/baths/tag/image onto the new listing's
     // title/price. See ARIA_ROADMAP.md tech debt backlog.
     source: p.source,
+    // maxGuests is now set for both the fixed catalog (catalog.mjs PROPERTIES)
+    // and host-created DB rows, so it's surfaced unconditionally — the guest
+    // count stepper in the booking modal needs the cap for every property,
+    // not just imported listings.
+    maxGuests: p.maxGuests,
     ...(p.source === 'db' ? {
-      location: p.location, beds: p.beds, baths: p.baths, maxGuests: p.maxGuests,
+      location: p.location, beds: p.beds, baths: p.baths,
       tag: p.tag, images: p.images, description: p.description,
     } : {}),
   }));
@@ -410,9 +415,9 @@ fastify.post('/booking/create', {
   // (bookings.mjs) recomputes all of it from PROPERTIES/JURISDICTION_TAX_RATES
   // (Finding #1 / Phase 1a). Phase 2b: this is now the same shared function
   // ai_route.mjs's create_booking tool calls, so the two paths can't diverge.
-  const { propertyId } = request.body;
+  const { propertyId, guests } = request.body;
   const result = await createBooking({
-    propertyId, checkIn: request.body.checkIn, checkOut: request.body.checkOut, session, logger: fastify.log
+    propertyId, checkIn: request.body.checkIn, checkOut: request.body.checkOut, guests, session, logger: fastify.log
   });
 
   if (result.error) {

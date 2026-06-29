@@ -19,7 +19,10 @@ const propertyIdField = z.union([z.string(), z.number()]);
 export const bookingCreateSchema = z.object({
   propertyId: propertyIdField,
   checkIn: z.string().min(1, 'checkIn is required'),
-  checkOut: z.string().min(1, 'checkOut is required')
+  checkOut: z.string().min(1, 'checkOut is required'),
+  // Optional — createBooking() defaults to 1 and independently clamps/rejects
+  // against the property's maxGuests, so this schema only rejects malformed shapes.
+  guests: z.union([z.string(), z.number()]).optional()
 });
 
 export const paymentCreateIntentSchema = z.object({

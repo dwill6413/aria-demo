@@ -377,7 +377,7 @@ function buildConfirmationEmailHtml({ propertyTitle, bookingRef, checkIn, checkO
 // Returns { error } on validation/conflict failure (caller decides the HTTP
 // status / tool-result shape), or the full booking result including
 // escrowTxBytes on success.
-export async function createBooking({ propertyId, checkIn, checkOut, session, logger = console }) {
+export async function createBooking({ propertyId, checkIn, checkOut, guests, session, logger = console }) {
   if (!propertyId || !checkIn || !checkOut) {
     return { error: 'propertyId, checkIn, and checkOut are required' };
   }
@@ -420,6 +420,18 @@ export async function createBooking({ propertyId, checkIn, checkOut, session, lo
   const nights = Math.round((new Date(checkOutStr) - new Date(checkInStr)) / (1000 * 60 * 60 * 24));
   if (!nights || nights < 1 || nights > 90) {
     return { error: 'Stay length must be between 1 and 90 nights' };
+  }
+
+  // Guest count (June 29, 2026): defaults to 1 when omitted (older clients,
+  // existing AI tool-call shape). Doesn't affect pricing — purely an
+  // occupancy cap check against the property's maxGuests, enforced
+  // server-side since a client/LLM-supplied value can't be trusted.
+  const guestCount = guests == null || guests === '' ? 1 : Number(guests);
+  if (!Number.isInteger(guestCount) || guestCount < 1) {
+    return { error: 'Number of guests must be a positive whole number' };
+  }
+  if (guestCount > (prop.maxGuests ?? 2)) {
+    return { error: `This property sleeps up to ${prop.maxGuests ?? 2} guests` };
   }
 
   const jurisdiction  = { rate: prop.taxRate, name: prop.taxName, breakdown: prop.taxBreakdown };
@@ -470,10 +482,10 @@ export async function createBooking({ propertyId, checkIn, checkOut, session, lo
     await client.query(
       `INSERT INTO bookings (booking_ref, property_id, property_title, wallet_address, guest_name, guest_email,
         check_in, check_out, nights, price_per_night, subtotal, aria_fee, taxes, total_amount,
-        deposit_amount, payment_status, payment_method, deposit_status, original_wallet_address)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'confirmed','SuiUSD','pending',$4)`,
+        deposit_amount, payment_status, payment_method, deposit_status, original_wallet_address, guests)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'confirmed','SuiUSD','pending',$4,$16)`,
       [bookingRef, propertyId, propertyTitle, session.suiAddress, session.name, session.email,
-       checkInStr, checkOutStr, nights, pricePerNight, subtotal, ariaFee, taxes, bookingTotal, depositAmount]
+       checkInStr, checkOutStr, nights, pricePerNight, subtotal, ariaFee, taxes, bookingTotal, depositAmount, guestCount]
     );
     await client.query('COMMIT');
   } catch (err) {
@@ -487,7 +499,7 @@ export async function createBooking({ propertyId, checkIn, checkOut, session, lo
   const receipt = {
     bookingRef, app: 'ARIA Demo', network: 'sui:testnet',
     timestamp: new Date().toISOString(), property: propertyTitle, propertyId,
-    checkIn: checkInStr, checkOut: checkOutStr, nights,
+    checkIn: checkInStr, checkOut: checkOutStr, nights, guests: guestCount,
     breakdown: {
       pricePerNight: `$${pricePerNight}`, nights,
       subtotal: `$${subtotal}`,
@@ -607,7 +619,7 @@ export async function createBooking({ propertyId, checkIn, checkOut, session, lo
 
   return {
     success: true, bookingRef, property: propertyTitle,
-    checkIn: checkInStr, checkOut: checkOutStr, nights,
+    checkIn: checkInStr, checkOut: checkOutStr, nights, guests: guestCount,
     subtotal, ariaFee, taxes, bookingTotal, depositAmount, chargeAmount,
     jurisdiction: jurisdiction.name, taxRate: `${taxPct}%`,
     depositNote: escrowTxBytes

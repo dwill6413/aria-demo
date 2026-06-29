@@ -57,7 +57,8 @@ const GUEST_TOOLS = [
         properties: {
           propertyId: { type: 'number', description: 'Property ID — see AVAILABLE PROPERTIES in the system prompt for valid ids' },
           checkIn:    { type: 'string', description: 'Check-in date YYYY-MM-DD' },
-          checkOut:   { type: 'string', description: 'Check-out date YYYY-MM-DD' }
+          checkOut:   { type: 'string', description: 'Check-out date YYYY-MM-DD' },
+          guests:     { type: 'number', description: 'Number of guests staying. Defaults to 1 if not mentioned. Must not exceed the property\'s max occupancy shown in AVAILABLE PROPERTIES.' }
         },
         required: ['propertyId', 'checkIn', 'checkOut']
       }
@@ -215,7 +216,7 @@ const HOST_TOOLS = [
 async function catalogPromptSections() {
   const all = await getAllProperties();
   const props = all.map(p =>
-    `${p.id}. ${p.title} — $${p.price}/night — ${p.taxName || 'Unknown'}${p.location ? `, ${p.location}` : ''} (id:${p.id})`
+    `${p.id}. ${p.title} — $${p.price}/night — ${p.taxName || 'Unknown'}${p.location ? `, ${p.location}` : ''} — sleeps up to ${p.maxGuests ?? 2} (id:${p.id})`
   ).join('\n');
   const taxes = all.map(p =>
     `${p.id}. ${p.title} — ${(p.taxRate * 100).toFixed(2)}% (${p.taxBreakdown})`
@@ -354,8 +355,8 @@ async function executeTool(toolName, toolInput, session, isHost) {
     // Date-derived nights (not the LLM's stated `nights`) decide stay length —
     // see createBooking's comment on why client/LLM-supplied nights aren't trusted.
     if (toolName === 'create_booking') {
-      const { propertyId, checkIn, checkOut } = toolInput;
-      const result = await createBooking({ propertyId, checkIn, checkOut, session });
+      const { propertyId, checkIn, checkOut, guests } = toolInput;
+      const result = await createBooking({ propertyId, checkIn, checkOut, guests, session });
       return JSON.stringify(result);
     }
 

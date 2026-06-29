@@ -21,13 +21,17 @@
 // that case, same placeholder behavior as before this field existed. Once a
 // real host applies via /host/apply and is approved, set their sui_address
 // here so createBooking looks up their host_profiles.payout_sui_address.
+// maxGuests mirrors each property's bed count × 2 (matches PROPERTY_DISPLAY's
+// beds in pages/*.jsx) — the authoritative occupancy cap createBooking()
+// enforces server-side, since the cosmetic beds/baths fields themselves only
+// ever lived client-side for these 6 fixed demo properties.
 export const PROPERTIES = {
-  1: { title: 'Oceanfront Villa',    price: 285, hostAddress: null },
-  2: { title: 'Downtown Loft',       price: 145, hostAddress: null },
-  3: { title: 'Mountain Cabin',      price: 195, hostAddress: null },
-  4: { title: 'Desert Retreat',      price: 225, hostAddress: null },
-  5: { title: 'Lake House',          price: 320, hostAddress: null },
-  6: { title: 'Historic Brownstone', price: 175, hostAddress: null },
+  1: { title: 'Oceanfront Villa',    price: 285, hostAddress: null, maxGuests: 8 },
+  2: { title: 'Downtown Loft',       price: 145, hostAddress: null, maxGuests: 4 },
+  3: { title: 'Mountain Cabin',      price: 195, hostAddress: null, maxGuests: 6 },
+  4: { title: 'Desert Retreat',      price: 225, hostAddress: null, maxGuests: 6 },
+  5: { title: 'Lake House',          price: 320, hostAddress: null, maxGuests: 10 },
+  6: { title: 'Historic Brownstone', price: 175, hostAddress: null, maxGuests: 4 },
 };
 
 export const JURISDICTION_TAX_RATES = {
@@ -93,6 +97,7 @@ export async function getProperty(propertyId, logger = console) {
     const j = JURISDICTION_TAX_RATES[id] || { rate: 0.08, name: 'Unknown', breakdown: '8% occupancy tax (default)' };
     return {
       id, title: fixed.title, price: fixed.price, hostAddress: fixed.hostAddress,
+      maxGuests: fixed.maxGuests ?? 2,
       taxRate: j.rate, taxName: j.name, taxBreakdown: j.breakdown,
       active: true, source: 'catalog',
     };
@@ -114,7 +119,7 @@ export async function getProperty(propertyId, logger = console) {
 export async function getAllProperties(logger = console) {
   const fixed = Object.entries(PROPERTIES).map(([id, p]) => {
     const j = JURISDICTION_TAX_RATES[Number(id)] || { rate: 0.08, name: 'Unknown', breakdown: '8% occupancy tax (default)' };
-    return { id: Number(id), title: p.title, price: p.price, hostAddress: p.hostAddress, taxRate: j.rate, taxName: j.name, taxBreakdown: j.breakdown, active: true, source: 'catalog' };
+    return { id: Number(id), title: p.title, price: p.price, hostAddress: p.hostAddress, maxGuests: p.maxGuests ?? 2, taxRate: j.rate, taxName: j.name, taxBreakdown: j.breakdown, active: true, source: 'catalog' };
   });
   try {
     const r = await pool.query('SELECT * FROM properties WHERE active = true ORDER BY id');

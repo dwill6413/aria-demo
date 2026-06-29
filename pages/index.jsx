@@ -22,37 +22,37 @@ const PROPERTY_DISPLAY = [
     id: 1, title: 'Oceanfront Villa', location: 'Miami Beach, FL', price: 285, rating: 4.97, reviews: 124,
     image: 'https://images.unsplash.com/photo-1499793983690-e29da59ef1c2?w=600&q=80',
     images: ['https://images.unsplash.com/photo-1499793983690-e29da59ef1c2?w=800&q=80','https://images.unsplash.com/photo-1502005229762-cf1b2da7c5d6?w=800&q=80','https://images.unsplash.com/photo-1615571022219-eb45cf7faa9d?w=800&q=80','https://images.unsplash.com/photo-1571003123894-1f0594d2b5d9?w=800&q=80','https://images.unsplash.com/photo-1584132967334-10e028bd69f7?w=800&q=80'],
-    beds: 4, baths: 3, tag: 'Beachfront'
+    beds: 4, baths: 3, maxGuests: 8, tag: 'Beachfront'
   },
   {
     id: 2, title: 'Downtown Loft', location: 'Austin, TX', price: 145, rating: 4.89, reviews: 87,
     image: 'https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?w=600&q=80',
     images: ['https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?w=800&q=80','https://images.unsplash.com/photo-1560448204-e02f11c3d0e2?w=800&q=80','https://images.unsplash.com/photo-1484154218962-a197022b5858?w=800&q=80','https://images.unsplash.com/photo-1556909114-f6e7ad7d3136?w=800&q=80','https://images.unsplash.com/photo-1507089947368-19c1da9775ae?w=800&q=80'],
-    beds: 2, baths: 1, tag: 'City View'
+    beds: 2, baths: 1, maxGuests: 4, tag: 'City View'
   },
   {
     id: 3, title: 'Mountain Cabin', location: 'Asheville, NC', price: 195, rating: 4.95, reviews: 203,
     image: 'https://images.unsplash.com/photo-1542718610-a1d656d1884c?w=600&q=80',
     images: ['https://images.unsplash.com/photo-1542718610-a1d656d1884c?w=800&q=80','https://images.unsplash.com/photo-1518780664697-55e3ad937233?w=800&q=80','https://images.unsplash.com/photo-1510798831971-661eb04b3739?w=800&q=80','https://images.unsplash.com/photo-1506974210756-8e1b8985d348?w=800&q=80','https://images.unsplash.com/photo-1449158743715-0a90ebb6d2d8?w=800&q=80'],
-    beds: 3, baths: 2, tag: 'Nature'
+    beds: 3, baths: 2, maxGuests: 6, tag: 'Nature'
   },
   {
     id: 4, title: 'Desert Retreat', location: 'Scottsdale, AZ', price: 225, rating: 4.92, reviews: 156,
     image: 'https://images.unsplash.com/photo-1613977257363-707ba9348227?w=600&q=80',
     images: ['https://images.unsplash.com/photo-1613977257363-707ba9348227?w=800&q=80','https://images.unsplash.com/photo-1558618666-fcd25c85cd64?w=800&q=80','https://images.unsplash.com/photo-1571055107559-3e67626fa8be?w=800&q=80','https://images.unsplash.com/photo-1596394516093-501ba68a0ba6?w=800&q=80','https://images.unsplash.com/photo-1600607687920-4e2a09cf159d?w=800&q=80'],
-    beds: 3, baths: 2, tag: 'Pool'
+    beds: 3, baths: 2, maxGuests: 6, tag: 'Pool'
   },
   {
     id: 5, title: 'Lake House', location: 'Lake Tahoe, CA', price: 320, rating: 4.98, reviews: 91,
     image: 'https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?w=600&q=80',
     images: ['https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?w=800&q=80','https://images.unsplash.com/photo-1601918774946-25832a4be0d6?w=800&q=80','https://images.unsplash.com/photo-1505916349660-8d91a99f56e0?w=800&q=80','https://images.unsplash.com/photo-1571492913491-50e0083303f4?w=800&q=80','https://images.unsplash.com/photo-1520250497591-112f2f40a3f4?w=800&q=80'],
-    beds: 5, baths: 4, tag: 'Waterfront'
+    beds: 5, baths: 4, maxGuests: 10, tag: 'Waterfront'
   },
   {
     id: 6, title: 'Historic Brownstone', location: 'Brooklyn, NY', price: 175, rating: 4.85, reviews: 312,
     image: 'https://images.unsplash.com/photo-1570129477492-45c003edd2be?w=600&q=80',
     images: ['https://images.unsplash.com/photo-1570129477492-45c003edd2be?w=800&q=80','https://images.unsplash.com/photo-1555636222-cae831e670b3?w=800&q=80','https://images.unsplash.com/photo-1600585154340-be6161a56a0c?w=800&q=80','https://images.unsplash.com/photo-1600047509807-ba8f99d2cdde?w=800&q=80','https://images.unsplash.com/photo-1586023492125-27b2c045efd7?w=800&q=80'],
-    beds: 2, baths: 2, tag: 'Historic'
+    beds: 2, baths: 2, maxGuests: 4, tag: 'Historic'
   },
 ];
 
@@ -77,6 +77,10 @@ export default function Home() {
   const [bookingLoading, setBookingLoading] = useState(false);
   const [checkIn, setCheckIn] = useState(null);
   const [checkOut, setCheckOut] = useState(null);
+  // Guest count (June 29, 2026) — doesn't affect pricing, just an occupancy
+  // cap check against the selected property's maxGuests (see catalog.mjs /
+  // bookings.mjs). Reset to 1 whenever the modal opens/closes.
+  const [guests, setGuests] = useState(1);
   const [searchLocation, setSearchLocation] = useState('All Locations');
   const [searchCheckIn, setSearchCheckIn] = useState(null);
   const [searchCheckOut, setSearchCheckOut] = useState(null);
@@ -113,8 +117,8 @@ export default function Home() {
   const getCardTotal     = (p, n) => (getChargeTotal(p, n) * 1.029 + 0.30).toFixed(2);
   const getCardFee       = (p, n) => (getChargeTotal(p, n) * 0.029 + 0.30).toFixed(2);
 
-  const openModal  = (p) => { setSelected(p); setBooking(null); setCheckIn(null); setCheckOut(null); setPhotoIndex(0); setTermsAccepted(false); setEscrowStatus(null); setEscrowError(''); };
-  const closeModal = () => { setSelected(null); setBooking(null); setCheckIn(null); setCheckOut(null); setPhotoIndex(0); setTermsAccepted(false); setEscrowStatus(null); setEscrowError(''); };
+  const openModal  = (p) => { setSelected(p); setBooking(null); setCheckIn(null); setCheckOut(null); setGuests(1); setPhotoIndex(0); setTermsAccepted(false); setEscrowStatus(null); setEscrowError(''); };
+  const closeModal = () => { setSelected(null); setBooking(null); setCheckIn(null); setCheckOut(null); setGuests(1); setPhotoIndex(0); setTermsAccepted(false); setEscrowStatus(null); setEscrowError(''); };
 
   const handleSearch = () => {
     let results = properties;
@@ -155,13 +159,13 @@ export default function Home() {
         // (the `properties` table also starts counting at 1), which would
         // otherwise overlay the wrong demo property's display fields here.
         const fixed = p.source === 'catalog' ? PROPERTY_DISPLAY.find(f => f.id === p.id) : null;
-        if (fixed) return { ...fixed, title: p.title, price: p.price, taxRate: p.taxRate, taxName: p.taxName };
+        if (fixed) return { ...fixed, title: p.title, price: p.price, taxRate: p.taxRate, taxName: p.taxName, maxGuests: p.maxGuests ?? fixed.maxGuests };
         return {
           id: p.id, title: p.title, price: p.price, taxRate: p.taxRate, taxName: p.taxName,
           location: p.location || 'Location not set', rating: 0, reviews: 0,
           image: (p.images && p.images[0]) || PLACEHOLDER_IMAGE,
           images: (p.images && p.images.length ? p.images : [PLACEHOLDER_IMAGE]),
-          beds: p.beds ?? 1, baths: p.baths ?? 1, tag: p.tag || 'New Listing',
+          beds: p.beds ?? 1, baths: p.baths ?? 1, maxGuests: p.maxGuests ?? 2, tag: p.tag || 'New Listing',
         };
       });
       setProperties(merged);
@@ -215,6 +219,8 @@ export default function Home() {
   const handleBooking = async () => {
     if (!checkIn || !checkOut) { alert('Please select check-in and check-out dates'); return; }
     if (nights < 1) { alert('Check-out must be after check-in'); return; }
+    if (!guests || guests < 1) { alert('Please enter at least 1 guest'); return; }
+    if (selected?.maxGuests && guests > selected.maxGuests) { alert(`This property sleeps up to ${selected.maxGuests} guests`); return; }
     // Proactive gate: if we already know this guest hasn't completed Seal/Walrus
     // identity verification, send them to /profile before even hitting the
     // backend (which will reject it anyway once REQUIRE_GUEST_VERIFICATION is
@@ -230,7 +236,7 @@ export default function Home() {
     setEscrowError('');
     const res = await authFetch(`${API}/booking/create`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ propertyId: selected.id, checkIn: checkIn.toISOString().split('T')[0], checkOut: checkOut.toISOString().split('T')[0] }) // R7: server derives title/price/nights/total from catalog.mjs
+      body: JSON.stringify({ propertyId: selected.id, checkIn: checkIn.toISOString().split('T')[0], checkOut: checkOut.toISOString().split('T')[0], guests }) // R7: server derives title/price/nights/total from catalog.mjs
     });
     const data = await res.json();
     if (data.error === 'Property not available for selected dates') { alert('Sorry — those dates are already booked. Please select different dates.'); setBookingLoading(false); return; }
@@ -622,6 +628,21 @@ export default function Home() {
                   </div>
                 </div>
                 {checkIn && checkOut && nights > 0 && <div style={{ marginTop: '8px', fontSize: '13px', color: '#00ff44', textAlign: 'center' }}>{nights} night{nights > 1 ? 's' : ''} selected</div>}
+              </div>
+
+              <div style={{ marginBottom: '20px' }}>
+                <div style={{ fontSize: '13px', color: '#888', marginBottom: '8px', fontWeight: '600' }}>GUESTS</div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#1a1a1a', borderRadius: '8px', padding: '10px 14px' }}>
+                  <span style={{ fontSize: '14px', color: '#fff' }}>
+                    Number of guests
+                    {selected?.maxGuests && <span style={{ color: '#555', fontSize: '12px' }}> (max {selected.maxGuests})</span>}
+                  </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    <button type="button" onClick={() => setGuests(g => Math.max(1, g - 1))} disabled={guests <= 1} className="guest-step-btn" style={{ width: '28px', height: '28px', borderRadius: '50%', border: '1px solid #333', background: '#0d0d0d', color: guests <= 1 ? '#444' : '#fff', cursor: guests <= 1 ? 'not-allowed' : 'pointer' }}>−</button>
+                    <span style={{ fontSize: '15px', fontWeight: '600', minWidth: '16px', textAlign: 'center' }}>{guests}</span>
+                    <button type="button" onClick={() => setGuests(g => Math.min(selected?.maxGuests || 16, g + 1))} disabled={selected?.maxGuests && guests >= selected.maxGuests} className="guest-step-btn" style={{ width: '28px', height: '28px', borderRadius: '50%', border: '1px solid #333', background: '#0d0d0d', color: (selected?.maxGuests && guests >= selected.maxGuests) ? '#444' : '#fff', cursor: (selected?.maxGuests && guests >= selected.maxGuests) ? 'not-allowed' : 'pointer' }}>+</button>
+                  </div>
+                </div>
               </div>
 
               {checkIn && checkOut && nights > 0 && (
