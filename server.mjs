@@ -12,7 +12,8 @@ import { Resend } from 'resend';
 import { registerAIRoute } from './ai_route.mjs';
 import { handleZkLoginCallback, getSession, deleteSession } from './auth.mjs';
 import { initDB, pool } from './db.mjs';
-import { PROPERTIES, JURISDICTION_TAX_RATES } from './catalog.mjs';
+import { PROPERTIES, JURISDICTION_TAX_RATES, getProperty, getAllProperties } from './catalog.mjs';
+import { extractListingFields } from './listing_import.mjs';
 import {
   verifyEscrowTransaction, autoReleaseEscrow,
   buildClaimDamageTransaction, buildDisputeClaimTransaction,
@@ -24,16 +25,18 @@ import {
   buildListForResaleTransaction, buildBuyResaleTransaction,
   buildCancelResaleListingTransaction, verifyBuyResaleTransaction,
   verifyListResaleTransaction, verifyCancelResaleTransaction,
+  readResalePolicyObject, normalizeAddr,
   dollarsToUnits
 } from './escrow.mjs';
 import { createBooking, releaseDepositForBooking, cancelBooking, hostManagesBooking, getPropertyHostAddress, getResaleSettings } from './bookings.mjs';
-import { pushToWalrus } from './walrus.mjs';
+import { pushToWalrus, pushImageToWalrus } from './walrus.mjs';
 import { escapeHtml } from './emails.mjs';
 import {
   bookingCreateSchema, paymentCreateIntentSchema, hostApplySchema, validateBody,
   claimDamageSchema, claimDamageConfirmSchema, disputeClaimSchema, disputeClaimConfirmSchema, resolveDisputeSchema,
   guestProfileSchema,
-  resaleListSchema, resaleTransferConfirmSchema, resaleSettingsSchema
+  resaleListSchema, resaleTransferConfirmSchema, resaleSettingsSchema,
+  propertyCreateSchema, listingExtractSchema, listingBulkExtractSchema, listingPhotoSchema
 } from './validation.mjs';
 
 dotenvConfig();
@@ -172,17 +175,27 @@ fastify.get('/health', async () => {
 // frontend pages (index.jsx, host.jsx) fetch this at load and merge it into
 // their local display-only arrays (images, ratings, location, beds/baths,
 // tags) so price/title/tax-rate have one source of truth instead of three.
+// Phase 3a: now backed by catalog.mjs's getAllProperties(), which merges the
+// 6 fixed demo properties with any active host-created rows from the
+// `properties` table (imported via Airbnb/VRBO or entered manually — see
+// POST /host/properties below). Dynamic rows additionally carry the cosmetic
+// fields (location/beds/baths/images/tag) that the fixed 6 keep client-side
+// in PROPERTY_DISPLAY, since there's no local fallback for an id the frontend
+// doesn't already know about — pages/index.jsx and host.jsx read these to
+// render a card for a property they've never seen before.
 fastify.get('/properties', async () => {
-  const properties = Object.entries(PROPERTIES).map(([id, p]) => {
-    const jurisdiction = JURISDICTION_TAX_RATES[Number(id)];
-    return {
-      id: Number(id),
-      title: p.title,
-      price: p.price,
-      taxRate: jurisdiction?.rate ?? 0.08,
-      taxName: jurisdiction?.name ?? 'Occupancy Tax',
-    };
-  });
+  const all = await getAllProperties();
+  const properties = all.map(p => ({
+    id: p.id,
+    title: p.title,
+    price: p.price,
+    taxRate: p.taxRate,
+    taxName: p.taxName,
+    ...(p.source === 'db' ? {
+      location: p.location, beds: p.beds, baths: p.baths, maxGuests: p.maxGuests,
+      tag: p.tag, images: p.images, description: p.description,
+    } : {}),
+  }));
   return { properties };
 });
 
@@ -346,14 +359,14 @@ fastify.post('/payment/create-intent', async (request, reply) => {
 
   const { propertyId } = request.body;
   const nights = Number(request.body.nights);
-  const prop = PROPERTIES[Number(propertyId)];
-  if (!prop) return reply.code(400).send({ error: 'propertyId must be between 1 and 6' });
+  const prop = await getProperty(propertyId);
+  if (!prop) return reply.code(400).send({ error: 'Unknown propertyId' });
   if (!nights || nights < 1 || nights > 90)
     return reply.code(400).send({ error: 'nights must be between 1 and 90' });
 
   // Server-authoritative charge total — mirrors /booking/create's math.
   // Never trust a client-sent `amount` for a real Stripe charge (Finding #1).
-  const jurisdiction  = JURISDICTION_TAX_RATES[Number(propertyId)] || { rate: 0.08, name: 'Unknown' };
+  const jurisdiction  = { rate: prop.taxRate, name: prop.taxName };
   const subtotal      = prop.price * nights;
   const ariaFee       = Math.round(subtotal * 0.05);
   const taxes         = Math.round(subtotal * jurisdiction.rate);
@@ -1026,6 +1039,36 @@ fastify.post('/pass/:bookingRef/list-resale', {
     return reply.code(400).send({ error: 'Both escrows must be active to list for resale' });
   if (booking.resale_listed)
     return reply.code(409).send({ error: 'This booking is already listed for resale' });
+
+  // Self-heal: list_for_resale burns the BookingPass and flips the on-chain
+  // ResalePolicy in the SAME tx that the seller signs — before the backend
+  // ever sees /list-resale/confirm. If a prior attempt signed+submitted
+  // successfully but confirm never completed (a transient verify error, a
+  // dropped response, the tab closing), Postgres never learned about it and
+  // booking_pass_object_id still points at an object that's now gone.
+  // Rebuilding a fresh PTB against it would fail forever with "Object not
+  // found" — so check the policy's live on-chain state FIRST and reconcile
+  // directly if it shows this seller already listed it, instead of looping
+  // on a dead rebuild.
+  const policyState = await readResalePolicyObject(booking.resale_policy_object_id, { logger: fastify.log });
+  if (policyState?.fields?.listed) {
+    if (normalizeAddr(policyState.fields.seller) !== normalizeAddr(session.suiAddress)) {
+      return reply.code(409).send({ error: 'This booking pass was already listed on-chain by a different signer' });
+    }
+    const onChainAsk = Number(policyState.fields.ask_price) / 1000;
+    try {
+      await pool.query(
+        `UPDATE bookings SET resale_listed=true, resale_ask_price=$1 WHERE booking_ref=$2 AND wallet_address=$3`,
+        [Math.round(onChainAsk) || bookingFaceDollars(booking), bookingRef, session.suiAddress]
+      );
+    } catch (err) {
+      fastify.log.error({ err, bookingRef }, 'list-resale: self-heal persist failed');
+      return reply.code(500).send({ error: 'This listing already succeeded on-chain but saving it failed — contact support' });
+    }
+    fastify.log.info({ bookingRef }, 'list-resale: self-healed from a prior unconfirmed listing');
+    return { success: true, alreadyListed: true, askPrice: onChainAsk, faceValue: bookingFaceDollars(booking) };
+  }
+
   if ((booking.resale_count || 0) >= MAX_RESALE_HOPS)
     return reply.code(400).send({ error: 'This booking has already been resold (one resale per booking)' });
 
@@ -1084,12 +1127,15 @@ fastify.post('/pass/:bookingRef/list-resale/confirm', {
   const askPrice = Number(request.body.askPrice ?? booking.resale_ask_price);
   let v;
   try {
-    v = await verifyListResaleTransaction(digest, session.suiAddress, booking.resale_policy_object_id);
+    v = await verifyListResaleTransaction(digest, session.suiAddress, booking.resale_policy_object_id, fastify.log);
   } catch (err) {
     fastify.log.error({ err, digest, bookingRef }, 'list-resale verification failed');
-    return reply.code(502).send({ error: 'Could not verify the listing on-chain — it may still be processing.' });
+    return reply.code(503).send({ error: 'Could not verify the listing on-chain — it may still be processing.', retryable: true });
   }
-  if (!v.ok) return reply.code(400).send({ error: v.reason || 'Listing could not be verified on-chain' });
+  if (!v.ok) {
+    fastify.log.warn({ bookingRef, digest, reason: v.reason, retryable: !!v.retryable }, 'List-resale verification rejected');
+    return reply.code(v.retryable ? 503 : 400).send({ error: v.reason || 'Listing could not be verified on-chain', retryable: !!v.retryable });
+  }
 
   try {
     await pool.query(
@@ -1117,6 +1163,24 @@ fastify.post('/pass/:bookingRef/cancel-resale', {
   if (error) return reply.code(status).send({ error });
   if (!booking.resale_listed) return reply.code(400).send({ error: 'This booking is not currently listed' });
   if (!booking.resale_policy_object_id) return reply.code(400).send({ error: 'No resale policy for this booking' });
+
+  // Self-heal (same reasoning as /list-resale above): if a prior cancel
+  // already landed on-chain but confirm never persisted it, the policy
+  // already shows listed=false even though Postgres still thinks it's live.
+  const cancelPolicyState = await readResalePolicyObject(booking.resale_policy_object_id, { logger: fastify.log });
+  if (cancelPolicyState?.fields && cancelPolicyState.fields.listed === false) {
+    try {
+      await pool.query(
+        `UPDATE bookings SET resale_listed=false, resale_ask_price=NULL WHERE booking_ref=$1 AND wallet_address=$2`,
+        [bookingRef, session.suiAddress]
+      );
+    } catch (err) {
+      fastify.log.error({ err, bookingRef }, 'cancel-resale: self-heal persist failed');
+      return reply.code(500).send({ error: 'This cancellation already succeeded on-chain but saving it failed — contact support' });
+    }
+    fastify.log.info({ bookingRef }, 'cancel-resale: self-healed from a prior unconfirmed cancel');
+    return { success: true, alreadyUnlisted: true };
+  }
 
   let built;
   try {
@@ -1148,12 +1212,15 @@ fastify.post('/pass/:bookingRef/cancel-resale/confirm', {
 
   let v;
   try {
-    v = await verifyCancelResaleTransaction(digest, session.suiAddress, booking.resale_policy_object_id);
+    v = await verifyCancelResaleTransaction(digest, session.suiAddress, booking.resale_policy_object_id, fastify.log);
   } catch (err) {
     fastify.log.error({ err, digest, bookingRef }, 'cancel-resale verification failed');
-    return reply.code(502).send({ error: 'Could not verify the cancel on-chain — it may still be processing.' });
+    return reply.code(503).send({ error: 'Could not verify the cancel on-chain — it may still be processing.', retryable: true });
   }
-  if (!v.ok) return reply.code(400).send({ error: v.reason || 'Cancel could not be verified on-chain' });
+  if (!v.ok) {
+    fastify.log.warn({ bookingRef, digest, reason: v.reason, retryable: !!v.retryable }, 'Cancel-resale verification rejected');
+    return reply.code(v.retryable ? 503 : 400).send({ error: v.reason || 'Cancel could not be verified on-chain', retryable: !!v.retryable });
+  }
 
   try {
     await pool.query(
@@ -1351,7 +1418,7 @@ fastify.post('/host/property/:propertyId/resale-settings', {
   if (validateBody(resaleSettingsSchema, request, reply)) return;
 
   const propertyId = Number(request.params.propertyId);
-  if (!Number.isInteger(propertyId) || !PROPERTIES[propertyId])
+  if (!Number.isInteger(propertyId) || !(await getProperty(propertyId)))
     return reply.code(400).send({ error: 'Unknown propertyId' });
   // Property-scoped: a non-superadmin host may only set their own listings.
   if (!(await canManageProperty(session, propertyId)) && !HOST_ADDRESSES.includes((session.email || '').toLowerCase()))
@@ -1379,6 +1446,133 @@ fastify.post('/host/property/:propertyId/resale-settings', {
 });
 
 // Walrus push helper now lives in walrus.mjs (R3) and is imported above.
+
+// ── Phase 3a: host-created listings ───────────────────────────────────────────
+// Three routes, in the order a host actually uses them:
+//   1. POST /host/listings/extract       — paste one listing's text -> AI draft (no DB write)
+//   2. POST /host/listings/bulk-extract  — paste many at once -> array of drafts (no DB write)
+//   3. POST /host/properties             — host reviews/edits a draft (or types one from
+//                                           scratch) and this is what actually persists it.
+// Extraction never touches the DB; only #3 does, and #3 doesn't care whether
+// its input came from extraction or a blank form — same validation either way.
+// This keeps "AI-paste" a thin convenience layer over manual entry rather than
+// a separate trust path.
+
+fastify.post('/host/listings/extract', {
+  config: { rateLimit: { max: 30, timeWindow: '1 hour', errorResponseBuilder: () => ({ error: 'Too many import attempts. Try again later.' }) } }
+}, async (request, reply) => {
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
+  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
+  if (validateBody(listingExtractSchema, request, reply)) return;
+
+  const { text, url } = request.body;
+  const draft = await extractListingFields(text, url, fastify.log);
+  if (draft.error) return reply.code(422).send({ error: draft.error });
+  return { draft };
+});
+
+fastify.post('/host/listings/bulk-extract', {
+  config: { rateLimit: { max: 5, timeWindow: '1 hour', errorResponseBuilder: () => ({ error: 'Too many bulk import attempts. Try again later.' }) } }
+}, async (request, reply) => {
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
+  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
+  if (validateBody(listingBulkExtractSchema, request, reply)) return;
+
+  const { listings } = request.body;
+  // Sequential, not Promise.all — a host's "dozens or hundreds" of pasted
+  // listings should not fan out into dozens of simultaneous Grok calls from
+  // one request; this trades a bit of latency for not hammering the xAI rate
+  // limit (and for clearer per-item error attribution if one block is junk).
+  const results = [];
+  for (const { text, url } of listings) {
+    const draft = await extractListingFields(text, url, fastify.log);
+    results.push(draft.error ? { error: draft.error } : { draft });
+  }
+  return { results, succeeded: results.filter(r => !r.error).length, failed: results.filter(r => r.error).length };
+});
+
+fastify.post('/host/listings/photo', {
+  config: { rateLimit: { max: 100, timeWindow: '1 hour', errorResponseBuilder: () => ({ error: 'Too many photo uploads. Try again later.' }) } }
+}, async (request, reply) => {
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
+  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
+  if (validateBody(listingPhotoSchema, request, reply)) return;
+
+  const match = /^data:image\/(png|jpe?g|webp|gif);base64,(.+)$/.exec(request.body.dataUrl);
+  if (!match) return reply.code(400).send({ error: 'dataUrl must be a base64-encoded PNG, JPEG, WEBP, or GIF image' });
+
+  let buffer;
+  try { buffer = Buffer.from(match[2], 'base64'); }
+  catch { return reply.code(400).send({ error: 'Could not decode image data' }); }
+  if (buffer.length > 6 * 1024 * 1024) return reply.code(400).send({ error: 'Image is too large (max 6MB)' });
+
+  const url = await pushImageToWalrus(buffer, fastify.log);
+  if (!url) return reply.code(502).send({ error: 'Could not upload image — try again' });
+  return { url };
+});
+
+fastify.post('/host/properties', {
+  config: { rateLimit: { max: 50, timeWindow: '1 hour', errorResponseBuilder: () => ({ error: 'Too many listings created. Try again later.' }) } }
+}, async (request, reply) => {
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
+  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
+  if (validateBody(propertyCreateSchema, request, reply)) return;
+
+  const {
+    title, description, location, price, beds, baths, maxGuests, tag, images,
+    taxRate, taxJurisdiction, taxBreakdown, sourceUrl, importSource
+  } = request.body;
+
+  // Never trust a host-declared number as-is, even though this is a draft the
+  // host themselves typed/edited — same principle as catalog.mjs's fixed
+  // prices: server clamps, server is authoritative, always. taxRate is capped
+  // to [0, 0.20] per db.mjs's Phase 3a comment so a typo (or a bad-faith host)
+  // can't inflate every future booking's tax line for this listing.
+  const cleanPrice = Math.max(0, Math.round(Number(price) || 0));
+  const cleanBeds = Math.min(50, Math.max(1, Math.round(Number(beds) || 1)));
+  const cleanBaths = Math.min(50, Math.max(1, Math.round(Number(baths) || 1)));
+  const cleanMaxGuests = Math.min(100, Math.max(1, Math.round(Number(maxGuests) || cleanBeds * 2)));
+  let cleanTaxRate = Number(taxRate);
+  if (!Number.isFinite(cleanTaxRate)) cleanTaxRate = 0.08;
+  cleanTaxRate = Math.min(0.20, Math.max(0, cleanTaxRate));
+  const cleanImages = Array.isArray(images) ? images.slice(0, 20).filter(u => typeof u === 'string' && u.length < 2000) : [];
+
+  if (cleanPrice <= 0) return reply.code(400).send({ error: 'price must be greater than 0' });
+
+  try {
+    const r = await pool.query(
+      `INSERT INTO properties
+         (host_address, title, description, location, price, beds, baths, tag, images,
+          tax_rate, tax_jurisdiction, tax_breakdown, max_guests, source_url, import_source, host_email, active)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,true)
+       RETURNING *`,
+      [
+        session.suiAddress, title.trim(), (description || '').trim(), location.trim(), cleanPrice,
+        cleanBeds, cleanBaths, (tag || 'New Listing').trim(), cleanImages,
+        cleanTaxRate, (taxJurisdiction || 'Unknown').trim(), (taxBreakdown || `${(cleanTaxRate * 100).toFixed(2)}% occupancy tax (host-declared)`).trim(),
+        cleanMaxGuests, (sourceUrl || null), (importSource || 'manual'), (session.email || null)
+      ]
+    );
+    const row = r.rows[0];
+    fastify.log.info({ propertyId: row.id, host: session.suiAddress, importSource: row.import_source }, 'New host listing created');
+    return reply.code(201).send({
+      success: true,
+      property: {
+        id: row.id, title: row.title, description: row.description, location: row.location,
+        price: row.price, beds: row.beds, baths: row.baths, maxGuests: row.max_guests,
+        tag: row.tag, images: row.images || [], taxRate: Number(row.tax_rate), taxName: row.tax_jurisdiction,
+        sourceUrl: row.source_url, importSource: row.import_source
+      }
+    });
+  } catch (err) {
+    fastify.log.error({ err }, '/host/properties insert failed');
+    return reply.code(500).send({ error: 'Could not create listing' });
+  }
+});
 
 // Bookings History — guest (own bookings only)
 fastify.get('/bookings/history', async (request, reply) => {

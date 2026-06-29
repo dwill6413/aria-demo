@@ -124,7 +124,21 @@ export default function Bookings() {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ askPrice: ask }),
       });
       const built = await buildRes.json();
-      if (!buildRes.ok || !built.listTxBytes) throw new Error(built.error || 'Could not prepare the listing');
+      if (!buildRes.ok) {
+        const msg = built.error || 'Could not prepare the listing';
+        throw new Error(built.retryable ? `${msg} Please try again in a moment.` : msg);
+      }
+      // Self-heal path: the backend detected this exact listing already
+      // succeeded on-chain from an earlier attempt (e.g. confirm failed last
+      // time after the tx had already landed) and reconciled it directly —
+      // there's nothing left to sign.
+      if (built.alreadyListed) {
+        setResaleStatus('done');
+        await refreshBookings();
+        setTimeout(() => { setListModal(null); setResaleStatus('idle'); }, 1200);
+        return;
+      }
+      if (!built.listTxBytes) throw new Error(built.error || 'Could not prepare the listing');
       const signature = await signTransactionWithZkLogin(fromBase64(built.listTxBytes));
       setResaleStatus('submitting');
       const digest = await submitSignedTransaction(built.listTxBytes, signature);
@@ -133,7 +147,15 @@ export default function Bookings() {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ digest, askPrice: ask }),
       });
       const confirmData = await confirmRes.json();
-      if (!confirmRes.ok || !confirmData.success) throw new Error(confirmData.error || 'Listing could not be verified on-chain');
+      if (!confirmRes.ok || !confirmData.success) {
+        const msg = confirmData.error || 'Listing could not be verified on-chain';
+        // Retryable (e.g. a transient RPC blip): the tx most likely already
+        // succeeded on-chain. Clicking "List for Resale" again will re-check
+        // on-chain state first and self-heal instead of rebuilding blind.
+        throw new Error(confirmData.retryable
+          ? `${msg} It may already be confirmed — try "List for Resale" again in a moment.`
+          : msg);
+      }
       setResaleStatus('done');
       await refreshBookings();
       setTimeout(() => { setListModal(null); setResaleStatus('idle'); }, 1200);
@@ -150,14 +172,21 @@ export default function Bookings() {
     try {
       const buildRes = await authFetch(`${API}/pass/${b.bookingRef}/cancel-resale`, { method: 'POST' });
       const built = await buildRes.json();
-      if (!buildRes.ok || !built.cancelTxBytes) throw new Error(built.error || 'Could not prepare the cancellation');
+      if (!buildRes.ok) throw new Error(built.error || 'Could not prepare the cancellation');
+      // Self-heal path — see submitListResale's comment above for why this
+      // can happen and why there's nothing left to sign here.
+      if (built.alreadyUnlisted) { await refreshBookings(); setResaleBusyRef(null); return; }
+      if (!built.cancelTxBytes) throw new Error(built.error || 'Could not prepare the cancellation');
       const signature = await signTransactionWithZkLogin(fromBase64(built.cancelTxBytes));
       const digest = await submitSignedTransaction(built.cancelTxBytes, signature);
       const confirmRes = await authFetch(`${API}/pass/${b.bookingRef}/cancel-resale/confirm`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ digest }),
       });
       const confirmData = await confirmRes.json();
-      if (!confirmRes.ok || !confirmData.success) throw new Error(confirmData.error || 'Could not verify the cancellation');
+      if (!confirmRes.ok || !confirmData.success) {
+        const msg = confirmData.error || 'Could not verify the cancellation';
+        throw new Error(confirmData.retryable ? `${msg} Try again in a moment.` : msg);
+      }
       await refreshBookings();
     } catch (err) {
       console.error('Cancel listing failed:', err);

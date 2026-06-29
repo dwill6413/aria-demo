@@ -34,3 +34,35 @@ export async function pushToWalrus(data, logger = console) {
     return null;
   }
 }
+
+// ── Phase 3a: host listing photos ─────────────────────────────────────────────
+// Sibling to pushToWalrus above, but for raw binary image bytes instead of a
+// JSON receipt — used by POST /host/listings/photos so host-uploaded listing
+// photos get a public URL without standing up separate file-storage
+// infrastructure (S3, etc.) for what's still a testnet demo. Same publisher/
+// epoch tradeoffs as pushToWalrus apply (53-day expiry, not literally
+// permanent). Returns the public aggregator URL directly (not just the
+// blobId) since that's what the `properties.images` column stores and what
+// <img src> needs — same aggregator pattern already used by lib/seal.js,
+// pages/index.jsx, pages/host.jsx, and pages/bookings.jsx for other blobs.
+const WALRUS_AGGREGATOR_URL = 'https://aggregator.walrus-testnet.walrus.space/v1/blobs';
+
+export async function pushImageToWalrus(buffer, logger = console) {
+  try {
+    const res = await fetch(WALRUS_PUBLISHER_URL, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: buffer,
+    });
+    const json = await res.json();
+    const blobId = json?.newlyCreated?.blobObject?.blobId ?? json?.alreadyCertified?.blobId ?? null;
+    if (!blobId) {
+      logger?.warn?.({ json }, 'Walrus image push: no blobId in response');
+      return null;
+    }
+    return `${WALRUS_AGGREGATOR_URL}/${blobId}`;
+  } catch (err) {
+    logger?.warn?.({ err: err.message }, 'Walrus image push failed');
+    return null;
+  }
+}

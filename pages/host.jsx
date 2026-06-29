@@ -28,6 +28,19 @@ const PROPERTY_DISPLAY = [
   { id: 6, title: 'Historic Brownstone', location: 'Brooklyn, NY', price: 175, beds: 2, baths: 2, tag: 'Historic', image: 'https://images.unsplash.com/photo-1570129477492-45c003edd2be?w=600&q=80' },
 ];
 
+// Fallback thumbnail for a host-created listing that has no photos uploaded
+// yet — keeps the listings grid from showing a broken <img>.
+const PLACEHOLDER_IMAGE = 'https://images.unsplash.com/photo-1560448204-603b3fc33ddc?w=600&q=80';
+
+// Phase 3a: a blank draft for the manual-entry path of Add Property — same
+// shape extractListingFields() returns, so the review form and its submit
+// handler work identically whether the draft came from AI extraction or a
+// host just typing into an empty form.
+const blankDraft = () => ({
+  title: '', description: '', location: '', price: 150, beds: 1, baths: 1, maxGuests: 2,
+  tag: 'New Listing', images: [], taxRate: 0.08, taxJurisdiction: 'Unknown', sourceUrl: '', importSource: 'manual'
+});
+
 export default function Host() {
   const router = useRouter();
   const [user, setUser] = useState(null);
@@ -47,6 +60,20 @@ export default function Host() {
   const [resaleSettings, setResaleSettings] = useState({}); // { [propertyId]: { transferAllowed, maxPremiumBps } }
   const [resaleEnabled, setResaleEnabled] = useState(false); // global flag (RESALE_ENABLED)
   const [savingResale, setSavingResale] = useState({});      // { [propertyId]: true } while saving
+
+  // Phase 3a: Add Property (manual entry + AI-paste import + bulk import)
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [addMode, setAddMode] = useState('import'); // 'import' | 'manual' | 'bulk'
+  const [importUrl, setImportUrl] = useState('');
+  const [importText, setImportText] = useState('');
+  const [extracting, setExtracting] = useState(false);
+  const [extractError, setExtractError] = useState('');
+  const [draft, setDraft] = useState(null); // reviewed/edited fields, ready to publish
+  const [publishing, setPublishing] = useState(false);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [bulkBlocks, setBulkBlocks] = useState([{ url: '', text: '' }]);
+  const [bulkExtracting, setBulkExtracting] = useState(false);
+  const [bulkDrafts, setBulkDrafts] = useState([]); // [{ draft|error, publishing, published }]
 
   const copyAddr = () => {
     navigator.clipboard.writeText(user?.address);
@@ -108,17 +135,36 @@ export default function Host() {
       })
       .catch(() => { router.push('/'); });
 
-    // Merge authoritative price/title from catalog.mjs (Phase 2a fix) —
-    // cosmetic fields (image, location, beds/baths, tag) stay local.
+    refreshProperties();
+  }, []);
+
+  // Merge authoritative price/title from catalog.mjs (Phase 2a fix) for the 6
+  // fixed demo properties — cosmetic fields (image, location, beds/baths, tag)
+  // stay local for those. For host-created/imported listings (Phase 3a), which
+  // aren't in PROPERTY_DISPLAY at all, synthesize display fields from the
+  // cosmetic data GET /properties now returns for source==='db' rows, so a
+  // newly created listing actually shows up here instead of being silently
+  // dropped. Exported so handlePublish/handleBulkPublishOne can re-pull the
+  // list after creating a property.
+  const refreshProperties = () => {
     fetch(`${API}/properties`).then(r => r.json()).then(d => {
       if (!Array.isArray(d.properties)) return;
-      const live = new Map(d.properties.map(p => [p.id, p]));
-      setProperties(PROPERTY_DISPLAY.map(p => {
-        const l = live.get(p.id);
-        return l ? { ...p, title: l.title, price: l.price } : p;
-      }));
+      const merged = d.properties.map(p => {
+        const fixed = PROPERTY_DISPLAY.find(f => f.id === p.id);
+        if (fixed) return { ...fixed, title: p.title, price: p.price };
+        return {
+          id: p.id, title: p.title, price: p.price,
+          location: p.location || 'Location not set',
+          beds: p.beds ?? 1, baths: p.baths ?? 1,
+          tag: p.tag || 'New Listing',
+          image: (p.images && p.images[0]) || PLACEHOLDER_IMAGE,
+          images: p.images || [],
+          description: p.description || '',
+        };
+      });
+      setProperties(merged);
     }).catch(() => {});
-  }, []);
+  };
 
   // Persist a listing's resale opt-in + cap. Optimistic local update, then POST.
   const saveResaleSettings = async (propertyId, next) => {
@@ -137,6 +183,138 @@ export default function Host() {
       alert(err.message || 'Could not save resale settings');
     }
     setSavingResale(prev => ({ ...prev, [propertyId]: false }));
+  };
+
+  // ── Phase 3a: Add Property handlers ─────────────────────────────────────────
+  const openAddModal = (mode = 'import') => {
+    setAddMode(mode);
+    setImportUrl(''); setImportText(''); setExtractError('');
+    setDraft(mode === 'manual' ? blankDraft() : null);
+    setBulkBlocks([{ url: '', text: '' }]); setBulkDrafts([]);
+    setShowAddModal(true);
+  };
+
+  // Calls the extraction-only endpoint — nothing is written to the DB here.
+  // The host always reviews/edits the returned draft (below) before
+  // handlePublish actually creates the listing.
+  const handleExtract = async () => {
+    if (!importText.trim()) { setExtractError('Paste the listing description first'); return; }
+    setExtracting(true); setExtractError('');
+    try {
+      const res = await authFetch(`${API}/host/listings/extract`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: importText, url: importUrl })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not extract listing');
+      setDraft({ ...data.draft, images: [], importSource: 'ai-paste' });
+    } catch (err) {
+      setExtractError(err.message || 'Could not extract listing');
+    }
+    setExtracting(false);
+  };
+
+  // Uploads one photo to Walrus (via /host/listings/photo) and appends the
+  // resulting public URL to whichever draft's images array onAdd points at.
+  const uploadPhoto = (file, onAdd) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      setUploadingPhoto(true);
+      try {
+        const res = await authFetch(`${API}/host/listings/photo`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ dataUrl: reader.result })
+        });
+        const data = await res.json();
+        if (res.ok && data.url) onAdd(data.url);
+        else alert(data.error || 'Photo upload failed');
+      } catch { alert('Photo upload failed'); }
+      setUploadingPhoto(false);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const draftToPayload = (d) => ({
+    title: d.title, description: d.description, location: d.location, price: d.price,
+    beds: d.beds, baths: d.baths, maxGuests: d.maxGuests, tag: d.tag, images: d.images || [],
+    taxRate: d.taxRate, taxJurisdiction: d.taxJurisdiction, sourceUrl: d.sourceUrl || importUrl || null,
+    importSource: d.importSource || 'manual'
+  });
+
+  // The only route that actually writes a listing to the DB (POST
+  // /host/properties) — same validation/clamping whether this draft came from
+  // AI extraction or the blank manual-entry form.
+  const handlePublish = async () => {
+    if (!draft) return;
+    if (!draft.title.trim() || !draft.location.trim() || !Number(draft.price)) {
+      alert('Title, location, and a price greater than $0 are required');
+      return;
+    }
+    setPublishing(true);
+    try {
+      const res = await authFetch(`${API}/host/properties`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(draftToPayload(draft))
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Could not create listing');
+      setShowAddModal(false);
+      refreshProperties();
+    } catch (err) {
+      alert(err.message || 'Could not create listing');
+    }
+    setPublishing(false);
+  };
+
+  const updateBulkBlock = (i, field, value) =>
+    setBulkBlocks(prev => prev.map((b, idx) => idx === i ? { ...b, [field]: value } : b));
+
+  const handleBulkExtract = async () => {
+    const valid = bulkBlocks.filter(b => b.text.trim());
+    if (!valid.length) return;
+    setBulkExtracting(true);
+    try {
+      const res = await authFetch(`${API}/host/listings/bulk-extract`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ listings: valid.map(b => ({ text: b.text, url: b.url })) })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Bulk extraction failed');
+      setBulkDrafts((data.results || []).map(r => r.error
+        ? { error: r.error }
+        : { draft: { ...r.draft, images: [], importSource: 'ai-paste' }, publishing: false, published: false }));
+    } catch (err) {
+      alert(err.message || 'Bulk extraction failed');
+    }
+    setBulkExtracting(false);
+  };
+
+  const updateBulkDraftField = (i, field, value) =>
+    setBulkDrafts(prev => prev.map((d, idx) => idx === i ? { ...d, draft: { ...d.draft, [field]: value } } : d));
+
+  const handleBulkPublishOne = async (i) => {
+    const item = bulkDrafts[i];
+    if (!item?.draft) return;
+    setBulkDrafts(prev => prev.map((d, idx) => idx === i ? { ...d, publishing: true } : d));
+    try {
+      const res = await authFetch(`${API}/host/properties`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(draftToPayload(item.draft))
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Publish failed');
+      setBulkDrafts(prev => prev.map((d, idx) => idx === i ? { ...d, publishing: false, published: true } : d));
+      refreshProperties();
+    } catch (err) {
+      setBulkDrafts(prev => prev.map((d, idx) => idx === i ? { ...d, publishing: false, error: err.message } : d));
+    }
+  };
+
+  const handleBulkPublishAll = async () => {
+    for (let i = 0; i < bulkDrafts.length; i++) {
+      if (bulkDrafts[i].draft && !bulkDrafts[i].published) await handleBulkPublishOne(i);
+    }
   };
 
   const loadApplications = async (silent = false) => {
@@ -569,7 +747,17 @@ export default function Host() {
         {/* Listings */}
         {activeTab === 'listings' && (
           <div>
-            <h3 style={{ fontSize: '16px', fontWeight: '600', margin: '0 0 16px' }}>Your Listings</h3>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', flexWrap: 'wrap', gap: '8px' }}>
+              <h3 style={{ fontSize: '16px', fontWeight: '600', margin: 0 }}>Your Listings</h3>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button onClick={() => openAddModal('import')} style={{ background: '#00ff44', color: '#000', border: 'none', borderRadius: '6px', padding: '8px 16px', fontSize: '12px', fontWeight: '700', cursor: 'pointer' }}>
+                  + Add Property
+                </button>
+                <button onClick={() => openAddModal('bulk')} style={{ background: 'transparent', border: '1px solid #333', color: '#888', borderRadius: '6px', padding: '8px 16px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
+                  Bulk Import
+                </button>
+              </div>
+            </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '16px' }}>
               {properties.map(p => (
                 <div key={p.id} style={{ background: '#111', border: '1px solid #222', borderRadius: '12px', overflow: 'hidden' }}>
@@ -975,6 +1163,218 @@ export default function Host() {
                 </button>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Phase 3a: Add Property — paste-from-Airbnb/VRBO, manual entry, or bulk import */}
+      {showAddModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '24px', overflowY: 'auto' }}>
+          <div style={{ background: '#111', border: '1px solid #333', borderRadius: '16px', width: '100%', maxWidth: '640px', padding: '28px', maxHeight: '90vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '4px' }}>
+              <h3 style={{ margin: 0, fontSize: '19px', fontWeight: '700' }}>Add Property</h3>
+              <button onClick={() => setShowAddModal(false)} style={{ background: 'none', border: 'none', color: '#666', fontSize: '20px', cursor: 'pointer', lineHeight: 1 }}>×</button>
+            </div>
+            <p style={{ color: '#666', fontSize: '13px', margin: '0 0 18px' }}>
+              {addMode === 'bulk' ? 'Paste several listings at once — useful if you have dozens to onboard.' : 'Paste your existing Airbnb/VRBO listing text, or fill it in by hand.'}
+            </p>
+
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '20px' }}>
+              {[['import', '📋 Paste Listing'], ['manual', '✏️ Manual Entry'], ['bulk', '📚 Bulk Import']].map(([m, label]) => (
+                <button key={m} onClick={() => openAddModal(m)}
+                  style={{ flex: 1, background: addMode === m ? '#00ff44' : 'transparent', color: addMode === m ? '#000' : '#888', border: `1px solid ${addMode === m ? '#00ff44' : '#333'}`, borderRadius: '6px', padding: '8px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {/* ── Paste-import mode: URL (reference only, never fetched) + text → AI draft ── */}
+            {addMode === 'import' && !draft && (
+              <div>
+                <div style={{ marginBottom: '14px' }}>
+                  <div style={{ fontSize: '12px', color: '#888', marginBottom: '6px', fontWeight: '600' }}>AIRBNB/VRBO LISTING URL (optional, for your reference)</div>
+                  <input value={importUrl} onChange={e => setImportUrl(e.target.value)} placeholder="https://airbnb.com/rooms/..."
+                    style={{ width: '100%', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '10px 12px', color: '#fff', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
+                </div>
+                <div style={{ marginBottom: '14px' }}>
+                  <div style={{ fontSize: '12px', color: '#888', marginBottom: '6px', fontWeight: '600' }}>PASTE YOUR LISTING DESCRIPTION</div>
+                  <textarea value={importText} onChange={e => setImportText(e.target.value)} rows={7} placeholder="Copy the title, description, and amenities from your Airbnb/VRBO page and paste them here..."
+                    style={{ width: '100%', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '10px 12px', color: '#fff', fontSize: '13px', outline: 'none', boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit' }} />
+                  <p style={{ color: '#555', fontSize: '11px', margin: '6px 0 0', lineHeight: 1.5 }}>We never fetch or scrape the URL — it's stored only as a reference. AI reads the text you paste to fill in the listing fields below for you to review.</p>
+                </div>
+                {extractError && <div style={{ background: '#1a1212', border: '1px solid #2a1a1a', borderRadius: '8px', padding: '10px 12px', color: '#ff6666', fontSize: '12px', marginBottom: '14px' }}>⚠️ {extractError}</div>}
+                <button onClick={handleExtract} disabled={extracting || !importText.trim()}
+                  style={{ width: '100%', background: extracting ? '#333' : '#00ff44', color: extracting ? '#888' : '#000', border: 'none', borderRadius: '8px', padding: '12px', fontSize: '14px', fontWeight: '700', cursor: extracting ? 'wait' : 'pointer' }}>
+                  {extracting ? '🤖 Extracting...' : '🤖 Extract with AI'}
+                </button>
+              </div>
+            )}
+
+            {/* ── Review/edit form: shown for manual entry immediately, or after extraction ── */}
+            {(addMode === 'manual' || (addMode === 'import' && draft)) && draft && (
+              <div>
+                {addMode === 'import' && (
+                  <div style={{ background: '#0a1a0a', border: '1px solid #1a3a1a', borderRadius: '8px', padding: '10px 12px', color: '#00ff44', fontSize: '12px', marginBottom: '16px' }}>
+                    ✓ Extracted — review and edit anything below before publishing.
+                  </div>
+                )}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <div>
+                    <div style={{ fontSize: '11px', color: '#888', marginBottom: '4px', fontWeight: '600' }}>TITLE</div>
+                    <input value={draft.title} onChange={e => setDraft({ ...draft, title: e.target.value })}
+                      style={{ width: '100%', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '9px 12px', color: '#fff', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '11px', color: '#888', marginBottom: '4px', fontWeight: '600' }}>DESCRIPTION</div>
+                    <textarea value={draft.description} onChange={e => setDraft({ ...draft, description: e.target.value })} rows={4}
+                      style={{ width: '100%', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '9px 12px', color: '#fff', fontSize: '13px', outline: 'none', boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit' }} />
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '12px' }}>
+                    <div>
+                      <div style={{ fontSize: '11px', color: '#888', marginBottom: '4px', fontWeight: '600' }}>LOCATION</div>
+                      <input value={draft.location} onChange={e => setDraft({ ...draft, location: e.target.value })} placeholder="City, State"
+                        style={{ width: '100%', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '9px 12px', color: '#fff', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '11px', color: '#888', marginBottom: '4px', fontWeight: '600' }}>PRICE/NIGHT ($)</div>
+                      <input type="number" min="1" value={draft.price} onChange={e => setDraft({ ...draft, price: Number(e.target.value) })}
+                        style={{ width: '100%', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '9px 12px', color: '#fff', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
+                    </div>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '12px' }}>
+                    {[['beds', 'BEDS'], ['baths', 'BATHS'], ['maxGuests', 'MAX GUESTS']].map(([field, label]) => (
+                      <div key={field}>
+                        <div style={{ fontSize: '11px', color: '#888', marginBottom: '4px', fontWeight: '600' }}>{label}</div>
+                        <input type="number" min="1" value={draft[field]} onChange={e => setDraft({ ...draft, [field]: Number(e.target.value) })}
+                          style={{ width: '100%', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '9px 12px', color: '#fff', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
+                      </div>
+                    ))}
+                    <div>
+                      <div style={{ fontSize: '11px', color: '#888', marginBottom: '4px', fontWeight: '600' }}>TAG</div>
+                      <input value={draft.tag} onChange={e => setDraft({ ...draft, tag: e.target.value })}
+                        style={{ width: '100%', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '9px 12px', color: '#fff', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
+                    </div>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '12px' }}>
+                    <div>
+                      <div style={{ fontSize: '11px', color: '#888', marginBottom: '4px', fontWeight: '600' }}>TAX JURISDICTION</div>
+                      <input value={draft.taxJurisdiction} onChange={e => setDraft({ ...draft, taxJurisdiction: e.target.value })} placeholder="e.g. Buncombe County, NC"
+                        style={{ width: '100%', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '9px 12px', color: '#fff', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '11px', color: '#888', marginBottom: '4px', fontWeight: '600' }}>TAX RATE (%)</div>
+                      <input type="number" min="0" max="20" step="0.1" value={(draft.taxRate * 100).toFixed(2)} onChange={e => setDraft({ ...draft, taxRate: Math.min(20, Math.max(0, Number(e.target.value))) / 100 })}
+                        style={{ width: '100%', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '9px 12px', color: '#fff', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
+                    </div>
+                  </div>
+                  <p style={{ color: '#555', fontSize: '11px', margin: 0, lineHeight: 1.5 }}>You're responsible for the tax rate being correct and for remitting it — ARIA just collects what you declare here (capped at 20%) at booking time.</p>
+                  <div>
+                    <div style={{ fontSize: '11px', color: '#888', marginBottom: '6px', fontWeight: '600' }}>PHOTOS</div>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '8px' }}>
+                      {(draft.images || []).map((url, i) => (
+                        <div key={i} style={{ position: 'relative' }}>
+                          <img src={url} alt="" style={{ width: '64px', height: '64px', objectFit: 'cover', borderRadius: '6px', border: '1px solid #333' }} />
+                          <button onClick={() => setDraft({ ...draft, images: draft.images.filter((_, idx) => idx !== i) })}
+                            style={{ position: 'absolute', top: '-6px', right: '-6px', background: '#ff4444', color: '#fff', border: 'none', borderRadius: '50%', width: '18px', height: '18px', fontSize: '11px', cursor: 'pointer', lineHeight: '18px' }}>×</button>
+                        </div>
+                      ))}
+                    </div>
+                    <label style={{ display: 'inline-block', background: '#1a1a1a', border: '1px solid #333', borderRadius: '6px', padding: '8px 14px', fontSize: '12px', color: '#888', cursor: 'pointer' }}>
+                      {uploadingPhoto ? 'Uploading...' : '+ Upload Photo'}
+                      <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" style={{ display: 'none' }} disabled={uploadingPhoto}
+                        onChange={e => { uploadPhoto(e.target.files?.[0], url => setDraft(d => ({ ...d, images: [...(d.images || []), url] }))); e.target.value = ''; }} />
+                    </label>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: '8px', marginTop: '22px' }}>
+                  <button onClick={() => setShowAddModal(false)} style={{ flex: 1, background: 'transparent', border: '1px solid #333', color: '#888', borderRadius: '8px', padding: '12px', fontSize: '14px', cursor: 'pointer' }}>Cancel</button>
+                  <button onClick={handlePublish} disabled={publishing}
+                    style={{ flex: 2, background: publishing ? '#333' : '#00ff44', color: publishing ? '#888' : '#000', border: 'none', borderRadius: '8px', padding: '12px', fontSize: '14px', fontWeight: '700', cursor: publishing ? 'wait' : 'pointer' }}>
+                    {publishing ? 'Publishing...' : '✓ Publish Listing'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* ── Bulk import mode: many {url, text} blocks → drafts table → publish each ── */}
+            {addMode === 'bulk' && (
+              <div>
+                {bulkDrafts.length === 0 ? (
+                  <div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', maxHeight: '40vh', overflowY: 'auto', marginBottom: '14px' }}>
+                      {bulkBlocks.map((b, i) => (
+                        <div key={i} style={{ background: '#0d0d0d', border: '1px solid #222', borderRadius: '8px', padding: '12px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                            <span style={{ fontSize: '11px', color: '#888', fontWeight: '600' }}>LISTING {i + 1}</span>
+                            {bulkBlocks.length > 1 && (
+                              <button onClick={() => setBulkBlocks(prev => prev.filter((_, idx) => idx !== i))} style={{ background: 'none', border: 'none', color: '#666', fontSize: '12px', cursor: 'pointer' }}>Remove</button>
+                            )}
+                          </div>
+                          <input value={b.url} onChange={e => updateBulkBlock(i, 'url', e.target.value)} placeholder="Listing URL (optional)"
+                            style={{ width: '100%', background: '#1a1a1a', border: '1px solid #333', borderRadius: '6px', padding: '8px 10px', color: '#fff', fontSize: '12px', outline: 'none', boxSizing: 'border-box', marginBottom: '8px' }} />
+                          <textarea value={b.text} onChange={e => updateBulkBlock(i, 'text', e.target.value)} rows={3} placeholder="Paste listing description..."
+                            style={{ width: '100%', background: '#1a1a1a', border: '1px solid #333', borderRadius: '6px', padding: '8px 10px', color: '#fff', fontSize: '12px', outline: 'none', boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit' }} />
+                        </div>
+                      ))}
+                    </div>
+                    <button onClick={() => setBulkBlocks(prev => [...prev, { url: '', text: '' }])}
+                      style={{ background: 'transparent', border: '1px dashed #333', color: '#888', borderRadius: '8px', padding: '10px', fontSize: '12px', cursor: 'pointer', width: '100%', marginBottom: '14px' }}>
+                      + Add another listing
+                    </button>
+                    <button onClick={handleBulkExtract} disabled={bulkExtracting || !bulkBlocks.some(b => b.text.trim())}
+                      style={{ width: '100%', background: bulkExtracting ? '#333' : '#00ff44', color: bulkExtracting ? '#888' : '#000', border: 'none', borderRadius: '8px', padding: '12px', fontSize: '14px', fontWeight: '700', cursor: bulkExtracting ? 'wait' : 'pointer' }}>
+                      {bulkExtracting ? `🤖 Extracting ${bulkBlocks.filter(b => b.text.trim()).length} listings...` : `🤖 Extract All (${bulkBlocks.filter(b => b.text.trim()).length})`}
+                    </button>
+                  </div>
+                ) : (
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                      <span style={{ fontSize: '12px', color: '#888' }}>
+                        {bulkDrafts.filter(d => d.draft).length} extracted · {bulkDrafts.filter(d => d.published).length} published · {bulkDrafts.filter(d => d.error).length} failed
+                      </span>
+                      <button onClick={() => { setBulkBlocks([{ url: '', text: '' }]); setBulkDrafts([]); }} style={{ background: 'none', border: 'none', color: '#666', fontSize: '12px', cursor: 'pointer' }}>← Start over</button>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '45vh', overflowY: 'auto', marginBottom: '14px' }}>
+                      {bulkDrafts.map((d, i) => (
+                        <div key={i} style={{ background: '#0d0d0d', border: `1px solid ${d.published ? '#1a3a1a' : d.error ? '#3a1a1a' : '#222'}`, borderRadius: '8px', padding: '12px' }}>
+                          {d.error ? (
+                            <div style={{ color: '#ff6666', fontSize: '12px' }}>⚠️ Listing {i + 1}: {d.error}</div>
+                          ) : (
+                            <>
+                              <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+                                <input value={d.draft.title} onChange={e => updateBulkDraftField(i, 'title', e.target.value)} disabled={d.published}
+                                  style={{ flex: 2, background: '#1a1a1a', border: '1px solid #333', borderRadius: '6px', padding: '7px 10px', color: '#fff', fontSize: '12px', outline: 'none' }} />
+                                <input type="number" value={d.draft.price} onChange={e => updateBulkDraftField(i, 'price', Number(e.target.value))} disabled={d.published}
+                                  style={{ flex: 1, background: '#1a1a1a', border: '1px solid #333', borderRadius: '6px', padding: '7px 10px', color: '#fff', fontSize: '12px', outline: 'none' }} />
+                              </div>
+                              <input value={d.draft.location} onChange={e => updateBulkDraftField(i, 'location', e.target.value)} disabled={d.published}
+                                style={{ width: '100%', background: '#1a1a1a', border: '1px solid #333', borderRadius: '6px', padding: '7px 10px', color: '#fff', fontSize: '12px', outline: 'none', boxSizing: 'border-box', marginBottom: '8px' }} />
+                              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                                {d.published ? (
+                                  <span style={{ color: '#00ff44', fontSize: '12px', fontWeight: '600' }}>✓ Published</span>
+                                ) : (
+                                  <button onClick={() => handleBulkPublishOne(i)} disabled={d.publishing}
+                                    style={{ background: d.publishing ? '#333' : '#00ff44', color: d.publishing ? '#888' : '#000', border: 'none', borderRadius: '6px', padding: '6px 14px', fontSize: '11px', fontWeight: '700', cursor: d.publishing ? 'wait' : 'pointer' }}>
+                                    {d.publishing ? 'Publishing...' : 'Publish'}
+                                  </button>
+                                )}
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button onClick={() => setShowAddModal(false)} style={{ flex: 1, background: 'transparent', border: '1px solid #333', color: '#888', borderRadius: '8px', padding: '12px', fontSize: '14px', cursor: 'pointer' }}>Close</button>
+                      <button onClick={handleBulkPublishAll} disabled={!bulkDrafts.some(d => d.draft && !d.published)}
+                        style={{ flex: 2, background: '#00ff44', color: '#000', border: 'none', borderRadius: '8px', padding: '12px', fontSize: '14px', fontWeight: '700', cursor: 'pointer' }}>
+                        Publish All Remaining
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}

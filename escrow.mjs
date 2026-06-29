@@ -81,7 +81,7 @@ export function depositToMist(depositAmount) {
 
 // Normalizes a Sui address for comparison (lowercase, 0x-prefixed, unpadded
 // leading zeros stripped) so two encodings of the same address compare equal.
-function normalizeAddr(a) {
+export function normalizeAddr(a) {
   if (!a) return '';
   let h = String(a).toLowerCase();
   if (!h.startsWith('0x')) h = '0x' + h;
@@ -930,6 +930,70 @@ export async function buildBookingPaymentTransaction(bookingRef, guestAddr, host
 // buy. Each builder returns an UNSIGNED PTB (txBytes) for the seller/buyer to sign in
 // their own wallet, exactly like the booking flow.
 
+// BCS layout of the shared ResalePolicy object (escrow.move) — field order/types
+// mirror the Move struct exactly. Used for the self-heal read below.
+export const ResalePolicyBcs = bcs.struct('ResalePolicy', {
+  id:               bcs.Address,
+  booking_ref:      bcs.string(),
+  host:             bcs.Address,
+  transferable:     bcs.bool(),
+  max_premium_bps:  bcs.u64(),
+  resale_count:     bcs.u8(),
+  release_time_ms:  bcs.u64(),
+  resale_window_ms: bcs.u64(),
+  property_id:      bcs.u64(),
+  check_in_ms:      bcs.u64(),
+  check_out_ms:     bcs.u64(),
+  listed:           bcs.bool(),
+  ask_price:        bcs.u64(),
+  seller:           bcs.Address,
+});
+
+// Reads a ResalePolicy object's CURRENT decoded fields by id. This is the
+// self-heal read: list_for_resale/cancel_resale_listing both consume or mutate
+// objects (the BookingPass is burned, the policy's `listed`/`seller`/`ask_price`
+// flip) BEFORE the backend ever gets a chance to call /confirm. If a signed tx
+// already landed on-chain but /confirm failed for any reason (a transient
+// getTransaction error, a dropped network response, the user closing the tab),
+// the backend has no record of that and would otherwise try to REBUILD a fresh
+// PTB referencing the now-consumed BookingPass — which fails forever with
+// "Object not found" (see buildListForResaleTransaction). Reading the policy's
+// live on-chain state lets the route notice "this already happened" and
+// reconcile Postgres directly instead of looping on a dead rebuild. Mirrors
+// readEscrowObject's retry shape but trimmed — this is a cheap pre-flight
+// check, not the authoritative tx verification.
+export async function readResalePolicyObject(policyObjectId, {
+  attempts = 2,
+  delayMs = 800,
+  logger = console,
+} = {}) {
+  let lastError = 'unknown';
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const resp = await suiClient.core.getObjects({
+        objectIds: [policyObjectId],
+        include: { content: true },
+      });
+      const obj = resp?.objects?.[0];
+      if (obj && !(obj instanceof Error) && obj.type && obj.content) {
+        try {
+          return { type: obj.type, fields: ResalePolicyBcs.parse(obj.content) };
+        } catch (e) {
+          logger?.warn?.({ policyObjectId, err: e.message }, 'readResalePolicyObject: BCS decode failed');
+          return { error: `bcs-decode: ${e.message}` };
+        }
+      }
+      lastError = obj instanceof Error ? `object-error: ${obj.message}`
+        : (!obj ? 'object-not-found' : 'object-missing-content');
+    } catch (e) {
+      lastError = `rpc-error: ${e.message}`;
+    }
+    if (i < attempts - 1) await new Promise(r => setTimeout(r, delayMs));
+  }
+  logger?.warn?.({ policyObjectId, lastError }, 'readResalePolicyObject: object not readable after retries');
+  return { error: lastError };
+}
+
 /// Step 1 — SELLER lists. Consumes the soulbound pass, sets the ask. Seller signs.
 export async function buildListForResaleTransaction(sellerAddr, ids, logger = console) {
   const { depositEscrowId, paymentEscrowId, policyId, passId, askPriceUnits } = ids || {};
@@ -1048,16 +1112,45 @@ export async function verifyBuyResaleTransaction(digest, expectedBuyer, depositE
   return { ok: true, sender: actualSender, newPassId };
 }
 
+// Shared retry wrapper for the two resale tx verifiers below. getTransaction is
+// normally "instant" on testnet (see readEscrowObject's comment), but it is NOT
+// immune to transient RPC blips — and unlike readEscrowObject's getObjects
+// retries, these verifiers used to call it once with no retry/catch, so any
+// transient failure threw straight out of the route handler as a flat 502 with
+// no `retryable` flag, which the frontend had no way to distinguish from a
+// real on-chain rejection. Retrying here, and degrading to {retryable:true}
+// instead of throwing, mirrors the convention already used by
+// verifyBookingPaymentTransaction / verifyEscrowTransaction.
+async function getTransactionWithRetry(digest, {
+  attempts = Number(process.env.ESCROW_READ_ATTEMPTS || 3),
+  delayMs = Number(process.env.ESCROW_READ_DELAY_MS || 1500),
+  logger = console,
+} = {}) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return { result: await suiClient.core.getTransaction({
+        digest, include: { transaction: true, effects: true, objectTypes: true },
+      }) };
+    } catch (e) {
+      lastErr = e;
+      logger?.warn?.({ digest, attempt: i + 1, err: e.message }, 'getTransactionWithRetry: attempt failed');
+    }
+    if (i < attempts - 1) await new Promise(r => setTimeout(r, delayMs));
+  }
+  return { error: lastErr };
+}
+
 /// Verify a completed list_for_resale on-chain before the confirm route flips
 /// resale_listed=true. A valid listing MUST (a) be signed by the seller and
 /// (b) mutate the ResalePolicy (policy.listed -> true). The pass is consumed in
 /// the same tx; we don't require reading it back (it's deleted). Never trust the
 /// client report — mirrors verifyBuyResaleTransaction.
-export async function verifyListResaleTransaction(digest, expectedSeller, policyId) {
-  const result = await suiClient.core.getTransaction({
-    digest,
-    include: { transaction: true, effects: true, objectTypes: true },
-  });
+export async function verifyListResaleTransaction(digest, expectedSeller, policyId, logger = console) {
+  const { result, error } = await getTransactionWithRetry(digest, { logger });
+  if (error) {
+    return { ok: false, retryable: true, reason: 'Listing not yet verifiable on-chain — please retry in a moment.' };
+  }
   if (result?.$kind !== 'Transaction') {
     const errMsg = result?.FailedTransaction?.status?.error?.message;
     return { ok: false, reason: errMsg || 'resale list transaction did not succeed on-chain' };
@@ -1075,11 +1168,11 @@ export async function verifyListResaleTransaction(digest, expectedSeller, policy
 
 /// Verify a completed cancel_resale_listing on-chain before clearing the listing
 /// in Postgres. Signed by the seller; mutates the ResalePolicy (listed -> false).
-export async function verifyCancelResaleTransaction(digest, expectedSeller, policyId) {
-  const result = await suiClient.core.getTransaction({
-    digest,
-    include: { transaction: true, effects: true, objectTypes: true },
-  });
+export async function verifyCancelResaleTransaction(digest, expectedSeller, policyId, logger = console) {
+  const { result, error } = await getTransactionWithRetry(digest, { logger });
+  if (error) {
+    return { ok: false, retryable: true, reason: 'Cancellation not yet verifiable on-chain — please retry in a moment.' };
+  }
   if (result?.$kind !== 'Transaction') {
     const errMsg = result?.FailedTransaction?.status?.error?.message;
     return { ok: false, reason: errMsg || 'resale cancel transaction did not succeed on-chain' };

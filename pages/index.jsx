@@ -56,6 +56,9 @@ const PROPERTY_DISPLAY = [
   },
 ];
 
+// Phase 3a: fallback image for host-created listings that have no photos yet.
+const PLACEHOLDER_IMAGE = 'https://images.unsplash.com/photo-1560448204-603b3fc33ddc?w=600&q=80';
+
 const WHY_ARIA = [
   { icon: '🔑', title: 'Your Wallet, Your Control', desc: 'ARIA never holds your funds. Payments execute directly on the Sui blockchain — no middleman, no delays.' },
   { icon: '⚡', title: 'Instant Settlement', desc: 'Hosts receive payouts in seconds, not days. No 3–5 day bank holds. No Airbnb holding your money.' },
@@ -135,28 +138,40 @@ export default function Home() {
       .then(data => { if (data.address) setUser(data); setLoading(false); })
       .catch(() => setLoading(false));
 
-    Promise.all(PROPERTY_DISPLAY.map(p =>
-      fetch(`${API}/reviews/${p.id}`).then(r => r.json()).then(d => ({ id: p.id, rating: d.averageRating, count: d.count, verifiedCount: d.verifiedCount || 0 })).catch(() => ({ id: p.id, rating: 0, count: 0, verifiedCount: 0 }))
-    )).then(results => {
-      const ratings = {};
-      results.forEach(r => { ratings[r.id] = { rating: r.rating, count: r.count, verifiedCount: r.verifiedCount }; });
-      setLiveRatings(ratings);
-    });
-
     // Merge in the authoritative price/title/tax fields from the backend
     // (catalog.mjs via GET /properties) so this page can't silently drift
     // from what the server will actually charge (Phase 2a fix). Cosmetic
-    // fields (images, location, rating, beds/baths, tag) stay local — those
-    // aren't a correctness risk and have no backend equivalent.
+    // fields (images, location, rating, beds/baths, tag) stay local for the
+    // 6 fixed demo properties — those aren't a correctness risk and have no
+    // backend equivalent. Phase 3a: GET /properties can now also return
+    // host-created listings that aren't in PROPERTY_DISPLAY at all — those
+    // are synthesized into a display object here instead of being silently
+    // dropped (same fix already applied to the host dashboard).
     fetch(`${API}/properties`).then(r => r.json()).then(d => {
       if (!Array.isArray(d.properties)) return;
-      const live = new Map(d.properties.map(p => [p.id, p]));
-      const merged = PROPERTY_DISPLAY.map(p => {
-        const l = live.get(p.id);
-        return l ? { ...p, title: l.title, price: l.price, taxRate: l.taxRate, taxName: l.taxName } : p;
+      const merged = d.properties.map(p => {
+        const fixed = PROPERTY_DISPLAY.find(f => f.id === p.id);
+        if (fixed) return { ...fixed, title: p.title, price: p.price, taxRate: p.taxRate, taxName: p.taxName };
+        return {
+          id: p.id, title: p.title, price: p.price, taxRate: p.taxRate, taxName: p.taxName,
+          location: p.location || 'Location not set', rating: 0, reviews: 0,
+          image: (p.images && p.images[0]) || PLACEHOLDER_IMAGE,
+          images: (p.images && p.images.length ? p.images : [PLACEHOLDER_IMAGE]),
+          beds: p.beds ?? 1, baths: p.baths ?? 1, tag: p.tag || 'New Listing',
+        };
       });
       setProperties(merged);
       setFilteredProperties(prev => prev === PROPERTY_DISPLAY ? merged : prev);
+
+      // Live review ratings, fetched for the full merged set (including any
+      // host-created listings) now that we know every id that exists.
+      Promise.all(merged.map(p =>
+        fetch(`${API}/reviews/${p.id}`).then(r => r.json()).then(d2 => ({ id: p.id, rating: d2.averageRating, count: d2.count, verifiedCount: d2.verifiedCount || 0 })).catch(() => ({ id: p.id, rating: 0, count: 0, verifiedCount: 0 }))
+      )).then(results => {
+        const ratings = {};
+        results.forEach(r => { ratings[r.id] = { rating: r.rating, count: r.count, verifiedCount: r.verifiedCount }; });
+        setLiveRatings(ratings);
+      });
     }).catch(() => {});
   }, []);
 
@@ -454,12 +469,11 @@ export default function Home() {
           <select value={searchLocation} onChange={e => setSearchLocation(e.target.value)}
             style={{ flex: 2, minWidth: '180px', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '12px 16px', color: '#fff', fontSize: '14px', outline: 'none', cursor: 'pointer' }}>
             <option value="All Locations">📍 Where are you going?</option>
-            <option value="Miami Beach, FL">📍 Miami Beach, FL</option>
-            <option value="Austin, TX">📍 Austin, TX</option>
-            <option value="Asheville, NC">📍 Asheville, NC</option>
-            <option value="Scottsdale, AZ">📍 Scottsdale, AZ</option>
-            <option value="Lake Tahoe, CA">📍 Lake Tahoe, CA</option>
-            <option value="Brooklyn, NY">📍 Brooklyn, NY</option>
+            {/* Phase 3a: derived from live properties (not just the 6 fixed demo
+                ones) so host-created listings' locations are filterable too. */}
+            {[...new Set(properties.map(p => p.location))].filter(Boolean).map(loc => (
+              <option key={loc} value={loc}>📍 {loc}</option>
+            ))}
           </select>
           <div style={{ flex: 1, minWidth: '130px' }}>
             <DatePicker selected={searchCheckIn} onChange={date => setSearchCheckIn(date)} minDate={new Date()} placeholderText="📅 Check-in" dateFormat="MMM d" className="date-input" />

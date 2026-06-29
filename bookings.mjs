@@ -14,7 +14,7 @@
 
 import crypto from 'node:crypto';
 import { pool } from './db.mjs';
-import { PROPERTIES, JURISDICTION_TAX_RATES } from './catalog.mjs';
+import { PROPERTIES, JURISDICTION_TAX_RATES, getProperty } from './catalog.mjs';
 import { calculateHostPayout } from './deepbook.mjs';
 import {
   buildEscrowTransaction, autoReleaseKeypair, autoReleaseEscrow,
@@ -38,6 +38,25 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 // before this function existed, just now centralized in one place instead of
 // inlined in createBooking.
 export async function getPropertyHostAddress(propertyId, logger = console) {
+  // Phase 3a: dynamic (host-imported/manual) listings carry their own
+  // host_address directly on the properties row — getProperty() returns it
+  // as hostAddress for both the fixed catalog and the DB-backed path, so this
+  // one lookup now covers both. Below, configuredHost is only ever set for
+  // the fixed-catalog case (still null for all 6 demo properties until a real
+  // host is wired into catalog.mjs), preserving the existing demo fallback.
+  const prop = await getProperty(propertyId, logger);
+  if (prop?.source === 'db' && prop.hostAddress) {
+    try {
+      const result = await pool.query(
+        'SELECT payout_sui_address FROM host_profiles WHERE sui_address = $1',
+        [prop.hostAddress]
+      );
+      return result.rows[0]?.payout_sui_address || prop.hostAddress;
+    } catch (err) {
+      logger?.warn?.({ err, propertyId }, 'host_profiles payout address lookup failed — using configured hostAddress directly');
+      return prop.hostAddress;
+    }
+  }
   const configuredHost = PROPERTIES[Number(propertyId)]?.hostAddress;
   if (!configuredHost) {
     // P2 / Finding #8: the 6 demo properties have no real host wired in yet,
@@ -362,8 +381,11 @@ export async function createBooking({ propertyId, checkIn, checkOut, session, lo
   if (!propertyId || !checkIn || !checkOut) {
     return { error: 'propertyId, checkIn, and checkOut are required' };
   }
-  const prop = PROPERTIES[Number(propertyId)];
-  if (!prop) return { error: 'propertyId must be between 1 and 6' };
+  // Phase 3a: getProperty() resolves either a fixed catalog property (1-6) or
+  // a host-created row from the `properties` table, so this no longer rejects
+  // every imported/manually-added listing as "must be between 1 and 6."
+  const prop = await getProperty(propertyId, logger);
+  if (!prop) return { error: 'Unknown propertyId' };
   if (isNaN(new Date(checkIn)) || isNaN(new Date(checkOut))) {
     return { error: 'checkIn and checkOut must be valid dates (YYYY-MM-DD)' };
   }
@@ -400,7 +422,7 @@ export async function createBooking({ propertyId, checkIn, checkOut, session, lo
     return { error: 'Stay length must be between 1 and 90 nights' };
   }
 
-  const jurisdiction  = JURISDICTION_TAX_RATES[Number(propertyId)] || { rate: 0.08, name: 'Unknown', breakdown: '8% occupancy tax' };
+  const jurisdiction  = { rate: prop.taxRate, name: prop.taxName, breakdown: prop.taxBreakdown };
   const propertyTitle = prop.title;
   const pricePerNight = prop.price;
   const subtotal       = pricePerNight * nights;

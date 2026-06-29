@@ -122,6 +122,60 @@ export const resaleSettingsSchema = z.object({
   maxPremiumBps: z.union([z.string(), z.number()]).optional()
 });
 
+// ── Phase 3a: host-created listings ───────────────────────────────────────────
+// The host always reviews/edits AI-extracted fields before this schema is hit
+// (extraction itself never writes to the DB — see listing_import.mjs). This is
+// the actual write path's gate: numbers arrive as string|number like the
+// resale schemas above, and the route still clamps price >= 0 and taxRate to
+// [0, 0.20] independently (defense in depth — a passed schema doesn't mean the
+// value is sane, just that it's the right shape).
+export const propertyCreateSchema = z.object({
+  title: z.string().min(1, 'title is required').max(200),
+  description: z.string().max(4000).optional().nullable(),
+  location: z.string().min(1, 'location is required').max(200),
+  price: z.union([z.string(), z.number()]),
+  beds: z.union([z.string(), z.number()]).optional(),
+  baths: z.union([z.string(), z.number()]).optional(),
+  maxGuests: z.union([z.string(), z.number()]).optional(),
+  tag: z.string().max(50).optional().nullable(),
+  images: z.array(z.string()).max(20).optional(),
+  taxRate: z.union([z.string(), z.number()]).optional(),
+  taxJurisdiction: z.string().max(200).optional().nullable(),
+  taxBreakdown: z.string().max(500).optional().nullable(),
+  sourceUrl: z.string().max(500).optional().nullable(),
+  importSource: z.enum(['manual', 'ai-paste']).optional()
+});
+
+// Single-listing extraction: host pastes the URL (reference only, never
+// fetched server-side) plus the listing text/description they copied
+// themselves. text is the only required field — a host can paste just the
+// description with no URL for a listing that was never on Airbnb/VRBO.
+export const listingExtractSchema = z.object({
+  text: z.string().min(1, 'text is required').max(12000),
+  url: z.string().max(500).optional().nullable()
+});
+
+// Bulk variant for hosts with dozens/hundreds of properties: an array of the
+// same {text, url} shape, capped so one request can't trigger hundreds of LLM
+// calls server-side.
+export const listingBulkExtractSchema = z.object({
+  listings: z.array(z.object({
+    text: z.string().min(1).max(12000),
+    url: z.string().max(500).optional().nullable()
+  })).min(1, 'At least one listing is required').max(50, 'Bulk import is limited to 50 listings per request')
+});
+
+// Listing photo upload: base64 data URL in the JSON body rather than a
+// multipart form — the codebase has no multipart plugin registered anywhere
+// else (client-side encryption blobs like guest PII already go through Walrus
+// the same JSON-body way, see guestProfileSchema's sibling routes), so this
+// stays consistent with that pattern instead of adding a new dependency.
+// ~8M base64 chars caps the decoded image around ~6MB, generous for a listing
+// photo while keeping one upload from ballooning a request.
+export const listingPhotoSchema = z.object({
+  dataUrl: z.string().min(1, 'dataUrl is required').max(8_000_000, 'Image is too large')
+});
+
 // Runs a zod schema against request.body and sends a 400 with a readable
 // message if it fails. Returns true if validation failed (caller should
 // `return` immediately after calling this), false if the body is valid.

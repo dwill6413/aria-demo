@@ -313,6 +313,27 @@ export async function initDB() {
   // Browse the open resale market: listed bookings only.
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_bookings_resale_listed ON bookings(resale_listed) WHERE resale_listed = true`);
 
+  // ── Phase 3a: host-created listings (the `properties` table goes live) ───
+  // Until now this table was scaffolded but never written to — the 6 demo
+  // properties live in catalog.mjs instead (see its header comment). This is
+  // the schema fill-in for "hosts add their own listings," including the
+  // Airbnb/VRBO import flow (listing_import.mjs): tax fields are denormalized
+  // onto the row itself (no JURISDICTION_TAX_RATES-style lookup table for
+  // dynamic listings) because the host self-declares their jurisdiction at
+  // creation time and catalog.mjs's getProperty()/getAllProperties() read them
+  // straight off the row. tax_rate is clamped server-side to [0, 0.20] at write
+  // time (see server.mjs POST /host/properties) — same trust model terms.jsx
+  // already discloses: ARIA collects the declared tax but hosts are solely
+  // responsible for the rate being correct and for remitting it.
+  await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS tax_rate NUMERIC DEFAULT 0.08`);
+  await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS tax_jurisdiction TEXT DEFAULT 'Unknown'`);
+  await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS tax_breakdown TEXT DEFAULT '8% occupancy tax (default — host has not set a jurisdiction)'`);
+  await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS max_guests INTEGER DEFAULT 2`);
+  await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS source_url TEXT`);
+  await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS import_source TEXT DEFAULT 'manual'`);
+  await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS host_email TEXT`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_properties_host_address ON properties(host_address)`);
+
   console.log('Database initialized');
 }
 

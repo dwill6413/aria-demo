@@ -11,7 +11,7 @@
 
 import { pool } from './db.mjs';
 import { getSession } from './auth.mjs';
-import { PROPERTIES, JURISDICTION_TAX_RATES } from './catalog.mjs';
+import { PROPERTIES, JURISDICTION_TAX_RATES, getAllProperties } from './catalog.mjs';
 import { createBooking, releaseDepositForBooking, cancelBooking } from './bookings.mjs';
 import { pushToWalrus } from './walrus.mjs';
 
@@ -55,7 +55,7 @@ const GUEST_TOOLS = [
       parameters: {
         type: 'object',
         properties: {
-          propertyId: { type: 'number', description: 'Property ID (1-6)' },
+          propertyId: { type: 'number', description: 'Property ID — see AVAILABLE PROPERTIES in the system prompt for valid ids' },
           checkIn:    { type: 'string', description: 'Check-in date YYYY-MM-DD' },
           checkOut:   { type: 'string', description: 'Check-out date YYYY-MM-DD' }
         },
@@ -204,25 +204,32 @@ const HOST_TOOLS = [
 
 // R4: property + tax prompt blocks generated from catalog.mjs so the AI never
 // quotes a price/tax that has drifted from what createBooking() actually charges.
-function catalogPromptSections() {
-  const props = Object.entries(PROPERTIES).map(([id, p]) => {
-    const j = JURISDICTION_TAX_RATES[Number(id)];
-    const loc = j?.name ? ` — ${j.name}` : '';
-    return `${id}. ${p.title} — $${p.price}/night${loc} (id:${id})`;
-  }).join('\n');
-  const taxes = Object.entries(JURISDICTION_TAX_RATES).map(([id, j]) =>
-    `${id}. ${PROPERTIES[Number(id)]?.title || 'Property ' + id} — ${(j.rate * 100).toFixed(2)}% (${j.breakdown})`
+//
+// Phase 3a: now pulls getAllProperties() instead of reading PROPERTIES/
+// JURISDICTION_TAX_RATES directly, so the assistant (guest and host prompts
+// both) knows about host-created/imported listings, not just the fixed 6 —
+// otherwise a guest could ask the AI to book listing #9 and get told it
+// doesn't exist even though it's live on the site. Async because the dynamic
+// half needs a DB round-trip; both call sites below are already inside the
+// async route handler.
+async function catalogPromptSections() {
+  const all = await getAllProperties();
+  const props = all.map(p =>
+    `${p.id}. ${p.title} — $${p.price}/night — ${p.taxName || 'Unknown'}${p.location ? `, ${p.location}` : ''} (id:${p.id})`
+  ).join('\n');
+  const taxes = all.map(p =>
+    `${p.id}. ${p.title} — ${(p.taxRate * 100).toFixed(2)}% (${p.taxBreakdown})`
   ).join('\n');
   return { props, taxes };
 }
 
-function buildGuestSystemPrompt(session, bookings) {
+async function buildGuestSystemPrompt(session, bookings) {
   const active = (bookings || []).filter(b => b.payment_status !== 'cancelled');
   const bkSummary = active.length > 0
     ? active.map(b => `- ${b.property_title} (ref: ${b.booking_ref}, ${b.check_in} to ${b.check_out}, ${b.nights} nights, $${b.total_amount} SuiUSD)`).join('\n')
     : 'No active bookings yet.';
 
-  const { props, taxes } = catalogPromptSections();
+  const { props, taxes } = await catalogPromptSections();
 
   return `You are ARIA Assistant, an AI agent built into ARIA — a vacation rental platform on Sui blockchain. You can take real actions: book properties, cancel bookings, fetch booking history, read and send messages.
 
@@ -261,8 +268,8 @@ ${props}
 CANCELLATION POLICY: Full refund of the stay cost if cancelled 15+ days before check-in. Within 14 days of check-in, the stay cost is non-refundable — the guest can instead list the booking on the resale market, or forfeit the funds. The security deposit is always released on cancellation before check-in.`;
 }
 
-function buildHostSystemPrompt(session) {
-  const { props, taxes } = catalogPromptSections();
+async function buildHostSystemPrompt(session) {
+  const { props, taxes } = await catalogPromptSections();
   return `You are ARIA Host Assistant — an AI agent for property hosts on ARIA, a vacation rental platform on Sui blockchain.
 
 You have FULL access to host operations. You can fetch all bookings, calculate revenue, read/reply to guest messages, release damage deposits, cancel bookings, and pull guest reviews.
@@ -282,7 +289,7 @@ ABOUT ARIA: 5% fee vs 15% Airbnb. Instant Sui settlement. Walrus receipts. SuiUS
 HOST USER: ${session.name} (${session.email})
 Wallet: ${session.suiAddress}
 
-YOUR 6 PROPERTIES:
+AVAILABLE PROPERTIES:
 ${props}`;
 }
 
@@ -534,8 +541,8 @@ export async function registerAIRoute(fastify) {
     }
 
     const systemPrompt = isHost
-      ? buildHostSystemPrompt(session)
-      : buildGuestSystemPrompt(session, guestBookings);
+      ? await buildHostSystemPrompt(session)
+      : await buildGuestSystemPrompt(session, guestBookings);
 
     let apiMessages = [
       { role: 'system', content: systemPrompt },

@@ -38,3 +38,89 @@ export const JURISDICTION_TAX_RATES = {
   5: { rate: 0.10,   name: 'Placer County, CA',       breakdown: '10% Transient Occupancy Tax (Tahoe area)' },
   6: { rate: 0.1475, name: 'New York City, NY',        breakdown: '4% NY state + 4.5% local sales tax + 5.875% NYC hotel occupancy tax' },
 };
+
+// ─── Phase 3a: dynamic, host-created listings ────────────────────────────────
+// Everything above this point is the original fixed 6-property catalog and
+// stays untouched — it's still the cheapest, zero-DB-round-trip path for the
+// demo properties. getProperty()/getAllProperties() are the NEW single source
+// of truth every money-critical call site should use going forward: they
+// check the fixed catalog first (id 1-6) and fall back to the `properties`
+// Postgres table for anything a host has actually created (via the
+// Airbnb/VRBO import flow or manual entry — see server.mjs POST
+// /host/properties). This is what finally makes the long-scaffolded
+// `properties` table real (see its header comment in db.mjs).
+//
+// Dynamic rows carry their OWN tax fields (tax_rate/tax_jurisdiction/
+// tax_breakdown) instead of a JURISDICTION_TAX_RATES lookup, because the host
+// self-declares their jurisdiction at creation time — there's no fixed list
+// of every jurisdiction a host might be in. The rate is clamped server-side
+// to [0, 0.20] at write time, so even a self-declared value can't blow out a
+// booking total.
+import { pool } from './db.mjs';
+
+function normalizeDbRow(row) {
+  return {
+    id: row.id,
+    title: row.title,
+    price: row.price,
+    hostAddress: row.host_address,
+    description: row.description || '',
+    location: row.location || '',
+    beds: row.beds ?? 1,
+    baths: row.baths ?? 1,
+    maxGuests: row.max_guests ?? 2,
+    tag: row.tag || 'New Listing',
+    images: Array.isArray(row.images) && row.images.length ? row.images : [],
+    taxRate: row.tax_rate != null ? Number(row.tax_rate) : 0.08,
+    taxName: row.tax_jurisdiction || 'Unknown',
+    taxBreakdown: row.tax_breakdown || '8% occupancy tax (default)',
+    sourceUrl: row.source_url || null,
+    importSource: row.import_source || 'manual',
+    active: row.active !== false,
+    source: 'db',
+  };
+}
+
+// Returns a normalized property shape regardless of whether it's one of the
+// 6 fixed demo properties or a host-created row, or null if propertyId
+// doesn't resolve to anything. Async because the dynamic path needs a DB
+// round-trip; every call site (bookings.mjs, server.mjs, ai_route.mjs) is
+// already inside an async function, so this composes cleanly.
+export async function getProperty(propertyId, logger = console) {
+  const id = Number(propertyId);
+  const fixed = PROPERTIES[id];
+  if (fixed) {
+    const j = JURISDICTION_TAX_RATES[id] || { rate: 0.08, name: 'Unknown', breakdown: '8% occupancy tax (default)' };
+    return {
+      id, title: fixed.title, price: fixed.price, hostAddress: fixed.hostAddress,
+      taxRate: j.rate, taxName: j.name, taxBreakdown: j.breakdown,
+      active: true, source: 'catalog',
+    };
+  }
+  try {
+    const r = await pool.query('SELECT * FROM properties WHERE id = $1 AND active = true', [id]);
+    if (!r.rows.length) return null;
+    return normalizeDbRow(r.rows[0]);
+  } catch (err) {
+    logger?.warn?.({ err, propertyId }, 'catalog.getProperty: DB lookup failed');
+    return null;
+  }
+}
+
+// All bookable properties — the 6 fixed demo ones plus every active
+// host-created row. Used by GET /properties and the AI catalog prompt so
+// guests/the AI assistant can see (and book) imported listings, not just the
+// original demo set.
+export async function getAllProperties(logger = console) {
+  const fixed = Object.entries(PROPERTIES).map(([id, p]) => {
+    const j = JURISDICTION_TAX_RATES[Number(id)] || { rate: 0.08, name: 'Unknown', breakdown: '8% occupancy tax (default)' };
+    return { id: Number(id), title: p.title, price: p.price, hostAddress: p.hostAddress, taxRate: j.rate, taxName: j.name, taxBreakdown: j.breakdown, active: true, source: 'catalog' };
+  });
+  try {
+    const r = await pool.query('SELECT * FROM properties WHERE active = true ORDER BY id');
+    return [...fixed, ...r.rows.map(normalizeDbRow)];
+  } catch (err) {
+    logger?.warn?.({ err }, 'catalog.getAllProperties: DB lookup failed, returning fixed catalog only');
+    return fixed;
+  }
+}
