@@ -348,6 +348,26 @@ export async function initDB() {
   // the counter forward, never back, so this is safe to run on every boot.
   await pool.query(`SELECT setval('properties_id_seq', GREATEST(1000, (SELECT COALESCE(MAX(id), 0) FROM properties)))`);
 
+  // One-off fix for rows ALREADY inserted at ids 1-6 before the sequence bump
+  // above existed (e.g. a host's first listing landing on id=1, same as the
+  // Oceanfront Villa). catalog.mjs's getProperty()/getAllProperties() check
+  // the fixed catalog FIRST and unconditionally for ids 1-6, so a DB row stuck
+  // in that range is permanently unreachable: booking, editing, or viewing
+  // "that id" silently resolves to the fixed demo property instead, using ITS
+  // price/tax/title — this is why booking a colliding new listing silently
+  // booked (and charged for) the demo property instead. Re-id any survivor
+  // out of the collision range, on every boot (idempotent: a clean DB has no
+  // rows in 1-6, so this is a no-op there). Past bookings made against a
+  // since-relocated row keep the property_id they were created with (no FK —
+  // see comment above) and can't be retroactively reattributed, since they
+  // were recorded identically to a genuine demo-property booking at write time.
+  const { rows: colliding } = await pool.query('SELECT id, title FROM properties WHERE id <= 6');
+  for (const row of colliding) {
+    const { rows: [{ nextval }] } = await pool.query(`SELECT nextval('properties_id_seq') AS nextval`);
+    await pool.query('UPDATE properties SET id = $1 WHERE id = $2', [nextval, row.id]);
+    console.log(`Re-id'd colliding property "${row.title}" from id=${row.id} to id=${nextval} (was colliding with fixed catalog ids 1-6)`);
+  }
+
   console.log('Database initialized');
 }
 
