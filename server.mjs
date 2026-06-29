@@ -36,7 +36,8 @@ import {
   claimDamageSchema, claimDamageConfirmSchema, disputeClaimSchema, disputeClaimConfirmSchema, resolveDisputeSchema,
   guestProfileSchema,
   resaleListSchema, resaleTransferConfirmSchema, resaleSettingsSchema,
-  propertyCreateSchema, listingExtractSchema, listingBulkExtractSchema, listingPhotoSchema
+  propertyCreateSchema, listingExtractSchema, listingBulkExtractSchema, listingPhotoSchema,
+  messageSendSchema, reviewSubmitSchema
 } from './validation.mjs';
 
 dotenvConfig();
@@ -58,10 +59,29 @@ try { await initDB(); } catch (err) { console.error('DB init failed:', err.messa
 // ─── Role-Based Access Control ────────────────────────────────────────────────
 const HOST_ADDRESSES = (process.env.HOST_ADDRESSES || '').split(',').map(e => e.trim().toLowerCase());
 
-function isHost(session) {
+// B1 fix: isHost() used to read session.dbHostApproved, a flag that was only
+// ever set transiently inside /auth/me and never persisted via saveSession —
+// so on every other REST route it was undefined, and a host approved via
+// host_profiles (but not in the HOST_ADDRESSES superadmin env list) failed
+// isHost() on all REST host routes while still passing ai_route.mjs's
+// resolveIsHost() (which is DB-backed). isHost() is now DB-backed too, so
+// both paths agree. Callers must now `await isHost(session)`.
+async function isHost(session) {
   if (!session?.email) return false;
   if (HOST_ADDRESSES.includes(session.email.toLowerCase())) return true;
-  return session.dbHostApproved === true;
+  return checkDbHost(session.email);
+}
+
+// S4 fix: listing images[] was only length-checked (<2000 chars) before being
+// stored and later rendered in <img src> — a host could store a data:/
+// javascript:/arbitrary-scheme URL there. Restrict to https: URLs only.
+function isSafeImageUrl(u) {
+  if (typeof u !== 'string' || u.length === 0 || u.length >= 2000) return false;
+  try {
+    return new URL(u).protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 async function checkDbHost(email) {
@@ -233,10 +253,6 @@ fastify.get('/auth/me', async (request, reply) => {
   const session = await getAuthedSession(request, reply);
   if (!session) return;
 
-  if (!HOST_ADDRESSES.includes(session.email.toLowerCase()) && !session.dbHostApproved) {
-    session.dbHostApproved = await checkDbHost(session.email);
-  }
-
   let hostStatus = null;
   try {
     const hp = await pool.query(
@@ -258,7 +274,7 @@ fastify.get('/auth/me', async (request, reply) => {
     address: session.suiAddress,
     email: session.email,
     name: session.name,
-    isHost: isHost(session),
+    isHost: await isHost(session),
     hostStatus,
     hasGuestProfile
   };
@@ -314,7 +330,7 @@ fastify.get('/guest/profile', async (request, reply) => {
 fastify.get('/host/guest-identity/:bookingRef', async (request, reply) => {
   const session = await getAuthedSession(request, reply);
   if (!session) return;
-  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
+  if (!(await isHost(session))) return reply.code(403).send({ error: 'Host access required' });
 
   const { bookingRef } = request.params;
   if (!bookingRef || typeof bookingRef !== 'string' || !bookingRef.startsWith('ARIA-'))
@@ -678,7 +694,7 @@ fastify.post('/booking/release-deposit', {
 }, async (request, reply) => {
   const session = await getAuthedSession(request, reply);
   if (!session) return;
-  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
+  if (!(await isHost(session))) return reply.code(403).send({ error: 'Host access required' });
 
   const { bookingRef } = request.body;
   if (!bookingRef || typeof bookingRef !== 'string' || !bookingRef.startsWith('ARIA-'))
@@ -798,7 +814,7 @@ fastify.post('/booking/claim-damage/confirm', {
       await resend.emails.send({
         from: 'ARIA <onboarding@resend.dev>', to: booking.guest_email,
         subject: `Damage Claim Filed — ${booking.property_title} | Ref: ${bookingRef}`,
-        html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px"><h1 style="color:#ffaa00;font-size:24px;margin:0 0 8px">⚠️ Damage Claim Filed</h1><p style="color:#888;margin:0 0 24px">${booking.guest_name}, the host has filed a damage claim against your security deposit.</p><div style="background:#111;border:1px solid #222;border-radius:8px;padding:20px;margin-bottom:20px"><h2 style="margin:0 0 16px;font-size:18px">${booking.property_title}</h2><p style="color:#888;font-size:13px;margin:0 0 6px">Claim amount: <span style="color:#ffaa00">$${claimAmount}</span> of your $${booking.deposit_amount} deposit</p>${reason ? `<p style="color:#888;font-size:13px;margin:0">Reason: ${escapeHtml(reason)}</p>` : ''}</div><p style="color:#555;font-size:12px;line-height:1.6">If you disagree with this claim, you can dispute it from your bookings page and ARIA will review and resolve the split.</p><p style="color:#555;font-size:12px;text-align:center;margin:24px 0 0">Powered by ARIA — Built on Sui</p></div>`
+        html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px"><h1 style="color:#ffaa00;font-size:24px;margin:0 0 8px">⚠️ Damage Claim Filed</h1><p style="color:#888;margin:0 0 24px">${escapeHtml(booking.guest_name)}, the host has filed a damage claim against your security deposit.</p><div style="background:#111;border:1px solid #222;border-radius:8px;padding:20px;margin-bottom:20px"><h2 style="margin:0 0 16px;font-size:18px">${escapeHtml(booking.property_title)}</h2><p style="color:#888;font-size:13px;margin:0 0 6px">Claim amount: <span style="color:#ffaa00">$${claimAmount}</span> of your $${booking.deposit_amount} deposit</p>${reason ? `<p style="color:#888;font-size:13px;margin:0">Reason: ${escapeHtml(reason)}</p>` : ''}</div><p style="color:#555;font-size:12px;line-height:1.6">If you disagree with this claim, you can dispute it from your bookings page and ARIA will review and resolve the split.</p><p style="color:#555;font-size:12px;text-align:center;margin:24px 0 0">Powered by ARIA — Built on Sui</p></div>`
       });
     } catch (err) { fastify.log.warn({ err }, 'Claim notification email failed'); }
 
@@ -876,7 +892,7 @@ fastify.post('/booking/dispute-claim/confirm', {
       await resend.emails.send({
         from: 'ARIA <onboarding@resend.dev>', to: HOST_ADDRESSES[0] || 'cwilliams36092@gmail.com',
         subject: `Deposit Dispute Filed — ${booking.property_title} | Ref: ${bookingRef}`,
-        html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px"><h1 style="color:#ff4444;font-size:24px;margin:0 0 8px">🚩 Dispute Filed</h1><p style="color:#888;margin:0 0 24px">A guest has disputed a damage claim — review needed.</p><div style="background:#111;border:1px solid #222;border-radius:8px;padding:20px"><p style="color:#888;font-size:13px;margin:0 0 6px">Booking: ${bookingRef} — ${booking.property_title}</p><p style="color:#888;font-size:13px;margin:0 0 6px">Claim amount: $${booking.claim_amount} of $${booking.deposit_amount}</p>${reason ? `<p style="color:#888;font-size:13px;margin:0">Guest's reason: ${escapeHtml(reason)}</p>` : ''}</div></div>`
+        html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px"><h1 style="color:#ff4444;font-size:24px;margin:0 0 8px">🚩 Dispute Filed</h1><p style="color:#888;margin:0 0 24px">A guest has disputed a damage claim — review needed.</p><div style="background:#111;border:1px solid #222;border-radius:8px;padding:20px"><p style="color:#888;font-size:13px;margin:0 0 6px">Booking: ${escapeHtml(bookingRef)} — ${escapeHtml(booking.property_title)}</p><p style="color:#888;font-size:13px;margin:0 0 6px">Claim amount: $${booking.claim_amount} of $${booking.deposit_amount}</p>${reason ? `<p style="color:#888;font-size:13px;margin:0">Guest's reason: ${escapeHtml(reason)}</p>` : ''}</div></div>`
       });
     } catch (err) { fastify.log.warn({ err }, 'Dispute admin notification email failed'); }
 
@@ -937,7 +953,7 @@ fastify.post('/booking/resolve-dispute', {
       await resend.emails.send({
         from: 'ARIA <onboarding@resend.dev>', to: booking.guest_email,
         subject: `Dispute Resolved — ${booking.property_title} | Ref: ${bookingRef}`,
-        html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px"><h1 style="color:#00ff44;font-size:24px;margin:0 0 8px">✅ Dispute Resolved</h1><p style="color:#888;margin:0 0 24px">${booking.guest_name}, ARIA has reviewed your dispute.</p><div style="background:#111;border:1px solid #222;border-radius:8px;padding:20px"><p style="color:#888;font-size:13px;margin:0 0 6px">Returned to you: <span style="color:#00ff44">$${guestAmount}</span></p><p style="color:#888;font-size:13px;margin:0">Kept by host: $${hostAmount}</p></div></div>`
+        html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px"><h1 style="color:#00ff44;font-size:24px;margin:0 0 8px">✅ Dispute Resolved</h1><p style="color:#888;margin:0 0 24px">${escapeHtml(booking.guest_name)}, ARIA has reviewed your dispute.</p><div style="background:#111;border:1px solid #222;border-radius:8px;padding:20px"><p style="color:#888;font-size:13px;margin:0 0 6px">Returned to you: <span style="color:#00ff44">$${guestAmount}</span></p><p style="color:#888;font-size:13px;margin:0">Kept by host: $${hostAmount}</p></div></div>`
       });
     } catch (err) { fastify.log.warn({ err }, 'Resolution email failed'); }
 
@@ -1421,7 +1437,7 @@ fastify.post('/pass/:bookingRef/transfer/confirm', {
 fastify.get('/host/resale-settings', async (request, reply) => {
   const session = await getAuthedSession(request, reply);
   if (!session) return;
-  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
+  if (!(await isHost(session))) return reply.code(403).send({ error: 'Host access required' });
   try {
     const r = await pool.query('SELECT property_id, transfer_allowed, max_resale_premium_bps FROM property_resale_settings');
     const settings = {};
@@ -1438,7 +1454,7 @@ fastify.post('/host/property/:propertyId/resale-settings', {
 }, async (request, reply) => {
   const session = await getAuthedSession(request, reply);
   if (!session) return;
-  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
+  if (!(await isHost(session))) return reply.code(403).send({ error: 'Host access required' });
   if (validateBody(resaleSettingsSchema, request, reply)) return;
 
   const propertyId = Number(request.params.propertyId);
@@ -1487,7 +1503,7 @@ fastify.post('/host/listings/extract', {
 }, async (request, reply) => {
   const session = await getAuthedSession(request, reply);
   if (!session) return;
-  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
+  if (!(await isHost(session))) return reply.code(403).send({ error: 'Host access required' });
   if (validateBody(listingExtractSchema, request, reply)) return;
 
   const { text, url } = request.body;
@@ -1501,7 +1517,7 @@ fastify.post('/host/listings/bulk-extract', {
 }, async (request, reply) => {
   const session = await getAuthedSession(request, reply);
   if (!session) return;
-  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
+  if (!(await isHost(session))) return reply.code(403).send({ error: 'Host access required' });
   if (validateBody(listingBulkExtractSchema, request, reply)) return;
 
   const { listings } = request.body;
@@ -1522,7 +1538,7 @@ fastify.post('/host/listings/photo', {
 }, async (request, reply) => {
   const session = await getAuthedSession(request, reply);
   if (!session) return;
-  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
+  if (!(await isHost(session))) return reply.code(403).send({ error: 'Host access required' });
   if (validateBody(listingPhotoSchema, request, reply)) return;
 
   const match = /^data:image\/(png|jpe?g|webp|gif);base64,(.+)$/.exec(request.body.dataUrl);
@@ -1543,7 +1559,7 @@ fastify.post('/host/properties', {
 }, async (request, reply) => {
   const session = await getAuthedSession(request, reply);
   if (!session) return;
-  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
+  if (!(await isHost(session))) return reply.code(403).send({ error: 'Host access required' });
   if (validateBody(propertyCreateSchema, request, reply)) return;
 
   const {
@@ -1563,7 +1579,7 @@ fastify.post('/host/properties', {
   let cleanTaxRate = Number(taxRate);
   if (!Number.isFinite(cleanTaxRate)) cleanTaxRate = 0.08;
   cleanTaxRate = Math.min(0.20, Math.max(0, cleanTaxRate));
-  const cleanImages = Array.isArray(images) ? images.slice(0, 20).filter(u => typeof u === 'string' && u.length < 2000) : [];
+  const cleanImages = Array.isArray(images) ? images.slice(0, 20).filter(isSafeImageUrl) : [];
 
   if (cleanPrice <= 0) return reply.code(400).send({ error: 'price must be greater than 0' });
 
@@ -1607,7 +1623,7 @@ fastify.post('/host/properties', {
 fastify.patch('/host/properties/:id', async (request, reply) => {
   const session = await getAuthedSession(request, reply);
   if (!session) return;
-  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
+  if (!(await isHost(session))) return reply.code(403).send({ error: 'Host access required' });
   if (validateBody(propertyCreateSchema, request, reply)) return;
 
   const propertyId = Number(request.params.id);
@@ -1625,7 +1641,7 @@ fastify.patch('/host/properties/:id', async (request, reply) => {
   let cleanTaxRate = Number(taxRate);
   if (!Number.isFinite(cleanTaxRate)) cleanTaxRate = 0.08;
   cleanTaxRate = Math.min(0.20, Math.max(0, cleanTaxRate));
-  const cleanImages = Array.isArray(images) ? images.slice(0, 20).filter(u => typeof u === 'string' && u.length < 2000) : [];
+  const cleanImages = Array.isArray(images) ? images.slice(0, 20).filter(isSafeImageUrl) : [];
 
   if (cleanPrice <= 0) return reply.code(400).send({ error: 'price must be greater than 0' });
 
@@ -1677,7 +1693,7 @@ fastify.patch('/host/properties/:id', async (request, reply) => {
 fastify.patch('/host/properties/:id/deactivate', async (request, reply) => {
   const session = await getAuthedSession(request, reply);
   if (!session) return;
-  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
+  if (!(await isHost(session))) return reply.code(403).send({ error: 'Host access required' });
 
   const propertyId = Number(request.params.id);
   if (!Number.isInteger(propertyId)) return reply.code(400).send({ error: 'Invalid property id' });
@@ -1754,7 +1770,7 @@ fastify.get('/bookings/history', async (request, reply) => {
 fastify.get('/bookings/all', async (request, reply) => {
   const session = await getAuthedSession(request, reply);
   if (!session) return;
-  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
+  if (!(await isHost(session))) return reply.code(403).send({ error: 'Host access required' });
   try {
     // Bounded (Codex review): cap the host bookings feed so one request can't
     // pull the whole table into memory. Proper offset/cursor pagination is a
@@ -1829,7 +1845,7 @@ fastify.post('/ical/import', async (request, reply) => {
   // Review finding #2 (SSRF + authz): only a host who manages this property may
   // register a feed URL the server will later fetch, and the URL must be a public
   // https endpoint (assertPublicHttpsUrl blocks internal/metadata addresses).
-  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
+  if (!(await isHost(session))) return reply.code(403).send({ error: 'Host access required' });
   if (!(await canManageProperty(session, propertyId))) return reply.code(403).send({ error: 'You do not manage this property' });
   try {
     await assertPublicHttpsUrl(icalUrl);
@@ -1852,8 +1868,8 @@ fastify.get('/availability/:propertyId', async (request, reply) => {
 fastify.post('/messages/send', async (request, reply) => {
   const session = await getAuthedSession(request, reply);
   if (!session) return;
+  if (validateBody(messageSendSchema, request, reply)) return;
   const { bookingRef, message } = request.body;
-  if (!bookingRef || !message) return reply.code(400).send({ error: 'bookingRef and message required' });
   const bk = await pool.query('SELECT * FROM bookings WHERE booking_ref = $1', [bookingRef]);
   const booking = bk.rows[0];
   if (!booking) return reply.code(404).send({ error: 'Booking not found' });
@@ -1911,8 +1927,8 @@ fastify.get('/messages/:bookingRef/count', async (request, reply) => {
 fastify.post('/reviews/submit', async (request, reply) => {
   const session = await getAuthedSession(request, reply);
   if (!session) return;
+  if (validateBody(reviewSubmitSchema, request, reply)) return;
   const { bookingRef, rating, review } = request.body;
-  if (!bookingRef || !rating || !review) return reply.code(400).send({ error: 'bookingRef, rating and review are required' });
   if (rating < 1 || rating > 5) return reply.code(400).send({ error: 'Rating must be 1-5' });
   try {
     // Verifiable reviews: the review must be for the CALLER'S OWN booking (property
@@ -1991,7 +2007,7 @@ fastify.post('/checkin/verify', {
 }, async (request, reply) => {
   const session = await getAuthedSession(request, reply);
   if (!session) return;
-  if (!isHost(session)) return reply.code(403).send({ error: 'Host/scanner access required' });
+  if (!(await isHost(session))) return reply.code(403).send({ error: 'Host/scanner access required' });
 
   // The scanner forwards exactly what it scanned (base64 JSON of the signed
   // payload). Decode + shape-check before trusting anything in it.
@@ -2048,7 +2064,7 @@ fastify.post('/checkin/verify', {
 fastify.get('/reviews/all', async (request, reply) => {
   const session = await getAuthedSession(request, reply);
   if (!session) return;
-  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
+  if (!(await isHost(session))) return reply.code(403).send({ error: 'Host access required' });
   try {
     const result = await pool.query('SELECT * FROM reviews ORDER BY created_at DESC');
     // Map to the camelCase shape host.jsx renders (the raw snake_case rows left
@@ -2067,7 +2083,7 @@ fastify.get('/reviews/all', async (request, reply) => {
 fastify.get('/tax/summary', async (request, reply) => {
   const session = await getAuthedSession(request, reply);
   if (!session) return;
-  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
+  if (!(await isHost(session))) return reply.code(403).send({ error: 'Host access required' });
   try {
     const result = await pool.query(`
       SELECT b.booking_ref, b.property_id, b.property_title, b.guest_name, b.guest_email,
@@ -2113,7 +2129,7 @@ fastify.get('/tax/summary', async (request, reply) => {
 fastify.post('/tax/remit', async (request, reply) => {
   const session = await getAuthedSession(request, reply);
   if (!session) return;
-  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
+  if (!(await isHost(session))) return reply.code(403).send({ error: 'Host access required' });
   const { bookingRef, jurisdiction, notes } = request.body;
   if (!bookingRef || typeof bookingRef !== 'string' || !bookingRef.startsWith('ARIA-'))
     return reply.code(400).send({ error: 'A valid bookingRef is required' });
@@ -2139,7 +2155,7 @@ fastify.post('/tax/remit', async (request, reply) => {
 fastify.post('/tax/unremit', async (request, reply) => {
   const session = await getAuthedSession(request, reply);
   if (!session) return;
-  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
+  if (!(await isHost(session))) return reply.code(403).send({ error: 'Host access required' });
   const { bookingRef } = request.body;
   if (!bookingRef) return reply.code(400).send({ error: 'bookingRef is required' });
   try {

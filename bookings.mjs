@@ -348,7 +348,7 @@ function buildConfirmationEmailHtml({ propertyTitle, bookingRef, checkIn, checkO
     <h1 style="color:#00ff44;font-size:24px;margin:0 0 8px">✅ Booking Confirmed</h1>
     <p style="color:#888;margin:0 0 24px">Your ARIA booking receipt — ${escapeHtml(guestName)}</p>
     <div style="background:#111;border:1px solid #222;border-radius:8px;padding:20px;margin-bottom:20px">
-      <h2 style="margin:0 0 16px;font-size:18px">${propertyTitle}</h2>
+      <h2 style="margin:0 0 16px;font-size:18px">${escapeHtml(propertyTitle)}</h2>
       <table style="width:100%;border-collapse:collapse">
         <tr><td style="color:#888;padding:6px 0">Booking Ref</td><td style="text-align:right">${bookingRef}</td></tr>
         <tr><td style="color:#888;padding:6px 0">Check-in</td><td style="text-align:right">${checkIn}</td></tr>

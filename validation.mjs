@@ -179,6 +179,23 @@ export const listingPhotoSchema = z.object({
   dataUrl: z.string().min(1, 'dataUrl is required').max(8_000_000, 'Image is too large')
 });
 
+// S3 fix: /messages/send and /reviews/submit had no schema at all — unlike
+// every other free-text field in this codebase (e.g. the AI route's
+// MAX_AI_CONTENT_CHARS cap, or propertyCreateSchema's description/title
+// limits above), a guest or host could submit an arbitrarily large message
+// or review body with no upper bound, which is a storage/cost-abuse vector.
+// Cap both at generous-but-bounded lengths consistent with the rest of this file.
+export const messageSendSchema = z.object({
+  bookingRef: z.string().min(1, 'bookingRef is required'),
+  message: z.string().min(1, 'message is required').max(5000, 'Message is too long (max 5000 characters)')
+});
+
+export const reviewSubmitSchema = z.object({
+  bookingRef: z.string().min(1, 'bookingRef is required'),
+  rating: z.union([z.string(), z.number()]),
+  review: z.string().min(1, 'review is required').max(2000, 'Review is too long (max 2000 characters)')
+});
+
 // Runs a zod schema against request.body and sends a 400 with a readable
 // message if it fails. Returns true if validation failed (caller should
 // `return` immediately after calling this), false if the body is valid.

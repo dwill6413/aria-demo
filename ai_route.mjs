@@ -24,6 +24,28 @@ const HOST_ADDRESSES = (process.env.HOST_ADDRESSES || '').split(',').map(e => e.
 // Tools that may only ever be executed by a verified host.
 const HOST_ONLY_TOOLS = new Set(['get_all_bookings', 'get_revenue_summary', 'get_all_messages', 'release_deposit', 'get_reviews']);
 
+// S2 fix: /booking/create and /booking/cancel are rate-limited via
+// @fastify/rate-limit on their REST routes (5/15min and 10/hr respectively),
+// but this tool executor calls createBooking()/cancelBooking() directly, so
+// those per-route counters never applied here — only the global 100/min/IP
+// limit did. That made /api/ai/chat a softer door to the same money-moving
+// actions. Mirror the same counters here, keyed by session identity rather
+// than IP, so a single guest can't outrun the REST limits just by going
+// through the AI tool path instead.
+const aiActionHits = new Map(); // key -> timestamps (ms) of recent calls
+
+function checkAiActionRateLimit(key, max, windowMs) {
+  const now = Date.now();
+  const hits = (aiActionHits.get(key) || []).filter(t => now - t < windowMs);
+  if (hits.length >= max) {
+    aiActionHits.set(key, hits);
+    return false;
+  }
+  hits.push(now);
+  aiActionHits.set(key, hits);
+  return true;
+}
+
 // Resolve host status from the session itself — NEVER from the client `mode`.
 async function resolveIsHost(session) {
   if (!session?.email) return false;
@@ -356,6 +378,10 @@ async function executeTool(toolName, toolInput, session, isHost) {
     // Date-derived nights (not the LLM's stated `nights`) decide stay length —
     // see createBooking's comment on why client/LLM-supplied nights aren't trusted.
     if (toolName === 'create_booking') {
+      const limiterKey = `create_booking:${session?.suiAddress || session?.email || 'unknown'}`;
+      if (!checkAiActionRateLimit(limiterKey, 5, 15 * 60 * 1000)) {
+        return JSON.stringify({ error: 'Too many booking attempts. Please wait 15 minutes and try again.' });
+      }
       const { propertyId, checkIn, checkOut, guests } = toolInput;
       const result = await createBooking({ propertyId, checkIn, checkOut, guests, session });
       return JSON.stringify(result);
@@ -367,6 +393,10 @@ async function executeTool(toolName, toolInput, session, isHost) {
     // release. cancelBooking self-authorizes (guest owns it, or host manages the
     // property), so a host can only cancel bookings for properties they manage.
     if (toolName === 'cancel_booking') {
+      const limiterKey = `cancel_booking:${session?.suiAddress || session?.email || 'unknown'}`;
+      if (!checkAiActionRateLimit(limiterKey, 10, 60 * 60 * 1000)) {
+        return JSON.stringify({ error: 'Too many cancellation attempts. Please wait and try again.' });
+      }
       const result = await cancelBooking({ bookingRef: toolInput.bookingRef, session });
       return JSON.stringify(result.error ? { error: result.error } : result);
     }

@@ -31,3 +31,8 @@ walrus.exe
 
 # Secrets / key material - never commit private keys
 *.key
+
+# Repair/backup artifacts - never commit these
+*.fixed
+*.bak
+*.orig
