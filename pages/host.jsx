@@ -150,7 +150,12 @@ export default function Host() {
     fetch(`${API}/properties`).then(r => r.json()).then(d => {
       if (!Array.isArray(d.properties)) return;
       const merged = d.properties.map(p => {
-        const fixed = PROPERTY_DISPLAY.find(f => f.id === p.id);
+        // Match on source==='catalog', not just id — the host-created
+        // `properties` DB table has its own SERIAL starting at 1, so a new
+        // listing's id can collide with one of the 6 fixed demo ids (1-6).
+        // Matching by id alone would overlay the wrong demo property's
+        // location/beds/baths/tag/image onto the new listing.
+        const fixed = p.source === 'catalog' ? PROPERTY_DISPLAY.find(f => f.id === p.id) : null;
         if (fixed) return { ...fixed, title: p.title, price: p.price };
         return {
           id: p.id, title: p.title, price: p.price,

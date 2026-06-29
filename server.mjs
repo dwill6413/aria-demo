@@ -191,6 +191,15 @@ fastify.get('/properties', async () => {
     price: p.price,
     taxRate: p.taxRate,
     taxName: p.taxName,
+    // source lets the frontend tell a fixed demo property (catalog.mjs, ids
+    // 1-6) apart from a host-created DB row, even when their ids collide —
+    // the `properties` table's SERIAL starts at 1 too, so the first listing
+    // a host ever creates gets id=1, same as the Oceanfront Villa demo
+    // property. Without this flag the frontend's PROPERTY_DISPLAY merge
+    // (host.jsx/index.jsx) matches by id alone and overlays the wrong
+    // catalog's location/beds/baths/tag/image onto the new listing's
+    // title/price. See ARIA_ROADMAP.md tech debt backlog.
+    source: p.source,
     ...(p.source === 'db' ? {
       location: p.location, beds: p.beds, baths: p.baths, maxGuests: p.maxGuests,
       tag: p.tag, images: p.images, description: p.description,
