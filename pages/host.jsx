@@ -74,6 +74,11 @@ export default function Host() {
   const [bulkBlocks, setBulkBlocks] = useState([{ url: '', text: '' }]);
   const [bulkExtracting, setBulkExtracting] = useState(false);
   const [bulkDrafts, setBulkDrafts] = useState([]); // [{ draft|error, publishing, published }]
+  // editingId: null while adding a new listing; set to a property id while
+  // the Add Property modal is reused to edit an existing host-created
+  // listing (handlePublish branches PATCH vs POST off this).
+  const [editingId, setEditingId] = useState(null);
+  const [deactivatingId, setDeactivatingId] = useState(null);
 
   const copyAddr = () => {
     navigator.clipboard.writeText(user?.address);
@@ -156,15 +161,18 @@ export default function Host() {
         // Matching by id alone would overlay the wrong demo property's
         // location/beds/baths/tag/image onto the new listing.
         const fixed = p.source === 'catalog' ? PROPERTY_DISPLAY.find(f => f.id === p.id) : null;
-        if (fixed) return { ...fixed, title: p.title, price: p.price };
+        if (fixed) return { ...fixed, title: p.title, price: p.price, source: 'catalog' };
         return {
-          id: p.id, title: p.title, price: p.price,
+          id: p.id, title: p.title, price: p.price, source: 'db',
           location: p.location || 'Location not set',
           beds: p.beds ?? 1, baths: p.baths ?? 1,
+          maxGuests: p.maxGuests ?? (p.beds ?? 1) * 2,
           tag: p.tag || 'New Listing',
           image: (p.images && p.images[0]) || PLACEHOLDER_IMAGE,
           images: p.images || [],
           description: p.description || '',
+          taxRate: p.taxRate ?? 0.08,
+          taxJurisdiction: p.taxName || 'Unknown',
         };
       });
       setProperties(merged);
@@ -192,11 +200,40 @@ export default function Host() {
 
   // ── Phase 3a: Add Property handlers ─────────────────────────────────────────
   const openAddModal = (mode = 'import') => {
+    setEditingId(null);
     setAddMode(mode);
     setImportUrl(''); setImportText(''); setExtractError('');
     setDraft(mode === 'manual' ? blankDraft() : null);
     setBulkBlocks([{ url: '', text: '' }]); setBulkDrafts([]);
     setShowAddModal(true);
+  };
+
+  // Reuses the Add Property modal's manual-entry form to edit an existing
+  // host-created listing — only ever called for source==='db' cards (the 6
+  // fixed catalog properties have no DB row to edit).
+  const openEditModal = (p) => {
+    setEditingId(p.id);
+    setAddMode('manual');
+    setDraft({
+      title: p.title, description: p.description || '', location: p.location, price: p.price,
+      beds: p.beds, baths: p.baths, maxGuests: p.maxGuests, tag: p.tag, images: p.images || [],
+      taxRate: p.taxRate, taxJurisdiction: p.taxJurisdiction, sourceUrl: p.sourceUrl || '', importSource: 'manual'
+    });
+    setShowAddModal(true);
+  };
+
+  const handleDeactivate = async (p) => {
+    if (!confirm(`Remove "${p.title}" from your listings? This hides it from the dashboard and marketplace — bookings/revenue history for it stays intact.`)) return;
+    setDeactivatingId(p.id);
+    try {
+      const res = await authFetch(`${API}/host/properties/${p.id}/deactivate`, { method: 'PATCH' });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Could not remove listing');
+      refreshProperties();
+    } catch (err) {
+      alert(err.message || 'Could not remove listing');
+    }
+    setDeactivatingId(null);
   };
 
   // Calls the extraction-only endpoint — nothing is written to the DB here.
@@ -258,16 +295,17 @@ export default function Host() {
     }
     setPublishing(true);
     try {
-      const res = await authFetch(`${API}/host/properties`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+      const res = await authFetch(editingId ? `${API}/host/properties/${editingId}` : `${API}/host/properties`, {
+        method: editingId ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(draftToPayload(draft))
       });
       const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error || 'Could not create listing');
+      if (!res.ok || !data.success) throw new Error(data.error || (editingId ? 'Could not save changes' : 'Could not create listing'));
       setShowAddModal(false);
+      setEditingId(null);
       refreshProperties();
     } catch (err) {
-      alert(err.message || 'Could not create listing');
+      alert(err.message || (editingId ? 'Could not save changes' : 'Could not create listing'));
     }
     setPublishing(false);
   };
@@ -777,6 +815,21 @@ export default function Host() {
                       <span style={{ fontSize: '15px', fontWeight: '700', color: '#00ff44' }}>${p.price}<span style={{ fontSize: '11px', color: '#555' }}>/night</span></span>
                     </div>
                     <p style={{ color: '#666', fontSize: '12px', margin: '0 0 12px' }}>{p.location} · {p.beds} beds · {p.baths} baths</p>
+                    {/* Edit/Remove only apply to host-created listings (a DB
+                        row to act on) — the 6 fixed catalog demo properties
+                        are code constants with no row behind them. */}
+                    {p.source === 'db' && (
+                      <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
+                        <button onClick={() => openEditModal(p)}
+                          style={{ flex: 1, background: 'transparent', border: '1px solid #333', color: '#888', borderRadius: '6px', padding: '6px', fontSize: '11px', fontWeight: '600', cursor: 'pointer' }}>
+                          ✏️ Edit Listing
+                        </button>
+                        <button onClick={() => handleDeactivate(p)} disabled={deactivatingId === p.id}
+                          style={{ flex: 1, background: 'transparent', border: '1px solid #3a1a1a', color: deactivatingId === p.id ? '#555' : '#ff6666', borderRadius: '6px', padding: '6px', fontSize: '11px', fontWeight: '600', cursor: deactivatingId === p.id ? 'wait' : 'pointer' }}>
+                          {deactivatingId === p.id ? 'Removing...' : '🗑️ Remove'}
+                        </button>
+                      </div>
+                    )}
                     <div style={{ background: '#1a1a1a', borderRadius: '8px', padding: '10px', marginBottom: '10px' }}>
                       <div style={{ fontSize: '10px', color: '#555', marginBottom: '6px', fontWeight: '600' }}>ICAL EXPORT</div>
                       <div style={{ display: 'flex', gap: '6px' }}>
@@ -1177,21 +1230,23 @@ export default function Host() {
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '24px', overflowY: 'auto' }}>
           <div style={{ background: '#111', border: '1px solid #333', borderRadius: '16px', width: '100%', maxWidth: '640px', padding: '28px', maxHeight: '90vh', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '4px' }}>
-              <h3 style={{ margin: 0, fontSize: '19px', fontWeight: '700' }}>Add Property</h3>
-              <button onClick={() => setShowAddModal(false)} style={{ background: 'none', border: 'none', color: '#666', fontSize: '20px', cursor: 'pointer', lineHeight: 1 }}>×</button>
+              <h3 style={{ margin: 0, fontSize: '19px', fontWeight: '700' }}>{editingId ? 'Edit Listing' : 'Add Property'}</h3>
+              <button onClick={() => { setShowAddModal(false); setEditingId(null); }} style={{ background: 'none', border: 'none', color: '#666', fontSize: '20px', cursor: 'pointer', lineHeight: 1 }}>×</button>
             </div>
             <p style={{ color: '#666', fontSize: '13px', margin: '0 0 18px' }}>
-              {addMode === 'bulk' ? 'Paste several listings at once — useful if you have dozens to onboard.' : 'Paste your existing Airbnb/VRBO listing text, or fill it in by hand.'}
+              {editingId ? 'Update any fields below and save — changes apply immediately.' : addMode === 'bulk' ? 'Paste several listings at once — useful if you have dozens to onboard.' : 'Paste your existing Airbnb/VRBO listing text, or fill it in by hand.'}
             </p>
 
-            <div style={{ display: 'flex', gap: '8px', marginBottom: '20px' }}>
-              {[['import', '📋 Paste Listing'], ['manual', '✏️ Manual Entry'], ['bulk', '📚 Bulk Import']].map(([m, label]) => (
-                <button key={m} onClick={() => openAddModal(m)}
-                  style={{ flex: 1, background: addMode === m ? '#00ff44' : 'transparent', color: addMode === m ? '#000' : '#888', border: `1px solid ${addMode === m ? '#00ff44' : '#333'}`, borderRadius: '6px', padding: '8px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
-                  {label}
-                </button>
-              ))}
-            </div>
+            {!editingId && (
+              <div style={{ display: 'flex', gap: '8px', marginBottom: '20px' }}>
+                {[['import', '📋 Paste Listing'], ['manual', '✏️ Manual Entry'], ['bulk', '📚 Bulk Import']].map(([m, label]) => (
+                  <button key={m} onClick={() => openAddModal(m)}
+                    style={{ flex: 1, background: addMode === m ? '#00ff44' : 'transparent', color: addMode === m ? '#000' : '#888', border: `1px solid ${addMode === m ? '#00ff44' : '#333'}`, borderRadius: '6px', padding: '8px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
 
             {/* ── Paste-import mode: URL (reference only, never fetched) + text → AI draft ── */}
             {addMode === 'import' && !draft && (
@@ -1292,10 +1347,10 @@ export default function Host() {
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: '8px', marginTop: '22px' }}>
-                  <button onClick={() => setShowAddModal(false)} style={{ flex: 1, background: 'transparent', border: '1px solid #333', color: '#888', borderRadius: '8px', padding: '12px', fontSize: '14px', cursor: 'pointer' }}>Cancel</button>
+                  <button onClick={() => { setShowAddModal(false); setEditingId(null); }} style={{ flex: 1, background: 'transparent', border: '1px solid #333', color: '#888', borderRadius: '8px', padding: '12px', fontSize: '14px', cursor: 'pointer' }}>Cancel</button>
                   <button onClick={handlePublish} disabled={publishing}
                     style={{ flex: 2, background: publishing ? '#333' : '#00ff44', color: publishing ? '#888' : '#000', border: 'none', borderRadius: '8px', padding: '12px', fontSize: '14px', fontWeight: '700', cursor: publishing ? 'wait' : 'pointer' }}>
-                    {publishing ? 'Publishing...' : '✓ Publish Listing'}
+                    {publishing ? (editingId ? 'Saving...' : 'Publishing...') : (editingId ? '✓ Save Changes' : '✓ Publish Listing')}
                   </button>
                 </div>
               </div>

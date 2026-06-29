@@ -334,6 +334,20 @@ export async function initDB() {
   await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS host_email TEXT`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_properties_host_address ON properties(host_address)`);
 
+  // Guard against id collisions with the 6 fixed catalog properties
+  // (catalog.mjs ids 1-6, code-only — not rows in this table). properties.id
+  // is a plain SERIAL, so the first-ever host-created listing got id=1, same
+  // as the Oceanfront Villa demo property. That collision corrupted more
+  // than display fields: bookings.property_id is also a bare, source-unaware
+  // INTEGER, so host.jsx's per-listing BOOKINGS/REVENUE cards (which filter
+  // bookings by propertyId === p.id) attributed the demo property's real
+  // booking/revenue onto the new listing's card. Bumping the sequence well
+  // past the fixed range stops any *future* collision; it does not fix rows
+  // already inserted at ids 1-6 (see ARIA_ROADMAP.md — needs a one-off data
+  // fix for any of those that already exist). Idempotent: setval only moves
+  // the counter forward, never back, so this is safe to run on every boot.
+  await pool.query(`SELECT setval('properties_id_seq', GREATEST(1000, (SELECT COALESCE(MAX(id), 0) FROM properties)))`);
+
   console.log('Database initialized');
 }
 

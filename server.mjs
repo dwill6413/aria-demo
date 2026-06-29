@@ -1583,6 +1583,105 @@ fastify.post('/host/properties', {
   }
 });
 
+// PATCH /host/properties/:id — edit a host-created listing. Same schema and
+// clamping as create (propertyCreateSchema), since a bad-faith edit is just
+// as dangerous as a bad-faith create. Scoped to rows in the `properties`
+// table only — there is no DB row to edit for the 6 fixed catalog
+// properties (catalog.mjs, ids 1-6, code-only), so an id that doesn't match
+// an active row owned by this host 404s rather than silently no-opping.
+fastify.patch('/host/properties/:id', async (request, reply) => {
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
+  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
+  if (validateBody(propertyCreateSchema, request, reply)) return;
+
+  const propertyId = Number(request.params.id);
+  if (!Number.isInteger(propertyId)) return reply.code(400).send({ error: 'Invalid property id' });
+
+  const {
+    title, description, location, price, beds, baths, maxGuests, tag, images,
+    taxRate, taxJurisdiction, taxBreakdown, sourceUrl
+  } = request.body;
+
+  const cleanPrice = Math.max(0, Math.round(Number(price) || 0));
+  const cleanBeds = Math.min(50, Math.max(1, Math.round(Number(beds) || 1)));
+  const cleanBaths = Math.min(50, Math.max(1, Math.round(Number(baths) || 1)));
+  const cleanMaxGuests = Math.min(100, Math.max(1, Math.round(Number(maxGuests) || cleanBeds * 2)));
+  let cleanTaxRate = Number(taxRate);
+  if (!Number.isFinite(cleanTaxRate)) cleanTaxRate = 0.08;
+  cleanTaxRate = Math.min(0.20, Math.max(0, cleanTaxRate));
+  const cleanImages = Array.isArray(images) ? images.slice(0, 20).filter(u => typeof u === 'string' && u.length < 2000) : [];
+
+  if (cleanPrice <= 0) return reply.code(400).send({ error: 'price must be greater than 0' });
+
+  try {
+    const existing = await pool.query('SELECT host_address FROM properties WHERE id = $1 AND active = true', [propertyId]);
+    if (!existing.rows.length) return reply.code(404).send({ error: 'Listing not found' });
+    if (normalizeAddr(existing.rows[0].host_address) !== normalizeAddr(session.suiAddress)) {
+      return reply.code(403).send({ error: 'You do not own this listing' });
+    }
+
+    const r = await pool.query(
+      `UPDATE properties SET
+         title = $1, description = $2, location = $3, price = $4, beds = $5, baths = $6,
+         tag = $7, images = $8, tax_rate = $9, tax_jurisdiction = $10, tax_breakdown = $11,
+         max_guests = $12, source_url = $13
+       WHERE id = $14
+       RETURNING *`,
+      [
+        title.trim(), (description || '').trim(), location.trim(), cleanPrice,
+        cleanBeds, cleanBaths, (tag || 'New Listing').trim(), cleanImages,
+        cleanTaxRate, (taxJurisdiction || 'Unknown').trim(), (taxBreakdown || `${(cleanTaxRate * 100).toFixed(2)}% occupancy tax (host-declared)`).trim(),
+        cleanMaxGuests, (sourceUrl || null), propertyId
+      ]
+    );
+    const row = r.rows[0];
+    fastify.log.info({ propertyId: row.id, host: session.suiAddress }, 'Host listing edited');
+    return reply.send({
+      success: true,
+      property: {
+        id: row.id, title: row.title, description: row.description, location: row.location,
+        price: row.price, beds: row.beds, baths: row.baths, maxGuests: row.max_guests,
+        tag: row.tag, images: row.images || [], taxRate: Number(row.tax_rate), taxName: row.tax_jurisdiction,
+        sourceUrl: row.source_url, importSource: row.import_source
+      }
+    });
+  } catch (err) {
+    fastify.log.error({ err }, '/host/properties/:id update failed');
+    return reply.code(500).send({ error: 'Could not update listing' });
+  }
+});
+
+// PATCH /host/properties/:id/deactivate — soft-delete. Sets active=false
+// rather than actually deleting the row, since getProperty()/getAllProperties
+// (catalog.mjs) already filter on active=true everywhere — this is the same
+// mechanism that's been there since Phase 3a, just newly exposed to hosts.
+// Reversible in principle (no UI for that yet) and safe even if the listing
+// has existing bookings, since bookings store a denormalized property_title
+// at booking time and don't depend on the property row continuing to exist.
+fastify.patch('/host/properties/:id/deactivate', async (request, reply) => {
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
+  if (!isHost(session)) return reply.code(403).send({ error: 'Host access required' });
+
+  const propertyId = Number(request.params.id);
+  if (!Number.isInteger(propertyId)) return reply.code(400).send({ error: 'Invalid property id' });
+
+  try {
+    const existing = await pool.query('SELECT host_address FROM properties WHERE id = $1 AND active = true', [propertyId]);
+    if (!existing.rows.length) return reply.code(404).send({ error: 'Listing not found' });
+    if (normalizeAddr(existing.rows[0].host_address) !== normalizeAddr(session.suiAddress)) {
+      return reply.code(403).send({ error: 'You do not own this listing' });
+    }
+    await pool.query('UPDATE properties SET active = false WHERE id = $1', [propertyId]);
+    fastify.log.info({ propertyId, host: session.suiAddress }, 'Host listing deactivated');
+    return reply.send({ success: true });
+  } catch (err) {
+    fastify.log.error({ err }, '/host/properties/:id/deactivate failed');
+    return reply.code(500).send({ error: 'Could not deactivate listing' });
+  }
+});
+
 // Bookings History — guest (own bookings only)
 fastify.get('/bookings/history', async (request, reply) => {
   const session = await getAuthedSession(request, reply);
