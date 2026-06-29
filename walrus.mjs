@@ -9,14 +9,16 @@
 // throwing — a booking/cancellation/release is still valid without its
 // permanent off-chain audit copy.
 
-// Testnet epochs are ~1-2 days each, and Walrus deletes a blob once its paid
-// epochs run out. `epochs=3` (the previous value) only bought 3-6 days of
+// Testnet epoch duration is 1 day, and Walrus deletes a blob once its paid
+// epochs run out. `epochs=3` (an earlier value) only bought ~3 days of
 // storage — far short of the "RECEIPT STORED PERMANENTLY ON WALRUS" claim
-// shown in the UI (pages/index.jsx, bookings.jsx, host.jsx), so every receipt
-// older than ~a week silently 404s on the aggregator. 183 is the practical
-// testnet max (~1 year) — still not literally permanent, but the longest this
-// API allows; revisit when porting to mainnet (epochs are ~2 weeks there).
-const WALRUS_PUBLISHER_URL = 'https://publisher.walrus-testnet.walrus.space/v1/blobs?epochs=183';
+// shown in the UI (pages/index.jsx, bookings.jsx, host.jsx). 53 is the actual
+// current testnet max_epochs_ahead (confirmed on docs.wal.app/docs/network-
+// reference — a prior value of 183 here was based on stale info and was past
+// the protocol's real limit, which made the publisher reject the request
+// outright with a 500). 53 days still isn't literally permanent; revisit when
+// porting to mainnet (epochs are 2 weeks there, same 53-epoch max).
+const WALRUS_PUBLISHER_URL = 'https://publisher.walrus-testnet.walrus.space/v1/blobs?epochs=53';
 
 export async function pushToWalrus(data, logger = console) {
   try {
