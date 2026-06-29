@@ -331,6 +331,10 @@ export default function Bookings() {
               </button>
             </div>
           </div>
+          <button onClick={() => router.push('/profile')}
+            style={{ background: 'transparent', border: `1px solid ${user?.hasGuestProfile === false ? '#443300' : '#333'}`, color: user?.hasGuestProfile === false ? '#ffaa00' : '#888', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', fontWeight: user?.hasGuestProfile === false ? '600' : '400' }}>
+            🪪 {user?.hasGuestProfile === false ? 'Verify Identity' : 'Identity'}
+          </button>
           <button onClick={() => router.push('/')} style={{ background: 'transparent', border: '1px solid #333', color: '#888', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>
             Back to Search
           </button>
@@ -358,6 +362,9 @@ export default function Bookings() {
               </button>
             </div>
           </div>
+          <button onClick={() => { router.push('/profile'); setMenuOpen(false); }} style={{ background: '#1a1a1a', border: '1px solid #2a2a2a', color: '#fff', borderRadius: '8px', padding: '12px 16px', fontSize: '14px', textAlign: 'left', cursor: 'pointer' }}>
+            🪪 {user?.hasGuestProfile === false ? 'Verify Identity' : 'Identity'}
+          </button>
           <button onClick={() => { router.push('/'); setMenuOpen(false); }} style={{ background: '#1a1a1a', border: '1px solid #2a2a2a', color: '#fff', borderRadius: '8px', padding: '12px 16px', fontSize: '14px', textAlign: 'left', cursor: 'pointer' }}>
             🏠 Back to Search
           </button>
