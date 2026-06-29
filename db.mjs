@@ -263,14 +263,24 @@ export async function initDB() {
   // premium cap (Rail 2) is in basis points, 0 = face-value-only. These are read
   // at booking time and baked into the booking's on-chain ResalePolicy object;
   // later changes only affect future bookings.
-  await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS transfer_allowed BOOLEAN DEFAULT false`);
-  await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS max_resale_premium_bps INTEGER DEFAULT 0`);
-
+  //
+  // NOTE: this used to also ALTER TABLE properties ADD COLUMN transfer_allowed/
+  // max_resale_premium_bps directly on the `properties` table, with a comment
+  // saying they "remain for any real DB-backed listing." That was never true —
+  // every read/write path (GET/POST /host/.../resale-settings below, and
+  // getResaleSettings() in bookings.mjs) only ever touches property_resale_settings,
+  // keyed generically by property_id for BOTH catalog and DB-backed listings. The
+  // properties.* columns were pure dead schema (catalog/db parity audit, item #4)
+  // and have been removed here. Already-migrated databases may still have the
+  // orphan columns sitting unused — harmless, but a manual
+  // `ALTER TABLE properties DROP COLUMN IF EXISTS transfer_allowed, DROP COLUMN IF EXISTS max_resale_premium_bps`
+  // can clean those up if desired.
+  //
   // The 6 demo listings live in catalog.mjs, not the `properties` table (which
   // has NOT NULL location/beds/baths a catalog entry can't satisfy), so resale
   // opt-in for them is stored here, keyed by the catalog property_id. This is the
-  // single source getResaleSettings() reads and the host settings route upserts;
-  // the properties.* columns above remain for any real DB-backed listing.
+  // single source getResaleSettings() reads and the host settings route upserts —
+  // and it's also where any real DB-backed listing's resale settings live.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS property_resale_settings (
       property_id            INTEGER PRIMARY KEY,

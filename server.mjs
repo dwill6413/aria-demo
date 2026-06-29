@@ -1811,8 +1811,11 @@ fastify.get('/deepbook/payout/:amount', async (request, reply) => {
 // iCal
 fastify.get('/ical/:propertyId', async (request, reply) => {
   const { propertyId } = request.params;
-  const propertyTitles = { '1': 'Oceanfront Villa', '2': 'Downtown Loft', '3': 'Mountain Cabin', '4': 'Desert Retreat', '5': 'Lake House', '6': 'Historic Brownstone' };
-  const icalData = await generateICal(propertyId, propertyTitles[propertyId] || 'Property ' + propertyId);
+  // Previously a hardcoded map of only the 6 fixed catalog titles, so any
+  // host-imported listing's exported .ics feed showed "Property {id}"
+  // instead of its real title. getProperty() resolves both sources.
+  const prop = await getProperty(propertyId, fastify.log);
+  const icalData = await generateICal(propertyId, prop?.title || 'Property ' + propertyId);
   reply.header('Content-Type', 'text/calendar; charset=utf-8');
   reply.header('Content-Disposition', `attachment; filename="aria-property-${propertyId}.ics"`);
   return reply.send(icalData);
