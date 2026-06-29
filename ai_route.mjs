@@ -11,9 +11,10 @@
 
 import { pool } from './db.mjs';
 import { getSession } from './auth.mjs';
-import { PROPERTIES, JURISDICTION_TAX_RATES, getAllProperties } from './catalog.mjs';
+import { getAllProperties, getProperty } from './catalog.mjs';
 import { createBooking, releaseDepositForBooking, cancelBooking } from './bookings.mjs';
 import { pushToWalrus } from './walrus.mjs';
+import { normalizeAddr } from './escrow.mjs';
 
 const GROK_MODEL   = 'grok-3-latest';
 const XAI_BASE_URL = 'https://api.x.ai/v1/chat/completions';
@@ -380,13 +381,16 @@ async function executeTool(toolName, toolInput, session, isHost) {
     if (toolName === 'get_revenue_summary') {
       const result = await pool.query(`SELECT * FROM bookings WHERE payment_status != 'cancelled'`);
       const bookings = result.rows;
+      const revPropIds = [...new Set(bookings.map(b => Number(b.property_id)))];
+      const revPropEntries = await Promise.all(revPropIds.map(id => getProperty(id)));
+      const revPropById = new Map(revPropIds.map((id, i) => [id, revPropEntries[i]]));
       const byProperty = {};
       let totalGross = 0, totalFees = 0, totalTaxes = 0, totalNet = 0, totalDeposits = 0;
       bookings.forEach(b => {
         const subtotal = Number(b.subtotal) || 0;
         const fee      = Number(b.aria_fee) || 0;
         const tax      = Number(b.taxes) || 0;
-        const jur      = JURISDICTION_TAX_RATES[Number(b.property_id)] || { rate: 0.08, name: 'Unknown' };
+        const jur      = revPropById.get(Number(b.property_id)) || { taxRate: 0.08, taxName: 'Unknown' };
         totalGross += Number(b.total_amount) || 0;
         totalFees  += fee;
         totalTaxes += tax;
@@ -396,7 +400,7 @@ async function executeTool(toolName, toolInput, session, isHost) {
         totalNet   += subtotal;
         if (b.deposit_status === 'held') totalDeposits += Number(b.deposit_amount) || 0;
         const prop = b.property_title || 'Unknown';
-        if (!byProperty[prop]) byProperty[prop] = { bookings: 0, gross: 0, net: 0, jurisdiction: jur.name, taxRate: `${(jur.rate * 100).toFixed(2)}%` };
+        if (!byProperty[prop]) byProperty[prop] = { bookings: 0, gross: 0, net: 0, jurisdiction: jur.taxName, taxRate: `${(jur.taxRate * 100).toFixed(2)}%` };
         byProperty[prop].bookings++;
         byProperty[prop].gross += Number(b.total_amount) || 0;
         byProperty[prop].net   += subtotal;
@@ -469,10 +473,23 @@ async function executeTool(toolName, toolInput, session, isHost) {
       if (result.rows.length === 0) return JSON.stringify({ error: 'Booking not found' });
       const booking = result.rows[0];
 
-      // Superadmins may release any; a regular approved host only their own property.
+      // Superadmins may release any; a regular approved host only their own
+      // property. Checks the booking's own on-chain host_sui_address first
+      // (the authoritative signer for this booking), then falls back to
+      // getProperty()'s hostAddress, which resolves BOTH the fixed catalog's
+      // PROPERTIES[id].hostAddress and a host-imported row's host_address —
+      // previously this only checked the `properties` table, so a host
+      // configured for one of the 6 fixed catalog properties could never
+      // release deposits via the AI assistant (mirrors the server.mjs
+      // canManageProperty fix — same root-cause bug, same fix shape).
       if (!HOST_ADDRESSES.includes((session.email || '').toLowerCase())) {
-        const owns = await pool.query('SELECT 1 FROM properties WHERE id = $1 AND host_address = $2', [booking.property_id, session.suiAddress]);
-        if (owns.rows.length === 0) return JSON.stringify({ error: 'You do not manage this property' });
+        const bookingHostMatch = booking.host_sui_address && normalizeAddr(booking.host_sui_address) === normalizeAddr(session.suiAddress);
+        let owns = bookingHostMatch;
+        if (!owns) {
+          const prop = await getProperty(booking.property_id);
+          owns = !!(prop?.hostAddress && normalizeAddr(prop.hostAddress) === normalizeAddr(session.suiAddress));
+        }
+        if (!owns) return JSON.stringify({ error: 'You do not manage this property' });
       }
 
       const release = await releaseDepositForBooking(booking);

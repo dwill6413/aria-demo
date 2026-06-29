@@ -12,7 +12,7 @@ import { Resend } from 'resend';
 import { registerAIRoute } from './ai_route.mjs';
 import { handleZkLoginCallback, getSession, deleteSession } from './auth.mjs';
 import { initDB, pool } from './db.mjs';
-import { PROPERTIES, JURISDICTION_TAX_RATES, getProperty, getAllProperties } from './catalog.mjs';
+import { getProperty, getAllProperties } from './catalog.mjs';
 import { extractListingFields } from './listing_import.mjs';
 import {
   verifyEscrowTransaction, autoReleaseEscrow,
@@ -77,16 +77,23 @@ async function checkDbHost(email) {
 // Property-scoped authorization for actions that mutate a specific booking
 // (release deposit, tax remit/unremit, etc). Superadmins (HOST_ADDRESSES) may
 // act on any property; an approved host may only act on properties they own
-// in the `properties` table. Mirrors ai_route.mjs's release_deposit pattern
-// (Finding #4 / Phase 1b) so the two booking-mutation paths can't diverge.
+// — either a host-imported row in the `properties` table, OR one of the 6
+// fixed catalog demo properties whose hostAddress has been configured in
+// catalog.mjs (PROPERTIES[id].hostAddress). Previously this only checked the
+// `properties` table, so a real host configured for a fixed catalog
+// property could never manage their own listing (Gap #2 of the catalog/db
+// parity audit — the inverse of "imported listings missing functionality").
+// Mirrors ai_route.mjs's release_deposit pattern (Finding #4 / Phase 1b) so
+// the two booking-mutation paths can't diverge.
 async function canManageProperty(session, propertyId) {
   if (HOST_ADDRESSES.includes((session?.email || '').toLowerCase())) return true;
+  if (!session?.suiAddress) return false;
   try {
-    const r = await pool.query(
-      'SELECT 1 FROM properties WHERE id = $1 AND host_address = $2',
-      [propertyId, session?.suiAddress]
-    );
-    return r.rows.length > 0;
+    // getProperty() already resolves hostAddress for BOTH sources — the
+    // fixed catalog's PROPERTIES[id].hostAddress and a host-imported row's
+    // host_address column — so a single check covers both cases.
+    const prop = await getProperty(propertyId, fastify.log);
+    return !!(prop?.hostAddress && normalizeAddr(prop.hostAddress) === normalizeAddr(session.suiAddress));
   } catch { return false; }
 }
 
@@ -1006,10 +1013,13 @@ fastify.get('/resale/listings', async (request, reply) => {
         ORDER BY b.check_in ASC
         LIMIT 200`
     );
+    const propIds = [...new Set(r.rows.map(b => Number(b.property_id)))];
+    const propEntries = await Promise.all(propIds.map(id => getProperty(id, fastify.log)));
+    const propById = new Map(propIds.map((id, i) => [id, propEntries[i]]));
     const listings = r.rows.map(b => {
       const face = bookingFaceDollars(b);
       const ask = b.resale_ask_price || face;
-      const jur = JURISDICTION_TAX_RATES[Number(b.property_id)] || { rate: 0.08, name: 'Occupancy Tax' };
+      const jur = propById.get(Number(b.property_id)) || { taxName: 'Occupancy Tax' };
       return {
         bookingRef: b.booking_ref, property: b.property_title, propertyId: b.property_id,
         checkIn: b.check_in, checkOut: b.check_out, nights: b.nights,
@@ -1696,9 +1706,12 @@ fastify.get('/bookings/history', async (request, reply) => {
       'SELECT * FROM bookings WHERE wallet_address = $1 ORDER BY created_at DESC',
       [session.suiAddress]
     );
+    const histPropIds = [...new Set(result.rows.map(b => Number(b.property_id)))];
+    const histPropEntries = await Promise.all(histPropIds.map(id => getProperty(id, fastify.log)));
+    const histPropById = new Map(histPropIds.map((id, i) => [id, histPropEntries[i]]));
     return { bookings: result.rows.map(b => {
       const chargeAmount = (b.total_amount || 0) + (b.deposit_amount || 0);
-      const jur = JURISDICTION_TAX_RATES[Number(b.property_id)] || { rate: 0.08, name: 'Occupancy Tax' };
+      const jur = histPropById.get(Number(b.property_id)) || { taxRate: 0.08, taxName: 'Occupancy Tax' };
       return {
         bookingRef: b.booking_ref, property: b.property_title, propertyId: b.property_id,
         checkIn: b.check_in, checkOut: b.check_out, nights: b.nights,
@@ -1726,7 +1739,7 @@ fastify.get('/bookings/history', async (request, reply) => {
           pricePerNight: `$${b.price_per_night}`, nights: b.nights,
           subtotal: `$${b.subtotal}`,
           ariaFee: `$${b.aria_fee} (5% of subtotal only)`,
-          taxes: `$${b.taxes} (${(jur.rate * 100).toFixed(2)}% — ${jur.name})`,
+          taxes: `$${b.taxes} (${(jur.taxRate * 100).toFixed(2)}% — ${jur.taxName})`,
           bookingTotal: `$${b.total_amount} SuiUSD`,
           depositAmount: `$${b.deposit_amount} (refundable — no ARIA fee)`,
           totalCharged: `$${chargeAmount} SuiUSD`,
@@ -1748,9 +1761,12 @@ fastify.get('/bookings/all', async (request, reply) => {
     // follow-up (see roadmap tech debt). Tunable via BOOKINGS_ALL_LIMIT.
     const allLimit = Number(process.env.BOOKINGS_ALL_LIMIT || 500);
     const result = await pool.query('SELECT * FROM bookings ORDER BY created_at DESC LIMIT $1', [allLimit]);
+    const allPropIds = [...new Set(result.rows.map(b => Number(b.property_id)))];
+    const allPropEntries = await Promise.all(allPropIds.map(id => getProperty(id, fastify.log)));
+    const allPropById = new Map(allPropIds.map((id, i) => [id, allPropEntries[i]]));
     return { bookings: result.rows.map(b => {
       const chargeAmount = (b.total_amount || 0) + (b.deposit_amount || 0);
-      const jur = JURISDICTION_TAX_RATES[Number(b.property_id)] || { rate: 0.08, name: 'Occupancy Tax' };
+      const jur = allPropById.get(Number(b.property_id)) || { taxRate: 0.08, taxName: 'Occupancy Tax' };
       return {
         bookingRef: b.booking_ref, property: b.property_title, propertyId: b.property_id,
         checkIn: b.check_in, checkOut: b.check_out, nights: b.nights,
@@ -1762,7 +1778,7 @@ fastify.get('/bookings/all', async (request, reply) => {
         cancellationWalrusBlobId: b.cancellation_walrus_blob_id,
         guestName: b.guest_name, guestEmail: b.guest_email,
         walletAddress: b.wallet_address, timestamp: b.created_at,
-        jurisdiction: jur.name,
+        jurisdiction: jur.taxName,
         // ariaFee/taxes above are raw numeric fields — host.jsx revenue
         // summaries sum these directly instead of regex-parsing the display
         // strings in breakdown.* (Finding #9).
@@ -1770,7 +1786,7 @@ fastify.get('/bookings/all', async (request, reply) => {
           pricePerNight: `$${b.price_per_night}`, nights: b.nights,
           subtotal: `$${b.subtotal}`,
           ariaFee: `$${b.aria_fee} (5% of subtotal only)`,
-          taxes: `$${b.taxes} (${(jur.rate * 100).toFixed(2)}% — ${jur.name})`,
+          taxes: `$${b.taxes} (${(jur.taxRate * 100).toFixed(2)}% — ${jur.taxName})`,
           bookingTotal: `$${b.total_amount} SuiUSD`,
           depositAmount: `$${b.deposit_amount} (refundable — no ARIA fee)`,
           totalCharged: `$${chargeAmount} SuiUSD`,
@@ -2064,15 +2080,18 @@ fastify.get('/tax/summary', async (request, reply) => {
     const totalCollected   = rows.reduce((sum, r) => sum + (r.taxes || 0), 0);
     const totalRemitted    = rows.filter(r => r.remittance_id).reduce((sum, r) => sum + (r.taxes || 0), 0);
     const totalOutstanding = totalCollected - totalRemitted;
+    const taxPropIds = [...new Set(rows.map(r => Number(r.property_id)))];
+    const taxPropEntries = await Promise.all(taxPropIds.map(id => getProperty(id, fastify.log)));
+    const taxPropById = new Map(taxPropIds.map((id, i) => [id, taxPropEntries[i]]));
     return {
       bookings: rows.map(r => {
-        const jur = JURISDICTION_TAX_RATES[Number(r.property_id)] || { rate: 0.08, name: 'Unknown' };
+        const jur = taxPropById.get(Number(r.property_id)) || { taxRate: 0.08, taxName: 'Unknown' };
         return {
           bookingRef: r.booking_ref, propertyId: r.property_id, property: r.property_title,
           guestName: r.guest_name, guestEmail: r.guest_email,
           checkIn: r.check_in, checkOut: r.check_out, nights: r.nights,
           subtotal: r.subtotal, taxAmount: r.taxes || 0, totalAmount: r.total_amount,
-          taxRate: `${(jur.rate * 100).toFixed(2)}%`, jurisdiction: jur.name,
+          taxRate: `${(jur.taxRate * 100).toFixed(2)}%`, jurisdiction: jur.taxName,
           bookedAt: r.created_at, remitted: !!r.remittance_id,
           remittedAt: r.remitted_at || null, remittedBy: r.remitted_by || null,
           notes: r.notes || null,
@@ -2101,7 +2120,8 @@ fastify.post('/tax/remit', async (request, reply) => {
     const booking = bkResult.rows[0];
     if (!(await canManageProperty(session, booking.property_id)))
       return reply.code(403).send({ error: 'You do not manage this property' });
-    const jur = JURISDICTION_TAX_RATES[Number(booking.property_id)] || { name: jurisdiction || 'Unknown' };
+    const propForRemit = await getProperty(booking.property_id, fastify.log);
+    const jur = { name: propForRemit?.taxName || jurisdiction || 'Unknown' };
     const existing = await pool.query('SELECT id FROM tax_remittances WHERE booking_ref = $1', [bookingRef]);
     if (existing.rows.length > 0) return reply.code(400).send({ error: 'Taxes already marked as remitted for this booking' });
     await pool.query(
