@@ -1,7 +1,88 @@
 # ARIA — Technical Handoff Document
-**Version:** 4.29 | **Updated:** June 29, 2026
+**Version:** 4.30 | **Updated:** June 29, 2026
 
-> **June 29, 2026 (LATEST — resale self-heal fix + property-id collision bug + host
+> **June 29, 2026 (LATEST — catalog/db parity audit + fixes, all 4 gaps closed):**
+> Off-chain only, no new Move package. Prompted by a direct ask: "make sure any
+> imported property listings by a host inherit all functionality as our hard
+> coded test properties — no gaps." A read-only audit (cross-checked manually,
+> not taken at face value) found 4 gaps where the 6 fixed `catalog.mjs` demo
+> properties and host-imported (`properties` table, `source:'db'`) listings were
+> resolved inconsistently. All 4 fixed and verified via `node --check`:
+>
+> 1. **Tax-jurisdiction hardcoding (highest impact).** Six call sites resolved
+> tax rate/name/breakdown via `JURISDICTION_TAX_RATES[propertyId]` — a static
+> map covering only ids 1-6 — instead of `catalog.mjs`'s `getProperty()`, which
+> already resolves both sources correctly. A host-imported listing's bookings/
+> tax pages showed a fabricated "Unknown @ 8%" instead of the host's own
+> self-declared jurisdiction/rate. Fixed in `server.mjs` (`/resale/listings`,
+> `/bookings/history`, `/bookings/all`, `/tax/summary`, `/tax/remit`) and
+> `ai_route.mjs` (`get_revenue_summary` AI tool) — all now batch-resolve via
+> `getProperty()`/`Promise.all` before mapping rows. Removed the now-dead
+> `JURISDICTION_TAX_RATES`/`PROPERTIES` imports from both files.
+>
+> 2. **`canManageProperty()` only checked the `properties` DB table — the
+> inverse gap.** A real, approved host configured as the static `hostAddress`
+> on one of the 6 fixed catalog properties (`catalog.mjs` `PROPERTIES[id].hostAddress`)
+> could never manage their own listing — release deposits, edit resale settings,
+> import iCal, or remit/unremit tax all 403'd, because the check only queried
+> the `properties` table row, never the catalog. **Root-cause fix** (one place,
+> covers all 5 call sites automatically): `canManageProperty(session, propertyId)`
+> in `server.mjs` now resolves via `getProperty(propertyId)` and compares its
+> `hostAddress` (works for both sources) against `session.suiAddress` via the
+> existing `normalizeAddr()`. Also fixed the AI chat's `release_deposit` tool
+> in `ai_route.mjs`, which had its own duplicated, equally narrow DB-only check
+> — now checks `booking.host_sui_address` first, then falls back to the same
+> `getProperty()` resolution.
+>
+> 3. **iCal export title (cosmetic).** `GET /ical/:propertyId` built the
+> exported `.ics` feed's title from a hardcoded 6-entry map; a host-imported
+> listing's feed showed "Property {id}" instead of its real title. Now uses
+> `getProperty()`.
+>
+> 4. **Dead schema (`db.mjs`).** `ALTER TABLE properties ADD COLUMN
+> transfer_allowed/max_resale_premium_bps` was pure dead schema — every actual
+> read/write path (`/host/resale-settings` GET/POST, `getResaleSettings()` in
+> `bookings.mjs`) only ever touches the separate `property_resale_settings`
+> table, keyed generically by `property_id` for both sources. Removed the two
+> `ALTER TABLE` calls from `initDB()`; left a comment noting an already-
+> migrated DB can optionally `DROP COLUMN` the orphaned columns manually (not
+> done automatically — didn't want a destructive schema change unsupervised).
+>
+> **Files touched:** `server.mjs`, `ai_route.mjs`, `db.mjs`. **Not yet
+> pushed/deployed as of this entry** — see the recurring sandbox-reliability
+> note added to `ARIA_ROADMAP.md` Tech Debt below; user runs `git add
+> server.mjs ai_route.mjs db.mjs && git commit && git push` themselves once
+> ready.
+>
+> **⚠️ Operational note — recurring local file truncation during this
+> session.** Five separate times across this session (3 files the first time:
+> a broad batch including `server.mjs`/`catalog.mjs`/`ai_route.mjs`/etc.; then
+> `server.mjs` and `ai_route.mjs` again individually; then `db.mjs`), a file
+> being edited on the user's local disk (`C:\Users\Cecil\aria-demo`, a Windows
+> machine) was found truncated mid-statement immediately after a write — not
+> caused by the edit tool itself (confirmed: the content *before* the
+> truncation point matched the intended edit exactly every time; only the
+> *tail*, often completely unrelated code far below the edited region, went
+> missing). Each time, repaired by diffing the live (truncated) file against
+> `git show HEAD:<file>` and splicing the missing tail back in from the last
+> commit at a stable shared anchor point, preserving the uncommitted edits.
+> Verified via `node --check` after every repair. A stray 0-byte
+> `.git/index.lock` was also found once, suggesting an interrupted git
+> operation. **Suspected root cause: a cloud-sync client (OneDrive or similar)
+> racing the file write on that folder, or low disk space** — not confirmed,
+> but the pattern (intact head, missing tail, no error from the write itself)
+> is consistent with a sync process truncating the file mid-upload after Node/
+> the edit tool already finished writing it. **User action needed:** check
+> disk space and pause cloud sync on the `aria-demo` folder if it's inside a
+> synced directory; clear `.git/index.lock` manually (close any git GUI/
+> terminal first) before the next commit attempt.
+>
+> **Still pending, explicitly parked by user:** Task #4 — reconcile the booking
+> wallet-funding root-cause hypothesis for `ARIA-2-1782401744020-a944c8` (a
+> friend's booking). Blocked on the friend being available to retest. Do not
+> resume until the user raises it again.
+
+> **June 29, 2026 (resale self-heal fix + property-id collision bug + host
 > edit/delete listings):** Three pieces of work, off-chain only (no new Move package).
 >
 > 1. **Resale-listing 502 fix (Task #16).** `/pass/:ref/list-resale` and

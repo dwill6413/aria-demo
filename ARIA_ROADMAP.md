@@ -1,9 +1,32 @@
 # ARIA — Product Roadmap & AI Handoff Document
-**Version:** 2.26 | **Updated:** June 25, 2026
+**Version:** 2.27 | **Updated:** June 29, 2026
 **Purpose:** Complete handoff for an AI assistant continuing ARIA development.
 Read this entire document before writing any code.
 
-> **June 25, 2026 (LATEST — v7 pre-mainnet hardening):** v7 escrow package
+> **June 29, 2026 (LATEST — catalog/db parity: all 4 gaps closed):** Direct ask:
+> "make sure any imported property listings by a host inherit all functionality
+> as our hard coded test properties — no gaps." Audit found 4 places the 6
+> fixed `catalog.mjs` demo properties and host-imported (`properties` table)
+> listings resolved inconsistently; all 4 fixed same session. **(1) Tax
+> jurisdiction:** 6 call sites (`server.mjs` ×5, `ai_route.mjs` ×1) hardcoded
+> `JURISDICTION_TAX_RATES[propertyId]` (covers only ids 1-6) instead of
+> `getProperty()` (covers both sources) — a host-imported listing's tax pages
+> showed a fabricated "Unknown @ 8%". **(2) `canManageProperty()` — the inverse
+> gap:** only checked the `properties` DB table, never the catalog's static
+> `hostAddress`, so a configured host of one of the 6 demo properties could
+> never manage their own listing (release deposits, resale settings, iCal
+> import, tax remit/unremit all 403'd). Fixed at the function itself — now
+> resolves via `getProperty()`, covering all 5 call sites + the AI chat's
+> `release_deposit` tool at once. **(3) iCal export title** used a hardcoded
+> 6-entry map instead of `getProperty()` (cosmetic). **(4) Dead schema:**
+> `properties.transfer_allowed`/`max_resale_premium_bps` columns in `db.mjs`
+> were never actually read/written (real resale settings live in
+> `property_resale_settings`) — removed. Full detail + the files-touched list:
+> see `ARIA_HANDOFF.md`'s matching June 29 entry. **Not yet pushed.** See new
+> Tech Debt row below re: recurring local file truncation hit while making
+> these fixes — worth checking disk space / cloud sync on the project folder.
+>
+> **June 25, 2026 (v7 pre-mainnet hardening):** v7 escrow package
 > `0xadd5ac7867a69200d632e858193549b6fa94abff7d80397a1ab4c418f99d3e60` published — resale
 > split + price-cap math now uses u128 intermediates (overflow-safe), per an external code
 > review. No behavior change at realistic values; 52/52 Move tests unchanged. Additive/no-break;
@@ -647,6 +670,8 @@ original package ID (`0x538262...7fdbe`); no separate contract deployment.
 | Claim/dispute exercisable on demo properties | Medium | All `catalog.mjs` `hostAddress` are `null` → escrow host = `DEMO_HOST_ADDRESS` (if set) else auto-release key. Set `DEMO_HOST_ADDRESS` in Railway to test the flow end-to-end. |
 | **Properties id-namespace collision (found + fixed June 29, 2026; data fix added later same day)** | 🟨 Fixed, not yet deployed | `properties` table's `SERIAL` id starts at 1, same space as `catalog.mjs`'s 6 fixed demo ids — first host-created listing ("Pool Oasis", id=1) collided with Oceanfront Villa. Display-field fix: `GET /properties` returns `source` ('catalog'\|'db'); `host.jsx`/`index.jsx` merges key off it. Forward-only fix: `db.mjs` bumps `properties_id_seq` to `≥1000` on boot. **Found the deeper consequence June 29 (later):** because `catalog.mjs`'s `getProperty()` always resolves ids 1-6 to the fixed catalog FIRST, the existing colliding "Pool Oasis" row (still stuck at id=1) was permanently unbookable as itself — clicking it sent `propertyId=1`, which the server always resolved to the Oceanfront Villa, silently booking and charging for the Villa instead (Villa's price/tax, not Pool Oasis's — this is also what caused the "Book Now $410 vs $403 signed total" mismatch the user saw, since the pre-click client estimate used Pool Oasis's own price/tax while the actual booking used the Villa's). Data fix added: `db.mjs` now re-`id`s any existing row stuck at `id <= 6` to a fresh `≥1000` id on every boot. **Known limitation:** any bookings already made against a colliding row before this fix are indistinguishable from genuine Villa bookings (no FK, recorded identically) and can't be retroactively reattributed. **Not yet verified:** whether the BOOKINGS/REVENUE stats filter (`host.jsx` ~line 822, `activeBookings.filter(b => b.propertyId === p.id)`) also needs a `source` guard. Re-check next session. |
 | Host listing edit/delete (shipped June 29, 2026) | Done, not yet deployed | `PATCH /host/properties/:id` + `/:id/deactivate` added; `host.jsx` Edit/Remove buttons on `source==='db'` cards. No "undo deactivate" UI yet (DB still has the row, `active=false` — a manual SQL flip works if ever needed). |
+| **Catalog/DB parity audit — 4 gaps closed (June 29, 2026)** | **Done, not yet deployed** | Direct ask: host-imported listings must inherit all functionality of the 6 hardcoded catalog properties. (1) Tax jurisdiction hardcoded to `JURISDICTION_TAX_RATES[id]` at 6 call sites (`server.mjs` ×5, `ai_route.mjs` ×1) — only covered catalog ids 1-6; switched all to `getProperty()`. (2) `canManageProperty()` only checked the `properties` DB table, never the catalog's static `hostAddress` — a configured host of a demo property could never manage it (release deposit, resale settings, iCal import, tax remit/unremit all 403'd); fixed at the function root via `getProperty()`, which also fixed the AI chat's `release_deposit` tool. (3) `/ical/:propertyId` title used a hardcoded 6-entry map instead of `getProperty()` (cosmetic). (4) `properties.transfer_allowed`/`max_resale_premium_bps` columns confirmed dead (real resale settings live in `property_resale_settings`) — `ALTER TABLE` statements removed from `db.mjs`; columns can be manually dropped on already-migrated DBs. Full detail in `ARIA_HANDOFF.md`'s matching entry. |
+| **Sandbox file-write reliability (recurring, observed June 29, 2026)** | Low — environment issue, not app code | While editing `server.mjs`, `ai_route.mjs`, and `db.mjs` this session, the on-disk file was truncated mid-statement immediately after a write **5 separate times** — content before the cut point matched the intended edit exactly; only an unrelated tail further down was missing. Not a code bug (confirmed via `git diff --stat` each time: only the intended lines changed). Repaired each time via a marker-splice against `git show HEAD:<file>` rather than a blind overwrite, so no in-progress edits were lost; each repair verified with `node --check`. Suspected cause: cloud sync (OneDrive/Dropbox) or low disk space interacting with the project folder during writes. **Action for user:** check free disk space on the drive holding `C:\Users\Cecil\aria-demo`, and consider pausing cloud sync on that folder while working with an AI assistant, since repeated mid-file truncation risks real data loss if it ever happens without a clean git history to repair against. |
 
 ---
 
