@@ -84,6 +84,7 @@ export default function Home() {
   const [searchLocation, setSearchLocation] = useState('All Locations');
   const [searchCheckIn, setSearchCheckIn] = useState(null);
   const [searchCheckOut, setSearchCheckOut] = useState(null);
+  const [searchGuests, setSearchGuests] = useState(1);
   const [properties, setProperties] = useState(PROPERTY_DISPLAY);
   const [filteredProperties, setFilteredProperties] = useState(PROPERTY_DISPLAY);
   const [searched, setSearched] = useState(false);
@@ -123,12 +124,13 @@ export default function Home() {
   const handleSearch = () => {
     let results = properties;
     if (searchLocation !== 'All Locations') results = results.filter(p => p.location === searchLocation);
+    if (searchGuests > 1) results = results.filter(p => (p.maxGuests ?? 2) >= searchGuests);
     setFilteredProperties(results);
     setSearched(true);
   };
 
   const handleClearSearch = () => {
-    setSearchLocation('All Locations'); setSearchCheckIn(null); setSearchCheckOut(null);
+    setSearchLocation('All Locations'); setSearchCheckIn(null); setSearchCheckOut(null); setSearchGuests(1);
     setFilteredProperties(properties); setSearched(false);
   };
 
@@ -321,60 +323,63 @@ export default function Home() {
     setBookingLoading(false);
   };
 
-  if (loading) return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#0a0a0a', color: '#fff' }}>Loading...</div>;
+  if (loading) return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#fff', color: '#222' }}>Loading...</div>;
 
   if (!user) return (
-    <div style={{ minHeight: '100vh', background: '#0a0a0a', display: 'flex', flexDirection: 'column' }}>
+    <div style={{ minHeight: '100vh', background: '#fff', display: 'flex', flexDirection: 'column' }}>
       <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '40px 24px' }}>
         <div style={{ width: '100%', maxWidth: '420px' }}>
           <div style={{ textAlign: 'center', marginBottom: '40px' }}>
             <div style={{ fontSize: '48px', marginBottom: '12px' }}>🏠</div>
-            <h1 style={{ color: '#fff', fontSize: '32px', fontWeight: '700', margin: '0 0 8px' }}>ARIA</h1>
-            <p style={{ color: '#666', fontSize: '14px', margin: '0 0 4px' }}>Vacation Rental Platform — Built on Sui</p>
-            <p style={{ color: '#ccc', fontSize: '15px', lineHeight: '1.6', margin: '0 0 32px' }}>The Airbnb killer. Lower fees. Instant settlement. You stay in control.</p>
-            <button onClick={handleLogin} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', width: '100%', padding: '14px', background: '#fff', color: '#000', border: 'none', borderRadius: '8px', fontSize: '15px', fontWeight: '600', cursor: 'pointer' }}>
+            <h1 style={{ color: '#ff385c', fontSize: '32px', fontWeight: '700', margin: '0 0 8px' }}>ARIA</h1>
+            <p style={{ color: '#717171', fontSize: '14px', margin: '0 0 4px' }}>Vacation Rental Platform — Built on Sui</p>
+            <p style={{ color: '#444', fontSize: '15px', lineHeight: '1.6', margin: '0 0 32px' }}>The Airbnb killer. Lower fees. Instant settlement. You stay in control.</p>
+            <button onClick={handleLogin} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', width: '100%', padding: '14px', background: '#222', color: '#fff', border: 'none', borderRadius: '8px', fontSize: '15px', fontWeight: '600', cursor: 'pointer' }}>
               <span>G</span> Sign in with Google
             </button>
-            <p style={{ color: '#555', fontSize: '12px', marginTop: '12px' }}>No wallet needed. No seed phrase. Just Google.</p>
+            <p style={{ color: '#999', fontSize: '12px', marginTop: '12px' }}>No wallet needed. No seed phrase. Just Google.</p>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
             {WHY_ARIA.slice(0, 3).map((item, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'start', gap: '12px', background: '#111', border: '1px solid #222', borderRadius: '10px', padding: '14px' }}>
+              <div key={i} style={{ display: 'flex', alignItems: 'start', gap: '12px', background: '#f7f7f7', border: '1px solid #ebebeb', borderRadius: '10px', padding: '14px' }}>
                 <span style={{ fontSize: '20px', flexShrink: 0 }}>{item.icon}</span>
                 <div>
-                  <div style={{ fontSize: '13px', fontWeight: '600', color: '#fff', marginBottom: '2px' }}>{item.title}</div>
-                  <div style={{ fontSize: '12px', color: '#666', lineHeight: '1.5' }}>{item.desc}</div>
+                  <div style={{ fontSize: '13px', fontWeight: '600', color: '#222', marginBottom: '2px' }}>{item.title}</div>
+                  <div style={{ fontSize: '12px', color: '#717171', lineHeight: '1.5' }}>{item.desc}</div>
                 </div>
               </div>
             ))}
           </div>
         </div>
       </div>
-      <div style={{ borderTop: '1px solid #1a1a1a', padding: '20px 24px', textAlign: 'center' }}>
-        <p style={{ color: '#444', fontSize: '11px', margin: 0, lineHeight: '1.7' }}>
+      <div style={{ borderTop: '1px solid #ebebeb', padding: '20px 24px', textAlign: 'center' }}>
+        <p style={{ color: '#717171', fontSize: '11px', margin: 0, lineHeight: '1.7' }}>
           ⚠️ ARIA is a non-custodial platform. We do not hold your funds. All payments execute directly on the Sui blockchain. ARIA has no ability to reverse, freeze, or recover transactions. You are solely responsible for your wallet and transactions.
         </p>
-        <p style={{ color: '#333', fontSize: '11px', margin: '6px 0 0' }}>© 2026 ARIA · Built on Sui · Powered by DeepBook & Walrus</p>
+        <p style={{ color: '#999', fontSize: '11px', margin: '6px 0 0' }}>© 2026 ARIA · Built on Sui · Powered by DeepBook & Walrus</p>
       </div>
     </div>
   );
 
   return (
-    <div style={{ minHeight: '100vh', background: '#0a0a0a', color: '#fff', display: 'flex', flexDirection: 'column' }}>
+    <div style={{ minHeight: '100vh', background: '#fff', color: '#222', display: 'flex', flexDirection: 'column' }}>
       <style>{`
-        .react-datepicker { background: #1a1a1a !important; border: 1px solid #333 !important; color: #fff !important; }
-        .react-datepicker__header { background: #111 !important; border-bottom: 1px solid #333 !important; }
-        .react-datepicker__current-month, .react-datepicker__day-name { color: #fff !important; }
-        .react-datepicker__day { color: #ccc !important; }
-        .react-datepicker__day:hover { background: #333 !important; color: #fff !important; }
-        .react-datepicker__day--selected, .react-datepicker__day--in-range { background: #00ff44 !important; color: #000 !important; }
-        .react-datepicker__day--keyboard-selected { background: #00cc33 !important; color: #000 !important; }
-        .react-datepicker__day--disabled { color: #444 !important; }
-        .react-datepicker__navigation-icon::before { border-color: #fff !important; }
+        .react-datepicker { background: #fff !important; border: 1px solid #ddd !important; color: #222 !important; box-shadow: 0 4px 18px rgba(0,0,0,0.12); }
+        .react-datepicker__header { background: #fff !important; border-bottom: 1px solid #eee !important; }
+        .react-datepicker__current-month, .react-datepicker__day-name { color: #222 !important; }
+        .react-datepicker__day { color: #444 !important; }
+        .react-datepicker__day:hover { background: #f2f2f2 !important; color: #222 !important; }
+        .react-datepicker__day--selected, .react-datepicker__day--in-range { background: #222 !important; color: #fff !important; }
+        .react-datepicker__day--keyboard-selected { background: #444 !important; color: #fff !important; }
+        .react-datepicker__day--disabled { color: #ccc !important; }
+        .react-datepicker__navigation-icon::before { border-color: #222 !important; }
         .react-datepicker-wrapper { width: 100%; }
-        .date-input { width: 100%; background: #1a1a1a; border: 1px solid #333; border-radius: 8px; padding: 10px 14px; color: #fff; font-size: 14px; outline: none; cursor: pointer; box-sizing: border-box; }
+        .date-input { width: 100%; background: transparent; border: none; border-radius: 0; padding: 0; color: #222; font-size: 14px; outline: none; cursor: pointer; box-sizing: border-box; }
+        .date-input::placeholder { color: #717171; }
         .property-img { width: 100%; height: 100%; object-fit: cover; transition: transform 0.3s ease; }
-        .property-card:hover .property-img { transform: scale(1.05); }
+        .property-card:hover .property-img { transform: scale(1.04); }
+        .property-card { transition: box-shadow 0.2s ease; }
+        .property-card:hover { box-shadow: 0 6px 20px rgba(0,0,0,0.12); }
         .gallery-arrow { position: absolute; top: 50%; transform: translateY(-50%); background: rgba(0,0,0,0.55); border: none; color: #fff; font-size: 22px; cursor: pointer; border-radius: 50%; width: 38px; height: 38px; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px); transition: background 0.15s; z-index: 2; }
         .gallery-arrow:hover { background: rgba(0,0,0,0.85); }
         .gallery-thumb { flex: 1; height: 54px; overflow: hidden; cursor: pointer; border-radius: 4px; transition: opacity 0.15s, border-color 0.15s; }
@@ -382,57 +387,64 @@ export default function Home() {
         .gallery-dot { border: none; cursor: pointer; padding: 0; border-radius: 4px; transition: all 0.2s ease; }
         .nav-desktop { display: flex; align-items: center; gap: 12px; }
         .nav-hamburger { display: none !important; }
+        .search-pill { display: flex; align-items: center; background: #fff; border: 1px solid #ddd; border-radius: 40px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); max-width: 760px; margin: 0 auto; }
+        .search-field { padding: 12px 22px; cursor: pointer; min-width: 0; }
+        .search-divider { width: 1px; height: 32px; background: #ddd; flex-shrink: 0; }
+        .search-step-btn { width: 26px; height: 26px; border-radius: 50%; border: 1px solid #ccc; background: #fff; color: #222; cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; }
+        .search-step-btn:disabled { color: #ccc; cursor: not-allowed; }
         @media (max-width: 639px) {
           .nav-desktop { display: none !important; }
           .nav-hamburger { display: flex !important; align-items: center; gap: 8px; }
-          .hero-search { flex-direction: column !important; }
-          .hero-search > * { width: 100% !important; min-width: unset !important; flex: unset !important; }
-          .hero-search .search-btn { width: 100% !important; }
+          .search-pill { flex-direction: column !important; border-radius: 16px !important; max-width: 100% !important; }
+          .search-pill .search-field { width: 100% !important; box-sizing: border-box; }
+          .search-pill .search-divider { width: 100% !important; height: 1px !important; }
+          .search-pill .search-btn-wrap { width: 100% !important; padding: 12px !important; }
+          .search-pill .search-btn { width: 100% !important; border-radius: 24px !important; }
         }
       `}</style>
 
       {/* Header */}
-      <div style={{ background: '#111', borderBottom: '1px solid #222', padding: '0 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '60px', position: 'sticky', top: 0, zIndex: 100 }}>
+      <div style={{ background: '#fff', borderBottom: '1px solid #ebebeb', padding: '0 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '60px', position: 'sticky', top: 0, zIndex: 100 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <span style={{ fontSize: '20px' }}>🏠</span>
-          <span style={{ fontWeight: '700', fontSize: '18px' }}>ARIA</span>
-          <span style={{ background: '#00ff44', color: '#000', fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '10px', marginLeft: '4px' }}>BETA</span>
+          <span style={{ fontWeight: '700', fontSize: '18px', color: '#ff385c' }}>ARIA</span>
+          <span style={{ background: '#00c853', color: '#fff', fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '10px', marginLeft: '4px' }}>BETA</span>
         </div>
 
         {/* Desktop nav */}
         <div className="nav-desktop">
           <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: '13px', fontWeight: '500' }}>{user.name}</div>
+            <div style={{ fontSize: '13px', fontWeight: '500', color: '#222' }}>{user.name}</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'flex-end' }}>
-              <div style={{ fontSize: '11px', color: '#00ff44', fontFamily: 'monospace', wordBreak: 'break-all' }}>{user.address}</div>
-              <button onClick={copyAddr} title="Copy address" style={{ background: 'none', border: 'none', cursor: 'pointer', color: addrCopied ? '#00ff44' : '#555', fontSize: '12px', padding: '0 2px', flexShrink: 0 }}>
+              <div style={{ fontSize: '11px', color: '#00913f', fontFamily: 'monospace', wordBreak: 'break-all' }}>{user.address}</div>
+              <button onClick={copyAddr} title="Copy address" style={{ background: 'none', border: 'none', cursor: 'pointer', color: addrCopied ? '#00913f' : '#999', fontSize: '12px', padding: '0 2px', flexShrink: 0 }}>
                 {addrCopied ? '✓' : '⧉'}
               </button>
             </div>
           </div>
-          <button onClick={() => router.push('/bookings')} style={{ background: 'transparent', border: '1px solid #333', color: '#888', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>My Bookings</button>
+          <button onClick={() => router.push('/bookings')} style={{ background: 'transparent', border: '1px solid #ddd', color: '#444', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>My Bookings</button>
           <button onClick={() => router.push('/profile')}
-            style={{ background: 'transparent', border: `1px solid ${user.hasGuestProfile === false ? '#443300' : '#333'}`, color: user.hasGuestProfile === false ? '#ffaa00' : '#888', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', fontWeight: user.hasGuestProfile === false ? '600' : '400' }}>
+            style={{ background: 'transparent', border: `1px solid ${user.hasGuestProfile === false ? '#ffd699' : '#ddd'}`, color: user.hasGuestProfile === false ? '#b06d00' : '#444', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', fontWeight: user.hasGuestProfile === false ? '600' : '400' }}>
             🪪 {user.hasGuestProfile === false ? 'Verify Identity' : 'Identity'}
           </button>
-          <button onClick={() => router.push('/bookings?market=1')} style={{ background: 'transparent', border: '1px solid #3a2e1a', color: '#ffaa00', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', fontWeight: '600' }}>🏷️ Resale Market</button>
-          {user.isHost && <button onClick={() => router.push('/host')} style={{ background: 'transparent', border: '1px solid #333', color: '#888', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>Host Dashboard</button>}
+          <button onClick={() => router.push('/bookings?market=1')} style={{ background: 'transparent', border: '1px solid #ffd699', color: '#b06d00', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', fontWeight: '600' }}>🏷️ Resale Market</button>
+          {user.isHost && <button onClick={() => router.push('/host')} style={{ background: 'transparent', border: '1px solid #ddd', color: '#444', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>Host Dashboard</button>}
           {!user.isHost && user.hostStatus !== 'pending' && (
-            <button onClick={() => router.push('/become-host')} style={{ background: 'transparent', border: '1px solid #00ff44', color: '#00ff44', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', fontWeight: '600' }}>🏡 Become a Host</button>
+            <button onClick={() => router.push('/become-host')} style={{ background: 'transparent', border: '1px solid #00913f', color: '#00913f', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', fontWeight: '600' }}>🏡 Become a Host</button>
           )}
-          {user.hostStatus === 'pending' && <span style={{ fontSize: '12px', color: '#ffaa00', fontWeight: '600' }}>⏳ Application Pending</span>}
-          <button onClick={() => router.push('/ai')} style={{ background: 'transparent', border: '1px solid #2a1a3a', color: '#aa44ff', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', fontWeight: '600' }}>🤖 AI</button>
-          <button onClick={handleLogout} style={{ background: 'transparent', border: '1px solid #333', color: '#888', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>Sign out</button>
+          {user.hostStatus === 'pending' && <span style={{ fontSize: '12px', color: '#b06d00', fontWeight: '600' }}>⏳ Application Pending</span>}
+          <button onClick={() => router.push('/ai')} style={{ background: 'transparent', border: '1px solid #e4d4ff', color: '#8b3dff', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', fontWeight: '600' }}>🤖 AI</button>
+          <button onClick={handleLogout} style={{ background: 'transparent', border: '1px solid #ddd', color: '#444', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>Sign out</button>
         </div>
 
         {/* Mobile nav */}
         <div className="nav-hamburger">
           <button onClick={copyAddr} title="Copy address" style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', gap: '3px' }}>
-            <span style={{ fontSize: '11px', color: '#00ff44', fontFamily: 'monospace' }}>{user.address.slice(0, 6)}…{user.address.slice(-4)}</span>
-            <span style={{ color: addrCopied ? '#00ff44' : '#555', fontSize: '11px' }}>{addrCopied ? '✓' : '⧉'}</span>
+            <span style={{ fontSize: '11px', color: '#00913f', fontFamily: 'monospace' }}>{user.address.slice(0, 6)}…{user.address.slice(-4)}</span>
+            <span style={{ color: addrCopied ? '#00913f' : '#999', fontSize: '11px' }}>{addrCopied ? '✓' : '⧉'}</span>
           </button>
           <button onClick={() => setMenuOpen(o => !o)}
-            style={{ background: 'transparent', border: '1px solid #333', color: '#fff', borderRadius: '6px', width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', cursor: 'pointer', lineHeight: 1 }}>
+            style={{ background: 'transparent', border: '1px solid #ddd', color: '#222', borderRadius: '6px', width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', cursor: 'pointer', lineHeight: 1 }}>
             {menuOpen ? '×' : '☰'}
           </button>
         </div>
@@ -440,12 +452,12 @@ export default function Home() {
 
       {/* Mobile dropdown menu */}
       {menuOpen && (
-        <div style={{ background: '#111', borderBottom: '1px solid #222', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '8px', position: 'sticky', top: '60px', zIndex: 99 }}>
-          <div style={{ paddingBottom: '8px', borderBottom: '1px solid #1a1a1a', marginBottom: '4px' }}>
-            <div style={{ fontSize: '13px', fontWeight: '600', color: '#fff' }}>{user.name}</div>
+        <div style={{ background: '#fff', borderBottom: '1px solid #ebebeb', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '8px', position: 'sticky', top: '60px', zIndex: 99 }}>
+          <div style={{ paddingBottom: '8px', borderBottom: '1px solid #eee', marginBottom: '4px' }}>
+            <div style={{ fontSize: '13px', fontWeight: '600', color: '#222' }}>{user.name}</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
-              <div style={{ fontSize: '11px', color: '#00ff44', fontFamily: 'monospace', wordBreak: 'break-all', flex: 1 }}>{user.address}</div>
-              <button onClick={copyAddr} title="Copy address" style={{ background: 'none', border: 'none', cursor: 'pointer', color: addrCopied ? '#00ff44' : '#555', fontSize: '13px', padding: '0 2px', flexShrink: 0 }}>
+              <div style={{ fontSize: '11px', color: '#00913f', fontFamily: 'monospace', wordBreak: 'break-all', flex: 1 }}>{user.address}</div>
+              <button onClick={copyAddr} title="Copy address" style={{ background: 'none', border: 'none', cursor: 'pointer', color: addrCopied ? '#00913f' : '#999', fontSize: '13px', padding: '0 2px', flexShrink: 0 }}>
                 {addrCopied ? '✓' : '⧉'}
               </button>
             </div>
@@ -459,62 +471,82 @@ export default function Home() {
             { label: '🤖 AI Assistant', action: () => { router.push('/ai'); setMenuOpen(false); } },
           ].filter(Boolean).map((item, i) => (
             <button key={i} onClick={item.action}
-              style={{ background: '#1a1a1a', border: '1px solid #2a2a2a', color: '#fff', borderRadius: '8px', padding: '12px 16px', fontSize: '14px', textAlign: 'left', cursor: 'pointer', width: '100%' }}>
+              style={{ background: '#fafafa', border: '1px solid #eee', color: '#222', borderRadius: '8px', padding: '12px 16px', fontSize: '14px', textAlign: 'left', cursor: 'pointer', width: '100%' }}>
               {item.label}
             </button>
           ))}
-          {user.hostStatus === 'pending' && <div style={{ color: '#ffaa00', fontSize: '13px', padding: '4px 0' }}>⏳ Host Application Pending</div>}
+          {user.hostStatus === 'pending' && <div style={{ color: '#b06d00', fontSize: '13px', padding: '4px 0' }}>⏳ Host Application Pending</div>}
           <button onClick={() => { handleLogout(); setMenuOpen(false); }}
-            style={{ background: 'transparent', border: '1px solid #333', color: '#888', borderRadius: '8px', padding: '12px 16px', fontSize: '14px', textAlign: 'left', cursor: 'pointer', width: '100%', marginTop: '4px' }}>
+            style={{ background: 'transparent', border: '1px solid #ddd', color: '#444', borderRadius: '8px', padding: '12px 16px', fontSize: '14px', textAlign: 'left', cursor: 'pointer', width: '100%', marginTop: '4px' }}>
             Sign out
           </button>
         </div>
       )}
 
       {/* Hero / Search */}
-      <div style={{ background: 'linear-gradient(180deg,#111 0%,#0a0a0a 100%)', padding: '40px 24px', textAlign: 'center' }}>
-        <h2 style={{ fontSize: '28px', fontWeight: '700', margin: '0 0 8px' }}>Find your perfect stay</h2>
-        <p style={{ color: '#666', fontSize: '14px', margin: '0 0 24px' }}>Book instantly. Pay with SuiUSD. You stay in control — always.</p>
-        <div className="hero-search" style={{ display: 'flex', gap: '8px', maxWidth: '700px', margin: '0 auto', flexWrap: 'wrap' }}>
-          <select value={searchLocation} onChange={e => setSearchLocation(e.target.value)}
-            style={{ flex: 2, minWidth: '180px', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '12px 16px', color: '#fff', fontSize: '14px', outline: 'none', cursor: 'pointer' }}>
-            <option value="All Locations">📍 Where are you going?</option>
-            {/* Phase 3a: derived from live properties (not just the 6 fixed demo
-                ones) so host-created listings' locations are filterable too. */}
-            {[...new Set(properties.map(p => p.location))].filter(Boolean).map(loc => (
-              <option key={loc} value={loc}>📍 {loc}</option>
-            ))}
-          </select>
-          <div style={{ flex: 1, minWidth: '130px' }}>
-            <DatePicker selected={searchCheckIn} onChange={date => setSearchCheckIn(date)} minDate={new Date()} placeholderText="📅 Check-in" dateFormat="MMM d" className="date-input" />
+      <div style={{ background: '#fff', padding: '40px 24px', textAlign: 'center' }}>
+        <h2 style={{ fontSize: '28px', fontWeight: '700', margin: '0 0 8px', color: '#222' }}>Find your perfect stay</h2>
+        <p style={{ color: '#717171', fontSize: '14px', margin: '0 0 24px' }}>Book instantly. Pay with SuiUSD. You stay in control — always.</p>
+        <div className="search-pill">
+          <div className="search-field" style={{ flex: '1.4', textAlign: 'left' }}>
+            <div style={{ fontSize: '11px', fontWeight: '700', color: '#222' }}>Where</div>
+            <select value={searchLocation} onChange={e => setSearchLocation(e.target.value)}
+              style={{ width: '100%', background: 'transparent', border: 'none', padding: 0, color: searchLocation === 'All Locations' ? '#717171' : '#222', fontSize: '14px', outline: 'none', cursor: 'pointer' }}>
+              <option value="All Locations">Search destinations</option>
+              {/* Phase 3a: derived from live properties (not just the 6 fixed demo
+                  ones) so host-created listings' locations are filterable too. */}
+              {[...new Set(properties.map(p => p.location))].filter(Boolean).map(loc => (
+                <option key={loc} value={loc}>{loc}</option>
+              ))}
+            </select>
           </div>
-          <div style={{ flex: 1, minWidth: '130px' }}>
-            <DatePicker selected={searchCheckOut} onChange={date => setSearchCheckOut(date)} minDate={searchCheckIn ? new Date(searchCheckIn.getTime() + 86400000) : new Date()} placeholderText="📅 Check-out" dateFormat="MMM d" className="date-input" />
+          <div className="search-divider" />
+          <div className="search-field" style={{ flex: '1', textAlign: 'left' }}>
+            <div style={{ fontSize: '11px', fontWeight: '700', color: '#222' }}>Check in</div>
+            <DatePicker selected={searchCheckIn} onChange={date => setSearchCheckIn(date)} minDate={new Date()} placeholderText="Add dates" dateFormat="MMM d" className="date-input" />
           </div>
-          <button className="search-btn" onClick={handleSearch} style={{ background: '#00ff44', color: '#000', border: 'none', borderRadius: '8px', padding: '12px 24px', fontWeight: '700', fontSize: '14px', cursor: 'pointer' }}>Search</button>
+          <div className="search-divider" />
+          <div className="search-field" style={{ flex: '1', textAlign: 'left' }}>
+            <div style={{ fontSize: '11px', fontWeight: '700', color: '#222' }}>Check out</div>
+            <DatePicker selected={searchCheckOut} onChange={date => setSearchCheckOut(date)} minDate={searchCheckIn ? new Date(searchCheckIn.getTime() + 86400000) : new Date()} placeholderText="Add dates" dateFormat="MMM d" className="date-input" />
+          </div>
+          <div className="search-divider" />
+          <div className="search-field" style={{ flex: '1.1', textAlign: 'left' }}>
+            <div style={{ fontSize: '11px', fontWeight: '700', color: '#222' }}>Who</div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+              <span style={{ fontSize: '14px', color: searchGuests > 1 ? '#222' : '#717171' }}>{searchGuests} guest{searchGuests > 1 ? 's' : ''}</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                <button type="button" className="search-step-btn" onClick={e => { e.stopPropagation(); setSearchGuests(g => Math.max(1, g - 1)); }} disabled={searchGuests <= 1}>−</button>
+                <button type="button" className="search-step-btn" onClick={e => { e.stopPropagation(); setSearchGuests(g => Math.min(16, g + 1)); }}>+</button>
+              </div>
+            </div>
+          </div>
+          <div className="search-btn-wrap" style={{ padding: '8px' }}>
+            <button className="search-btn" onClick={handleSearch} title="Search" style={{ background: '#ff385c', color: '#fff', border: 'none', borderRadius: '50%', width: '48px', height: '48px', fontWeight: '700', fontSize: '16px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>🔍</button>
+          </div>
         </div>
         {searched && (
           <div style={{ marginTop: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px' }}>
-            <span style={{ fontSize: '13px', color: '#888' }}>{filteredProperties.length} propert{filteredProperties.length === 1 ? 'y' : 'ies'} found{searchLocation !== 'All Locations' ? ` in ${searchLocation}` : ''}</span>
-            <button onClick={handleClearSearch} style={{ background: 'transparent', border: '1px solid #444', color: '#888', padding: '4px 10px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>Clear</button>
+            <span style={{ fontSize: '13px', color: '#717171' }}>{filteredProperties.length} propert{filteredProperties.length === 1 ? 'y' : 'ies'} found{searchLocation !== 'All Locations' ? ` in ${searchLocation}` : ''}</span>
+            <button onClick={handleClearSearch} style={{ background: 'transparent', border: '1px solid #ddd', color: '#444', padding: '4px 10px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>Clear</button>
           </div>
         )}
       </div>
 
       {/* Why ARIA section */}
-      <div style={{ background: '#0a0a0a', borderTop: '1px solid #1a1a1a', borderBottom: '1px solid #1a1a1a', padding: '48px 24px' }}>
+      <div style={{ background: '#f7f7f7', borderTop: '1px solid #ebebeb', borderBottom: '1px solid #ebebeb', padding: '48px 24px' }}>
         <div style={{ maxWidth: '1100px', margin: '0 auto' }}>
           <div style={{ textAlign: 'center', marginBottom: '32px' }}>
-            <h2 style={{ fontSize: '22px', fontWeight: '700', margin: '0 0 8px' }}>Why ARIA?</h2>
-            <p style={{ color: '#666', fontSize: '14px', margin: 0 }}>Unlike Airbnb, you stay in control of your money — always.</p>
+            <h2 style={{ fontSize: '22px', fontWeight: '700', margin: '0 0 8px', color: '#222' }}>Why ARIA?</h2>
+            <p style={{ color: '#717171', fontSize: '14px', margin: 0 }}>Unlike Airbnb, you stay in control of your money — always.</p>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '16px' }}>
             {WHY_ARIA.map((item, i) => (
-              <div key={i} style={{ background: '#111', border: '1px solid #222', borderRadius: '12px', padding: '20px', display: 'flex', alignItems: 'start', gap: '14px' }}>
+              <div key={i} style={{ background: '#fff', border: '1px solid #ebebeb', borderRadius: '12px', padding: '20px', display: 'flex', alignItems: 'start', gap: '14px' }}>
                 <span style={{ fontSize: '24px', flexShrink: 0 }}>{item.icon}</span>
                 <div>
-                  <div style={{ fontSize: '14px', fontWeight: '600', color: '#fff', marginBottom: '6px' }}>{item.title}</div>
-                  <div style={{ fontSize: '13px', color: '#666', lineHeight: '1.6' }}>{item.desc}</div>
+                  <div style={{ fontSize: '14px', fontWeight: '600', color: '#222', marginBottom: '6px' }}>{item.title}</div>
+                  <div style={{ fontSize: '13px', color: '#717171', lineHeight: '1.6' }}>{item.desc}</div>
                 </div>
               </div>
             ))}
@@ -525,48 +557,33 @@ export default function Home() {
       {/* Property Grid */}
       <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '32px 24px', flex: 1 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px' }}>
-          <h3 style={{ fontSize: '18px', fontWeight: '600', margin: 0 }}>Featured Properties</h3>
-          <span style={{ fontSize: '13px', color: '#666' }}>{filteredProperties.length} properties available</span>
+          <h3 style={{ fontSize: '18px', fontWeight: '600', margin: 0, color: '#222' }}>Popular homes</h3>
+          <span style={{ fontSize: '13px', color: '#717171' }}>{filteredProperties.length} properties available</span>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(320px,1fr))', gap: '20px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(260px,1fr))', gap: '28px 20px' }}>
           {filteredProperties.map(p => {
             const { rating, count, verifiedCount, isLive } = getDisplayRating(p);
             return (
-              <div key={p.id} className="property-card" onClick={() => openModal(p)}
-                style={{ background: '#111', border: '1px solid #222', borderRadius: '12px', overflow: 'hidden', cursor: 'pointer', transition: 'border-color 0.2s' }}
-                onMouseEnter={e => e.currentTarget.style.borderColor = '#444'}
-                onMouseLeave={e => e.currentTarget.style.borderColor = '#222'}>
-                <div style={{ height: '200px', background: '#1a1a1a', overflow: 'hidden', position: 'relative' }}>
+              <div key={p.id} className="property-card" onClick={() => openModal(p)} style={{ cursor: 'pointer', borderRadius: '12px' }}>
+                <div style={{ height: '220px', background: '#eee', overflow: 'hidden', position: 'relative', borderRadius: '12px' }}>
                   <img src={p.image} alt={p.title} className="property-img" />
-                  <span style={{ position: 'absolute', top: '12px', left: '12px', background: 'rgba(0,0,0,0.7)', color: '#fff', fontSize: '11px', fontWeight: '600', padding: '4px 10px', borderRadius: '6px', backdropFilter: 'blur(4px)' }}>{p.tag}</span>
-                  {isLive && <span style={{ position: 'absolute', top: '12px', right: '12px', background: 'rgba(170,68,255,0.85)', color: '#fff', fontSize: '10px', fontWeight: '700', padding: '3px 8px', borderRadius: '6px' }}>ARIA VERIFIED</span>}
-                  <span style={{ position: 'absolute', bottom: '10px', right: '10px', background: 'rgba(0,0,0,0.65)', color: '#fff', fontSize: '10px', fontWeight: '600', padding: '3px 8px', borderRadius: '6px', backdropFilter: 'blur(4px)' }}>📷 {p.images.length}</span>
+                  {isLive && <span style={{ position: 'absolute', top: '12px', left: '12px', background: '#fff', color: '#8b3dff', fontSize: '10px', fontWeight: '700', padding: '4px 9px', borderRadius: '6px', boxShadow: '0 1px 4px rgba(0,0,0,0.2)' }}>ARIA Verified</span>}
+                  <span style={{ position: 'absolute', bottom: '10px', right: '10px', background: 'rgba(0,0,0,0.55)', color: '#fff', fontSize: '10px', fontWeight: '600', padding: '3px 8px', borderRadius: '6px', backdropFilter: 'blur(4px)' }}>📷 {p.images.length}</span>
                 </div>
-                <div style={{ padding: '16px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '4px' }}>
-                    <h4 style={{ margin: 0, fontSize: '15px', fontWeight: '600' }}>{p.title}</h4>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '13px' }}>
-                      <span style={{ color: isLive ? '#aa44ff' : '#888' }}>★</span>
-                      <span style={{ color: isLive ? '#aa44ff' : '#fff', fontWeight: isLive ? '700' : '400' }}>{rating}</span>
-                      <span style={{ color: '#555', fontSize: '11px' }}>({count})</span>
+                <div style={{ padding: '10px 2px 0' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '2px' }}>
+                    <h4 style={{ margin: 0, fontSize: '14px', fontWeight: '600', color: '#222' }}>{p.title}</h4>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '13px', flexShrink: 0, marginLeft: '8px' }}>
+                      <span style={{ color: '#222' }}>★</span>
+                      <span style={{ color: '#222' }}>{rating}</span>
                       {verifiedCount > 0 && (
-                        <span title={`${verifiedCount} review${verifiedCount > 1 ? 's' : ''} from a real on-chain-escrow stay`} style={{ color: '#00ff44', fontSize: '11px', fontWeight: '700' }}>✓{verifiedCount}</span>
+                        <span title={`${verifiedCount} review${verifiedCount > 1 ? 's' : ''} from a real on-chain-escrow stay`} style={{ color: '#00913f', fontSize: '11px', fontWeight: '700' }}>✓{verifiedCount}</span>
                       )}
                     </div>
                   </div>
-                  <p style={{ color: '#666', fontSize: '13px', margin: '0 0 12px' }}>{p.location}</p>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <div style={{ fontSize: '13px', color: '#555' }}>{p.beds} beds · {p.baths} baths</div>
-                    <div><span style={{ fontSize: '17px', fontWeight: '700' }}>${p.price}</span><span style={{ color: '#666', fontSize: '13px' }}>/night</span></div>
-                  </div>
-                  <div style={{ marginTop: '12px', display: 'flex', gap: '8px' }}>
-                    {[['ARIA FEE','5%','#00ff44'],['AIRBNB FEE','15%','#ff4444'],['SETTLEMENT','instant','#4a9eff']].map(([label,val,color]) => (
-                      <div key={label} style={{ flex: 1, background: '#1a1a1a', borderRadius: '6px', padding: '8px', textAlign: 'center' }}>
-                        <div style={{ fontSize: '10px', color: '#555', marginBottom: '2px' }}>{label}</div>
-                        <div style={{ fontSize: '13px', fontWeight: '600', color }}>{val}</div>
-                      </div>
-                    ))}
-                  </div>
+                  <p style={{ color: '#717171', fontSize: '13px', margin: '0 0 2px' }}>{p.location}</p>
+                  <p style={{ color: '#717171', fontSize: '13px', margin: '0 0 6px' }}>{p.tag}</p>
+                  <div style={{ fontSize: '14px', color: '#222' }}><span style={{ fontWeight: '600' }}>${p.price}</span> night</div>
                 </div>
               </div>
             );
@@ -575,18 +592,18 @@ export default function Home() {
       </div>
 
       {/* Footer */}
-      <div style={{ borderTop: '1px solid #1a1a1a', padding: '24px', textAlign: 'center', marginTop: 'auto' }}>
-        <p style={{ color: '#444', fontSize: '11px', margin: '0 0 6px', lineHeight: '1.7', maxWidth: '700px', marginLeft: 'auto', marginRight: 'auto' }}>
+      <div style={{ borderTop: '1px solid #ebebeb', padding: '24px', textAlign: 'center', marginTop: 'auto' }}>
+        <p style={{ color: '#717171', fontSize: '11px', margin: '0 0 6px', lineHeight: '1.7', maxWidth: '700px', marginLeft: 'auto', marginRight: 'auto' }}>
           ⚠️ ARIA is a non-custodial platform. We do not hold your funds. All payments execute directly on the Sui blockchain. ARIA has no ability to reverse, freeze, or recover transactions. You are solely responsible for your wallet and transactions.
         </p>
-        <p style={{ color: '#333', fontSize: '11px', margin: 0 }}>© 2026 ARIA · Built on Sui · Powered by DeepBook & Walrus · <span style={{ color: '#444' }}>Non-custodial · You stay in control</span> · <span onClick={() => router.push('/terms')} style={{ color: '#444', cursor: 'pointer', textDecoration: 'underline' }}>Terms of Service</span></p>
+        <p style={{ color: '#999', fontSize: '11px', margin: 0 }}>© 2026 ARIA · Built on Sui · Powered by DeepBook & Walrus · <span style={{ color: '#999' }}>Non-custodial · You stay in control</span> · <span onClick={() => router.push('/terms')} style={{ color: '#999', cursor: 'pointer', textDecoration: 'underline' }}>Terms of Service</span></p>
       </div>
 
       {/* Booking Modal */}
       {selected && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '24px' }}
           onClick={e => { if (e.target === e.currentTarget) closeModal(); }}>
-          <div style={{ background: '#111', border: '1px solid #333', borderRadius: '16px', width: '100%', maxWidth: '500px', maxHeight: '92vh', overflowY: 'auto' }}>
+          <div style={{ background: '#fff', border: '1px solid #ddd', borderRadius: '16px', width: '100%', maxWidth: '500px', maxHeight: '92vh', overflowY: 'auto' }}>
             <div style={{ borderRadius: '16px 16px 0 0', position: 'relative', background: '#000' }}>
               <div style={{ height: '260px', overflow: 'hidden', position: 'relative' }}>
                 <img src={selected.images[photoIndex]} alt={selected.title} style={{ width: '100%', height: '100%', objectFit: 'cover', transition: 'opacity 0.2s ease' }} />
@@ -607,7 +624,7 @@ export default function Home() {
               </div>
               <div style={{ display: 'flex', gap: '4px', padding: '4px', background: '#000' }}>
                 {selected.images.map((img, i) => (
-                  <div key={i} className="gallery-thumb" onClick={e => { e.stopPropagation(); setPhotoIndex(i); }} style={{ border: i === photoIndex ? '2px solid #00ff44' : '2px solid transparent', opacity: i === photoIndex ? 1 : 0.5 }}>
+                  <div key={i} className="gallery-thumb" onClick={e => { e.stopPropagation(); setPhotoIndex(i); }} style={{ border: i === photoIndex ? '2px solid #00913f' : '2px solid transparent', opacity: i === photoIndex ? 1 : 0.5 }}>
                     <img src={img} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
                   </div>
                 ))}
@@ -616,126 +633,126 @@ export default function Home() {
 
             <div style={{ padding: '24px' }}>
               <div style={{ marginBottom: '20px' }}>
-                <div style={{ fontSize: '13px', color: '#888', marginBottom: '8px', fontWeight: '600' }}>SELECT YOUR DATES</div>
+                <div style={{ fontSize: '13px', color: '#717171', marginBottom: '8px', fontWeight: '600' }}>SELECT YOUR DATES</div>
                 <div style={{ display: 'flex', gap: '8px' }}>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: '11px', color: '#555', marginBottom: '4px' }}>CHECK-IN</div>
+                  <div style={{ flex: 1, border: '1px solid #ddd', borderRadius: '8px', padding: '10px 14px' }}>
+                    <div style={{ fontSize: '11px', color: '#999' }}>CHECK-IN</div>
                     <DatePicker selected={checkIn} onChange={date => { setCheckIn(date); if (checkOut && date >= checkOut) setCheckOut(null); }} selectsStart startDate={checkIn} endDate={checkOut} minDate={new Date()} placeholderText="Select date" dateFormat="MMM d, yyyy" className="date-input" />
                   </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: '11px', color: '#555', marginBottom: '4px' }}>CHECK-OUT</div>
+                  <div style={{ flex: 1, border: '1px solid #ddd', borderRadius: '8px', padding: '10px 14px' }}>
+                    <div style={{ fontSize: '11px', color: '#999' }}>CHECK-OUT</div>
                     <DatePicker selected={checkOut} onChange={date => setCheckOut(date)} selectsEnd startDate={checkIn} endDate={checkOut} minDate={checkIn ? new Date(checkIn.getTime() + 86400000) : new Date()} placeholderText="Select date" dateFormat="MMM d, yyyy" className="date-input" />
                   </div>
                 </div>
-                {checkIn && checkOut && nights > 0 && <div style={{ marginTop: '8px', fontSize: '13px', color: '#00ff44', textAlign: 'center' }}>{nights} night{nights > 1 ? 's' : ''} selected</div>}
+                {checkIn && checkOut && nights > 0 && <div style={{ marginTop: '8px', fontSize: '13px', color: '#00913f', textAlign: 'center' }}>{nights} night{nights > 1 ? 's' : ''} selected</div>}
               </div>
 
               <div style={{ marginBottom: '20px' }}>
-                <div style={{ fontSize: '13px', color: '#888', marginBottom: '8px', fontWeight: '600' }}>GUESTS</div>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#1a1a1a', borderRadius: '8px', padding: '10px 14px' }}>
-                  <span style={{ fontSize: '14px', color: '#fff' }}>
+                <div style={{ fontSize: '13px', color: '#717171', marginBottom: '8px', fontWeight: '600' }}>GUESTS</div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#f7f7f7', border: '1px solid #ddd', borderRadius: '8px', padding: '10px 14px' }}>
+                  <span style={{ fontSize: '14px', color: '#222' }}>
                     Number of guests
-                    {selected?.maxGuests && <span style={{ color: '#555', fontSize: '12px' }}> (max {selected.maxGuests})</span>}
+                    {selected?.maxGuests && <span style={{ color: '#999', fontSize: '12px' }}> (max {selected.maxGuests})</span>}
                   </span>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                    <button type="button" onClick={() => setGuests(g => Math.max(1, g - 1))} disabled={guests <= 1} className="guest-step-btn" style={{ width: '28px', height: '28px', borderRadius: '50%', border: '1px solid #333', background: '#0d0d0d', color: guests <= 1 ? '#444' : '#fff', cursor: guests <= 1 ? 'not-allowed' : 'pointer' }}>−</button>
-                    <span style={{ fontSize: '15px', fontWeight: '600', minWidth: '16px', textAlign: 'center' }}>{guests}</span>
-                    <button type="button" onClick={() => setGuests(g => Math.min(selected?.maxGuests || 16, g + 1))} disabled={selected?.maxGuests && guests >= selected.maxGuests} className="guest-step-btn" style={{ width: '28px', height: '28px', borderRadius: '50%', border: '1px solid #333', background: '#0d0d0d', color: (selected?.maxGuests && guests >= selected.maxGuests) ? '#444' : '#fff', cursor: (selected?.maxGuests && guests >= selected.maxGuests) ? 'not-allowed' : 'pointer' }}>+</button>
+                    <button type="button" onClick={() => setGuests(g => Math.max(1, g - 1))} disabled={guests <= 1} className="guest-step-btn" style={{ width: '28px', height: '28px', borderRadius: '50%', border: '1px solid #ccc', background: '#fff', color: guests <= 1 ? '#ccc' : '#222', cursor: guests <= 1 ? 'not-allowed' : 'pointer' }}>−</button>
+                    <span style={{ fontSize: '15px', fontWeight: '600', minWidth: '16px', textAlign: 'center', color: '#222' }}>{guests}</span>
+                    <button type="button" onClick={() => setGuests(g => Math.min(selected?.maxGuests || 16, g + 1))} disabled={selected?.maxGuests && guests >= selected.maxGuests} className="guest-step-btn" style={{ width: '28px', height: '28px', borderRadius: '50%', border: '1px solid #ccc', background: '#fff', color: (selected?.maxGuests && guests >= selected.maxGuests) ? '#ccc' : '#222', cursor: (selected?.maxGuests && guests >= selected.maxGuests) ? 'not-allowed' : 'pointer' }}>+</button>
                   </div>
                 </div>
               </div>
 
               {checkIn && checkOut && nights > 0 && (
-                <div style={{ background: '#1a1a1a', borderRadius: '8px', padding: '16px', marginBottom: '20px' }}>
+                <div style={{ background: '#f7f7f7', border: '1px solid #ebebeb', borderRadius: '8px', padding: '16px', marginBottom: '20px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                    <span style={{ color: '#888', fontSize: '14px' }}>${selected.price} × {nights} night{nights > 1 ? 's' : ''}</span>
-                    <span style={{ fontSize: '14px' }}>${getSubtotal(selected, nights)}</span>
+                    <span style={{ color: '#717171', fontSize: '14px' }}>${selected.price} × {nights} night{nights > 1 ? 's' : ''}</span>
+                    <span style={{ fontSize: '14px', color: '#222' }}>${getSubtotal(selected, nights)}</span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                    <span style={{ color: '#888', fontSize: '14px' }}>ARIA fee (5% of stay cost)</span>
-                    <span style={{ fontSize: '14px', color: '#00ff44' }}>${getAriaFee(selected, nights)}</span>
+                    <span style={{ color: '#717171', fontSize: '14px' }}>ARIA fee (5% of stay cost)</span>
+                    <span style={{ fontSize: '14px', color: '#00913f' }}>${getAriaFee(selected, nights)}</span>
                   </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px', paddingBottom: '12px', borderBottom: '1px solid #333' }}>
-                    <span style={{ color: '#888', fontSize: '14px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px', paddingBottom: '12px', borderBottom: '1px solid #ddd' }}>
+                    <span style={{ color: '#717171', fontSize: '14px' }}>
                       Occupancy tax ({(getJurisdiction(selected).rate * 100).toFixed(2)}% — {getJurisdiction(selected).name})
                     </span>
-                    <span style={{ fontSize: '14px', color: '#888' }}>${getTax(selected, nights)}</span>
+                    <span style={{ fontSize: '14px', color: '#717171' }}>${getTax(selected, nights)}</span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
-                    <span style={{ fontSize: '14px', fontWeight: '600', color: '#fff' }}>Stay total</span>
-                    <span style={{ fontSize: '14px', fontWeight: '700', color: '#00ff44' }}>${getBookingTotal(selected, nights)}</span>
+                    <span style={{ fontSize: '14px', fontWeight: '600', color: '#222' }}>Stay total</span>
+                    <span style={{ fontSize: '14px', fontWeight: '700', color: '#00913f' }}>${getBookingTotal(selected, nights)}</span>
                   </div>
-                  <div style={{ background: '#0a0a1a', border: '1px solid #1a1a3a', borderRadius: '6px', padding: '10px', marginBottom: '12px' }}>
+                  <div style={{ background: '#eef5ff', border: '1px solid #cfe3f7', borderRadius: '6px', padding: '10px', marginBottom: '12px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                      <span style={{ fontSize: '13px', color: '#4a9eff', fontWeight: '600' }}>🔒 Refundable security deposit</span>
-                      <span style={{ fontSize: '13px', color: '#4a9eff', fontWeight: '700' }}>${getDeposit(selected, nights)}</span>
+                      <span style={{ fontSize: '13px', color: '#1f6fd6', fontWeight: '600' }}>🔒 Refundable security deposit</span>
+                      <span style={{ fontSize: '13px', color: '#1f6fd6', fontWeight: '700' }}>${getDeposit(selected, nights)}</span>
                     </div>
-                    <p style={{ color: '#555', fontSize: '11px', margin: 0, lineHeight: '1.5' }}>Held by smart contract on Sui — not by ARIA. Released when you approve.</p>
+                    <p style={{ color: '#5c7693', fontSize: '11px', margin: 0, lineHeight: '1.5' }}>Held by smart contract on Sui — not by ARIA. Released when you approve.</p>
                   </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#0d0d0d', border: '1px solid #333', borderRadius: '6px', padding: '12px', marginBottom: '12px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff', border: '1px solid #ddd', borderRadius: '6px', padding: '12px', marginBottom: '12px' }}>
                     <div>
-                      <div style={{ fontSize: '14px', fontWeight: '700', color: '#fff' }}>Total charged today</div>
-                      <div style={{ fontSize: '11px', color: '#555', marginTop: '2px' }}>Stay + refundable deposit</div>
+                      <div style={{ fontSize: '14px', fontWeight: '700', color: '#222' }}>Total charged today</div>
+                      <div style={{ fontSize: '11px', color: '#999', marginTop: '2px' }}>Stay + refundable deposit</div>
                     </div>
-                    <span style={{ fontSize: '20px', fontWeight: '700', color: '#fff' }}>${getChargeTotal(selected, nights)}</span>
+                    <span style={{ fontSize: '20px', fontWeight: '700', color: '#222' }}>${getChargeTotal(selected, nights)}</span>
                   </div>
-                  <div style={{ background: '#0a1a0a', border: '1px solid #1a3a1a', borderRadius: '6px', padding: '10px', marginBottom: '8px' }}>
+                  <div style={{ background: '#eafaf0', border: '1px solid #bfe8cf', borderRadius: '6px', padding: '10px', marginBottom: '8px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                      <span style={{ fontSize: '12px', color: '#00ff44', fontWeight: '600' }}>Pay with SuiUSD</span>
-                      <span style={{ fontSize: '11px', color: '#555' }}>recommended</span>
+                      <span style={{ fontSize: '12px', color: '#00913f', fontWeight: '600' }}>Pay with SuiUSD</span>
+                      <span style={{ fontSize: '11px', color: '#5c8a6d' }}>recommended</span>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ color: '#666', fontSize: '12px' }}>Gas fee ~$0.02</span>
-                      <span style={{ fontWeight: '700', fontSize: '16px', color: '#00ff44' }}>${getChargeTotal(selected, nights)}<span style={{ fontSize: '11px', color: '#555' }}>.02</span></span>
+                      <span style={{ color: '#5c8a6d', fontSize: '12px' }}>Gas fee ~$0.02</span>
+                      <span style={{ fontWeight: '700', fontSize: '16px', color: '#00913f' }}>${getChargeTotal(selected, nights)}<span style={{ fontSize: '11px', color: '#5c8a6d' }}>.02</span></span>
                     </div>
                   </div>
-                  <div style={{ background: '#1a1212', border: '1px solid #2a1a1a', borderRadius: '6px', padding: '10px' }}>
+                  <div style={{ background: '#fdeeee', border: '1px solid #f5cccc', borderRadius: '6px', padding: '10px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                      <span style={{ fontSize: '12px', color: '#ff6666', fontWeight: '600' }}>Pay with Card</span>
-                      <span style={{ fontSize: '11px', color: '#555' }}>Stripe 2.9% + $0.30</span>
+                      <span style={{ fontSize: '12px', color: '#d23f3f', fontWeight: '600' }}>Pay with Card</span>
+                      <span style={{ fontSize: '11px', color: '#a37070' }}>Stripe 2.9% + $0.30</span>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ color: '#666', fontSize: '12px' }}>Processing fee ${getCardFee(selected, nights)}</span>
-                      <span style={{ fontWeight: '700', fontSize: '16px', color: '#ff6666' }}>${getCardTotal(selected, nights)}</span>
+                      <span style={{ color: '#a37070', fontSize: '12px' }}>Processing fee ${getCardFee(selected, nights)}</span>
+                      <span style={{ fontWeight: '700', fontSize: '16px', color: '#d23f3f' }}>${getCardTotal(selected, nights)}</span>
                     </div>
                   </div>
                 </div>
               )}
 
               {(!checkIn || !checkOut) ? (
-                <div style={{ background: '#1a1a0a', border: '1px solid #333a00', borderRadius: '8px', padding: '12px', marginBottom: '20px', fontSize: '13px', color: '#888', textAlign: 'center' }}>
+                <div style={{ background: '#fdf8ee', border: '1px solid #f0e2bb', borderRadius: '8px', padding: '12px', marginBottom: '20px', fontSize: '13px', color: '#717171', textAlign: 'center' }}>
                   👆 Select your dates above to see pricing
                 </div>
               ) : (
                 <>
-                  <div style={{ background: '#0a0a0a', border: '1px solid #1a1a1a', borderRadius: '8px', padding: '12px', marginBottom: '12px' }}>
+                  <div style={{ background: '#f7f7f7', border: '1px solid #ebebeb', borderRadius: '8px', padding: '12px', marginBottom: '12px' }}>
                     <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '8px' }}>
                       {['🔑 Your wallet, your funds','⚡ Instant on-chain settlement','✅ You control deposit release'].map((item, i) => (
-                        <span key={i} style={{ background: '#111', border: '1px solid #222', borderRadius: '20px', padding: '3px 10px', fontSize: '11px', color: '#888' }}>{item}</span>
+                        <span key={i} style={{ background: '#fff', border: '1px solid #ddd', borderRadius: '20px', padding: '3px 10px', fontSize: '11px', color: '#444' }}>{item}</span>
                       ))}
                     </div>
-                    <p style={{ color: '#444', fontSize: '11px', margin: 0, lineHeight: '1.6' }}>
+                    <p style={{ color: '#999', fontSize: '11px', margin: 0, lineHeight: '1.6' }}>
                       ARIA is non-custodial. Payments execute directly on Sui. We cannot reverse or freeze transactions.
                     </p>
                   </div>
-                  <div style={{ background: '#111', border: '1px solid #222', borderRadius: '8px', padding: '12px', marginBottom: '20px', fontSize: '12px' }}>
+                  <div style={{ background: '#fff', border: '1px solid #ebebeb', borderRadius: '8px', padding: '12px', marginBottom: '20px', fontSize: '12px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
-                      <span style={{ color: '#00ff44', fontSize: '14px' }}>🛡️</span>
-                      <span style={{ color: '#fff', fontWeight: '600', fontSize: '13px' }}>Cancellation Policy</span>
+                      <span style={{ color: '#00913f', fontSize: '14px' }}>🛡️</span>
+                      <span style={{ color: '#222', fontWeight: '600', fontSize: '13px' }}>Cancellation Policy</span>
                     </div>
-                    <p style={{ color: '#888', margin: 0, lineHeight: '1.5' }}>Cancel <strong style={{ color: '#fff' }}>15+ days before check-in</strong> for a full refund of your stay payment — ARIA's fee included. Your deposit is always refunded on cancellation. Inside 14 days of check-in, the stay payment is non-refundable; you can list the booking on the resale market instead of losing the funds.</p>
+                    <p style={{ color: '#717171', margin: 0, lineHeight: '1.5' }}>Cancel <strong style={{ color: '#222' }}>15+ days before check-in</strong> for a full refund of your stay payment — ARIA's fee included. Your deposit is always refunded on cancellation. Inside 14 days of check-in, the stay payment is non-refundable; you can list the booking on the resale market instead of losing the funds.</p>
                   </div>
                 </>
               )}
 
               {checkIn && checkOut && nights > 0 && user && user.hasGuestProfile === false && (
-                <div style={{ background: '#1a1500', border: '1px solid #443300', borderRadius: '8px', padding: '12px', marginBottom: '12px', fontSize: '12px' }}>
-                  <div style={{ color: '#ffaa00', fontWeight: '600', marginBottom: '4px' }}>⚠️ Identity verification required</div>
-                  <p style={{ color: '#888', margin: '0 0 8px', lineHeight: '1.5' }}>
+                <div style={{ background: '#fdf6e3', border: '1px solid #f0d999', borderRadius: '8px', padding: '12px', marginBottom: '12px', fontSize: '12px' }}>
+                  <div style={{ color: '#b06d00', fontWeight: '600', marginBottom: '4px' }}>⚠️ Identity verification required</div>
+                  <p style={{ color: '#717171', margin: '0 0 8px', lineHeight: '1.5' }}>
                     Hosts need to be able to verify who's staying. Your ID is encrypted client-side and stored on Walrus via Seal — ARIA's backend never sees it; only your host can decrypt it for this booking.
                   </p>
                   <button onClick={() => { closeModal(); router.push('/profile'); }}
-                    style={{ background: 'transparent', color: '#ffaa00', border: '1px solid #ffaa00', borderRadius: '6px', padding: '6px 10px', fontSize: '11px', cursor: 'pointer' }}>
+                    style={{ background: 'transparent', color: '#b06d00', border: '1px solid #b06d00', borderRadius: '6px', padding: '6px 10px', fontSize: '11px', cursor: 'pointer' }}>
                     Verify identity now
                   </button>
                 </div>
@@ -744,32 +761,32 @@ export default function Home() {
               {checkIn && checkOut && nights > 0 && (
                 <label style={{ display: 'flex', alignItems: 'start', gap: '10px', marginBottom: '12px', cursor: 'pointer' }}>
                   <input type="checkbox" checked={termsAccepted} onChange={e => setTermsAccepted(e.target.checked)}
-                    style={{ marginTop: '2px', accentColor: '#00ff44', width: '16px', height: '16px', flexShrink: 0 }} />
-                  <span style={{ fontSize: '12px', color: '#888', lineHeight: '1.5' }}>
+                    style={{ marginTop: '2px', accentColor: '#00913f', width: '16px', height: '16px', flexShrink: 0 }} />
+                  <span style={{ fontSize: '12px', color: '#717171', lineHeight: '1.5' }}>
                     I understand ARIA is non-custodial. Payments execute on the Sui blockchain and cannot be reversed by ARIA. I accept the{' '}
-                    <span onClick={(e) => { e.preventDefault(); window.open('/terms', '_blank'); }} style={{ color: '#00ff44', cursor: 'pointer', textDecoration: 'underline' }}>Terms of Service</span>.
+                    <span onClick={(e) => { e.preventDefault(); window.open('/terms', '_blank'); }} style={{ color: '#00913f', cursor: 'pointer', textDecoration: 'underline' }}>Terms of Service</span>.
                   </span>
                 </label>
               )}
 
               <button onClick={handleBooking} disabled={bookingLoading || !checkIn || !checkOut || (checkIn && checkOut && !termsAccepted)}
-                style={{ width: '100%', background: bookingLoading ? '#444' : (!checkIn || !checkOut || !termsAccepted) ? '#1a2a1a' : '#00ff44', color: (!checkIn || !checkOut || !termsAccepted) ? '#555' : '#000', border: 'none', borderRadius: '8px', padding: '14px', fontWeight: '700', fontSize: '15px', cursor: (!checkIn || !checkOut || !termsAccepted) ? 'not-allowed' : 'pointer', marginBottom: '8px' }}>
+                style={{ width: '100%', background: bookingLoading ? '#ccc' : (!checkIn || !checkOut || !termsAccepted) ? '#eee' : '#ff385c', color: (!checkIn || !checkOut || !termsAccepted) ? '#999' : '#fff', border: 'none', borderRadius: '8px', padding: '14px', fontWeight: '700', fontSize: '15px', cursor: (!checkIn || !checkOut || !termsAccepted) ? 'not-allowed' : 'pointer', marginBottom: '8px' }}>
                 {bookingLoading ? 'Processing on Sui...' : (!checkIn || !checkOut) ? 'Select dates to book' : !termsAccepted ? 'Accept terms to continue' : `Book Now – Pay $${getChargeTotal(selected, nights)} SuiUSD`}
               </button>
               <button onClick={handleCardPayment} disabled={bookingLoading || !checkIn || !checkOut}
-                style={{ width: '100%', background: 'transparent', color: (!checkIn || !checkOut) ? '#444' : '#fff', border: '1px solid #444', borderRadius: '8px', padding: '14px', fontWeight: '600', fontSize: '15px', cursor: (!checkIn || !checkOut) ? 'not-allowed' : 'pointer' }}>
+                style={{ width: '100%', background: 'transparent', color: (!checkIn || !checkOut) ? '#ccc' : '#222', border: '1px solid #ccc', borderRadius: '8px', padding: '14px', fontWeight: '600', fontSize: '15px', cursor: (!checkIn || !checkOut) ? 'not-allowed' : 'pointer' }}>
                 {(!checkIn || !checkOut) ? 'Pay with Card (Stripe)' : `Pay with Card – $${getCardTotal(selected, nights)}`}
               </button>
 
               {booking && (
-                <div style={{ marginTop: '16px', background: '#0a1a0a', border: '1px solid #00ff44', borderRadius: '8px', padding: '16px', fontSize: '12px', color: '#00ff44', textAlign: 'center' }}>
+                <div style={{ marginTop: '16px', background: '#eafaf0', border: '1px solid #00913f', borderRadius: '8px', padding: '16px', fontSize: '12px', color: '#00913f', textAlign: 'center' }}>
                   ✅ Booking confirmed! Ref: {booking.bookingRef}
 
                   {/* Phase 1h.5: pre-sign disclosure for the combined payment+deposit PTB */}
                   {escrowStatus === 'review' && booking.paymentEscrowBuilt && (
-                    <div style={{ marginTop: '12px', textAlign: 'left', background: '#091018', border: '1px solid #1d3a55', borderRadius: '8px', padding: '12px' }}>
-                      <div style={{ color: '#4a9eff', fontWeight: 700, fontSize: '12px', marginBottom: '6px' }}>Review before you sign</div>
-                      <div style={{ fontSize: '11px', color: '#8aa3b8', marginBottom: '10px', lineHeight: 1.5 }}>
+                    <div style={{ marginTop: '12px', textAlign: 'left', background: '#eef5ff', border: '1px solid #cfe3f7', borderRadius: '8px', padding: '12px' }}>
+                      <div style={{ color: '#1f6fd6', fontWeight: 700, fontSize: '12px', marginBottom: '6px' }}>Review before you sign</div>
+                      <div style={{ fontSize: '11px', color: '#5c7693', marginBottom: '10px', lineHeight: 1.5 }}>
                         One wallet signature funds two on-chain escrows from your own balance. Here's exactly where your money goes — and when:
                       </div>
                       {[
@@ -778,27 +795,27 @@ export default function Home() {
                         ['Taxes → tax remittance', `$${booking.taxes}`, 'released at check-in'],
                         ['Refundable deposit → escrow', `$${booking.depositAmount}`, 'returned after checkout'],
                       ].map(([label, amt, note], i) => (
-                        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', padding: '5px 0', borderBottom: i < 3 ? '1px solid #12202e' : 'none' }}>
-                          <div><div style={{ color: '#cfe3f2', fontSize: '12px' }}>{label}</div><div style={{ color: '#566b7d', fontSize: '10px' }}>{note}</div></div>
-                          <div style={{ color: '#fff', fontSize: '12px', fontWeight: 700, whiteSpace: 'nowrap', paddingLeft: '10px' }}>{amt}</div>
+                        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', padding: '5px 0', borderBottom: i < 3 ? '1px solid #dce8f5' : 'none' }}>
+                          <div><div style={{ color: '#2c4a66', fontSize: '12px' }}>{label}</div><div style={{ color: '#7c93a8', fontSize: '10px' }}>{note}</div></div>
+                          <div style={{ color: '#222', fontSize: '12px', fontWeight: 700, whiteSpace: 'nowrap', paddingLeft: '10px' }}>{amt}</div>
                         </div>
                       ))}
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '8px', paddingTop: '8px', borderTop: '1px solid #1d3a55' }}>
-                        <span style={{ color: '#fff', fontSize: '12px', fontWeight: 700 }}>Total you sign for</span>
-                        <span style={{ color: '#00ff44', fontSize: '13px', fontWeight: 800 }}>${booking.chargeAmount} SuiUSD</span>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '8px', paddingTop: '8px', borderTop: '1px solid #cfe3f7' }}>
+                        <span style={{ color: '#222', fontSize: '12px', fontWeight: 700 }}>Total you sign for</span>
+                        <span style={{ color: '#00913f', fontSize: '13px', fontWeight: 800 }}>${booking.chargeAmount} SuiUSD</span>
                       </div>
-                      <p style={{ color: '#789', fontSize: '10px', lineHeight: 1.5, margin: '8px 0 10px' }}>
-                        Cancel <strong style={{ color: '#9bb' }}>15+ days before check-in</strong> for a full refund of everything above, ARIA's fee included. Inside 14 days of check-in, the rental, fee, and tax are non-refundable — list the booking on the resale market to recover funds instead; your deposit still returns after checkout either way. Funds sit in smart-contract escrow — never in an ARIA wallet.
+                      <p style={{ color: '#5c7693', fontSize: '10px', lineHeight: 1.5, margin: '8px 0 10px' }}>
+                        Cancel <strong style={{ color: '#2c4a66' }}>15+ days before check-in</strong> for a full refund of everything above, ARIA's fee included. Inside 14 days of check-in, the rental, fee, and tax are non-refundable — list the booking on the resale market to recover funds instead; your deposit still returns after checkout either way. Funds sit in smart-contract escrow — never in an ARIA wallet.
                       </p>
                       <button onClick={() => handleEscrowSign(booking.bookingRef, booking.escrowTxBytes)}
-                        style={{ width: '100%', background: '#00ff44', color: '#000', border: 'none', borderRadius: '6px', padding: '11px', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}>
+                        style={{ width: '100%', background: '#00913f', color: '#fff', border: 'none', borderRadius: '6px', padding: '11px', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}>
                         Approve & sign in wallet
                       </button>
                     </div>
                   )}
 
                   {booking.depositAmount && booking.escrowTxBytes && escrowStatus !== 'review' && (
-                    <div style={{ marginTop: '8px', color: '#4a9eff', fontSize: '11px' }}>
+                    <div style={{ marginTop: '8px', color: '#1f6fd6', fontSize: '11px' }}>
                       {escrowStatus === 'signing' && '🔏 Sign the transaction in your wallet…'}
                       {escrowStatus === 'submitting' && (booking.paymentEscrowBuilt ? '📡 Submitting your payment + deposit to Sui…' : '📡 Submitting your deposit to Sui…')}
                       {escrowStatus === 'confirming' && '⏳ Confirming on-chain…'}
@@ -807,9 +824,9 @@ export default function Home() {
                         : `🔒 $${booking.depositAmount} deposit held in Sui escrow — you control release`)}
                       {escrowStatus === 'error' && (
                         <>
-                          <div style={{ color: '#ff5555' }}>⚠️ {booking.paymentEscrowBuilt ? 'Payment escrow' : 'Deposit escrow'} not completed: {escrowError}</div>
+                          <div style={{ color: '#d23f3f' }}>⚠️ {booking.paymentEscrowBuilt ? 'Payment escrow' : 'Deposit escrow'} not completed: {escrowError}</div>
                           <button onClick={() => handleEscrowSign(booking.bookingRef, booking.escrowTxBytes)}
-                            style={{ marginTop: '6px', background: 'transparent', color: '#4a9eff', border: '1px solid #4a9eff', borderRadius: '6px', padding: '6px 10px', fontSize: '11px', cursor: 'pointer' }}>
+                            style={{ marginTop: '6px', background: 'transparent', color: '#1f6fd6', border: '1px solid #1f6fd6', borderRadius: '6px', padding: '6px 10px', fontSize: '11px', cursor: 'pointer' }}>
                             Retry
                           </button>
                         </>
@@ -817,24 +834,24 @@ export default function Home() {
                     </div>
                   )}
                   {booking.depositAmount && !booking.escrowTxBytes && (
-                    <div style={{ marginTop: '8px', color: '#ff5555', fontSize: '11px', textAlign: 'left' }}>
+                    <div style={{ marginTop: '8px', color: '#d23f3f', fontSize: '11px', textAlign: 'left' }}>
                       ⚠️ {booking.escrowBuildErrorMessage || 'We couldn’t prepare your escrow transaction, so nothing is funded yet.'} Your dates are held, but no money has moved.
                       <button onClick={() => router.push('/bookings')}
-                        style={{ display: 'block', marginTop: '6px', background: 'transparent', color: '#4a9eff', border: '1px solid #4a9eff', borderRadius: '6px', padding: '6px 10px', fontSize: '11px', cursor: 'pointer' }}>
+                        style={{ display: 'block', marginTop: '6px', background: 'transparent', color: '#1f6fd6', border: '1px solid #1f6fd6', borderRadius: '6px', padding: '6px 10px', fontSize: '11px', cursor: 'pointer' }}>
                         Go to My Bookings to finish
                       </button>
                     </div>
                   )}
                   {booking.walrusBlobId && (
-                    <div style={{ marginTop: '10px', background: '#050f05', borderRadius: '6px', padding: '10px' }}>
-                      <div style={{ color: '#555', fontSize: '10px', marginBottom: '4px' }}>RECEIPT STORED PERMANENTLY ON WALRUS</div>
+                    <div style={{ marginTop: '10px', background: '#fff', border: '1px solid #d5ecdf', borderRadius: '6px', padding: '10px' }}>
+                      <div style={{ color: '#999', fontSize: '10px', marginBottom: '4px' }}>RECEIPT STORED PERMANENTLY ON WALRUS</div>
 
-                      <a href={`https://aggregator.walrus-testnet.walrus.space/v1/blobs/${booking.walrusBlobId}`} target="_blank" rel="noreferrer" style={{ color: '#00ff44', fontFamily: 'monospace', fontSize: '10px', wordBreak: 'break-all' }}>{booking.walrusBlobId}</a>
+                      <a href={`https://aggregator.walrus-testnet.walrus.space/v1/blobs/${booking.walrusBlobId}`} target="_blank" rel="noreferrer" style={{ color: '#00913f', fontFamily: 'monospace', fontSize: '10px', wordBreak: 'break-all' }}>{booking.walrusBlobId}</a>
                     </div>
                   )}
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', marginTop: '8px' }}>
-                    <span style={{ color: '#555', fontSize: '11px', fontFamily: 'monospace', wordBreak: 'break-all' }}>{user.address}</span>
-                    <button onClick={copyAddr} title="Copy address" style={{ background: 'none', border: 'none', cursor: 'pointer', color: addrCopied ? '#00ff44' : '#555', fontSize: '12px', padding: '0', flexShrink: 0 }}>
+                    <span style={{ color: '#5c8a6d', fontSize: '11px', fontFamily: 'monospace', wordBreak: 'break-all' }}>{user.address}</span>
+                    <button onClick={copyAddr} title="Copy address" style={{ background: 'none', border: 'none', cursor: 'pointer', color: addrCopied ? '#00913f' : '#5c8a6d', fontSize: '12px', padding: '0', flexShrink: 0 }}>
                       {addrCopied ? '✓' : '⧉'}
                     </button>
                   </div>
