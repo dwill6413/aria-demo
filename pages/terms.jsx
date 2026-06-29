@@ -91,16 +91,16 @@ export default function Terms() {
         </Section>
 
         <Section title="6. Platform Fees">
-          <P>ARIA charges a 3% platform fee on the subtotal of each booking (excluding deposits). This fee is non-refundable once a booking is confirmed. No fee is charged on security deposits. All fees are displayed transparently before booking confirmation.</P>
+          <P>ARIA charges a 5% platform fee on the subtotal of each booking (excluding deposits). This fee is non-refundable once a booking is confirmed. No fee is charged on security deposits. All fees are displayed transparently before booking confirmation.</P>
         </Section>
 
         <Section title="7. Cancellations and Refunds">
-          <P>Cancellation policies are executed automatically via smart contract:</P>
+          <P>ARIA's cancellation policy is standard across the short-term rental industry and is enforced automatically when a cancellation is processed:</P>
           <ul style={{ paddingLeft: '20px', margin: '8px 0' }}>
-            <Li>Cancellations made at least 24 hours before check-in: full refund of stay cost</Li>
-            <Li>Cancellations made within 24 hours of check-in: 50% refund of stay cost</Li>
-            <Li>Security deposits are returned after checkout at host discretion, subject to inspection</Li>
-            <Li>ARIA platform fees are non-refundable</Li>
+            <Li>Cancellations made 15 or more days before check-in: 100% refund of the stay cost (rental + ARIA fee + tax)</Li>
+            <Li>Cancellations made 14 days or fewer before check-in, up to and including check-in: the stay cost is non-refundable. Your only options in this window are to list the booking on ARIA's resale market (open until 48 hours before check-in) to recover funds from a buyer, or forfeit the funds</Li>
+            <Li>The security deposit is separate from the stay cost and is always released on cancellation, regardless of timing, since there is no stay to inspect for damage</Li>
+            <Li>ARIA platform fees are non-refundable once a booking is cancelled within the 14-day window, and are included in the full refund when cancelled 15+ days out</Li>
           </ul>
           <P>Because transactions execute on-chain, refunds are processed as new transactions. ARIA cannot guarantee refund timing, which depends on Sui network conditions.</P>
         </Section>

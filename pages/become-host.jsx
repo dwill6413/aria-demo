@@ -149,7 +149,7 @@ export default function BecomeHost() {
         <div style={{ textAlign: 'center', marginBottom: '40px' }}>
           <div style={{ fontSize: '40px', marginBottom: '12px' }}>🏡</div>
           <h1 style={{ fontSize: '28px', fontWeight: '700', margin: '0 0 8px' }}>Become an ARIA Host</h1>
-          <p style={{ color: '#666', fontSize: '14px', margin: 0 }}>Share your property. Earn in SuiUSD. Keep 97% of every booking.</p>
+          <p style={{ color: '#666', fontSize: '14px', margin: 0 }}>Share your property. Earn in SuiUSD. Keep 95% of every booking.</p>
         </div>
 
         {/* Progress bar */}
@@ -262,7 +262,7 @@ export default function BecomeHost() {
                   <span style={{ fontWeight: '600', fontSize: '14px', color: '#4a9eff' }}>Instant Sui Settlement</span>
                 </div>
                 <p style={{ color: '#888', fontSize: '12px', margin: 0, lineHeight: '1.6' }}>
-                  Your earnings settle directly to your Sui wallet in seconds — no 3–5 day bank delays. You keep 97% of every booking. ARIA's 3% fee is the lowest in the industry.
+                  Your earnings settle directly to your Sui wallet in seconds — no 3–5 day bank delays. You keep 95% of every booking. ARIA's 5% fee is among the lowest in the industry.
                 </p>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>

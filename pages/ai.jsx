@@ -256,7 +256,7 @@ export default function AI() {
                       Rental → host ${m.booking.subtotal} · ARIA fee → ARIA ${m.booking.ariaFee} · taxes → remittance ${m.booking.taxes}, all released to those destinations at check-in. Refundable deposit ${m.booking.depositAmount} returned after checkout. One signature funds it all from your own wallet (${m.booking.chargeAmount} SuiUSD total).
                     </div>
                     <div style={{ color: '#789', fontSize: '10px', marginTop: '4px' }}>
-                      Cancel before check-in for a full refund (fee included); non-refundable after check-in.
+                      Cancel 15+ days before check-in for a full refund (fee included); within 14 days, the stay cost is non-refundable — list it on the resale market instead of losing the funds.
                     </div>
                   </div>
                 ) : (

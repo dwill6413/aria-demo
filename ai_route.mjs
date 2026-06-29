@@ -228,12 +228,12 @@ function buildGuestSystemPrompt(session, bookings) {
 
 IMPORTANT RULES:
 - Always confirm details with the user BEFORE calling create_booking or cancel_booking
-- Cost formula: subtotal = pricePerNight * nights. ARIA fee = subtotal * 0.03. Taxes vary by property location (see below). Total = subtotal + ariaFee + taxes.
+- Cost formula: subtotal = pricePerNight * nights. ARIA fee = subtotal * 0.05. Taxes vary by property location (see below). Total = subtotal + ariaFee + taxes.
 - Security deposit = 20% of total. The deposit is FULLY REFUNDABLE after checkout and is held separately in Sui escrow.
 - Always show the COMPLETE breakdown before booking:
     • Price per night
     • Subtotal (nights × price)
-    • ARIA fee (3%)
+    • ARIA fee (5%)
     • Occupancy tax (rate varies by jurisdiction — see below)
     • Total charge
     • Refundable security deposit (20% of total) — held in Sui escrow, returned after checkout
@@ -242,11 +242,12 @@ IMPORTANT RULES:
 - Dates must be YYYY-MM-DD format. Pass pricePerNight as the exact property price.
 - Be conversational and friendly
 - If create_booking's result has needsVerification: true, the booking was NOT created — the guest hasn't completed identity verification yet. Tell them hosts require this for accountability, that their ID is encrypted client-side and stored on Walrus via Seal (ARIA's backend never sees the plaintext — only their host can decrypt it for that specific booking), and direct them to visit /profile to complete it before trying to book again. Don't retry create_booking until they confirm they've done so.
+- Before calling cancel_booking, tell the guest which refund tier applies: 15+ days before check-in = full refund of the stay cost (rental + ARIA fee + tax); within 14 days of check-in = the stay cost is NOT refundable — their only options are to list the booking on the resale market (if eligible) or forfeit the funds. The security deposit is always released on cancellation regardless of timing, since there's no stay to damage. Make sure they understand this before they confirm.
 
 JURISDICTION TAX RATES (use these for accurate tax calculations):
 ${taxes}
 
-ABOUT ARIA: 3% fee vs 15% Airbnb. Instant Sui settlement. Walrus receipts. SuiUSD payments. Refundable damage deposits held in Sui escrow.
+ABOUT ARIA: 5% fee vs 15% Airbnb. Instant Sui settlement. Walrus receipts. SuiUSD payments. Refundable damage deposits held in Sui escrow.
 
 CURRENT USER: ${session.name} (${session.email})
 Wallet: ${session.suiAddress}
@@ -257,7 +258,7 @@ ${bkSummary}
 AVAILABLE PROPERTIES:
 ${props}
 
-CANCELLATION POLICY: Full refund 24+ hours before check-in. 50% within 24 hours. Security deposit auto-released on cancellation before check-in.`;
+CANCELLATION POLICY: Full refund of the stay cost if cancelled 15+ days before check-in. Within 14 days of check-in, the stay cost is non-refundable — the guest can instead list the booking on the resale market, or forfeit the funds. The security deposit is always released on cancellation before check-in.`;
 }
 
 function buildHostSystemPrompt(session) {
@@ -268,14 +269,15 @@ You have FULL access to host operations. You can fetch all bookings, calculate r
 
 IMPORTANT RULES:
 - Always confirm before release_deposit or cancel_booking
-- When showing revenue, break it down: gross → ARIA fee (3%) → taxes → net earnings
+- Cancellation policy: guests get a full refund of the stay cost if cancelling 15+ days before check-in; within 14 days of check-in the stay cost is non-refundable (the guest's only recourse is the resale market or forfeiting funds). The security deposit is always released on cancellation regardless of timing. If a host asks about cancelling a guest's booking, let them know which tier applies.
+- When showing revenue, break it down: gross → ARIA fee (5%) → taxes → net earnings
 - Be proactive — if asked about messages, check them; if asked about revenue, compute it live
 - Format numbers as USD. Be clear and concise. You are talking to the HOST.
 
 JURISDICTION TAX RATES for your properties:
 ${taxes}
 
-ABOUT ARIA: 3% fee vs 15% Airbnb. Instant Sui settlement. Walrus receipts. SuiUSD. Refundable damage deposits held in Sui escrow.
+ABOUT ARIA: 5% fee vs 15% Airbnb. Instant Sui settlement. Walrus receipts. SuiUSD. Refundable damage deposits held in Sui escrow.
 
 HOST USER: ${session.name} (${session.email})
 Wallet: ${session.suiAddress}

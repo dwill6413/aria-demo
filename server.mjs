@@ -355,7 +355,7 @@ fastify.post('/payment/create-intent', async (request, reply) => {
   // Never trust a client-sent `amount` for a real Stripe charge (Finding #1).
   const jurisdiction  = JURISDICTION_TAX_RATES[Number(propertyId)] || { rate: 0.08, name: 'Unknown' };
   const subtotal      = prop.price * nights;
-  const ariaFee       = Math.round(subtotal * 0.03);
+  const ariaFee       = Math.round(subtotal * 0.05);
   const taxes         = Math.round(subtotal * jurisdiction.rate);
   const bookingTotal  = subtotal + ariaFee + taxes;
   const depositAmount = Math.round(bookingTotal * 0.20);
@@ -1418,7 +1418,7 @@ fastify.get('/bookings/history', async (request, reply) => {
         breakdown: {
           pricePerNight: `$${b.price_per_night}`, nights: b.nights,
           subtotal: `$${b.subtotal}`,
-          ariaFee: `$${b.aria_fee} (3% of subtotal only)`,
+          ariaFee: `$${b.aria_fee} (5% of subtotal only)`,
           taxes: `$${b.taxes} (${(jur.rate * 100).toFixed(2)}% — ${jur.name})`,
           bookingTotal: `$${b.total_amount} SuiUSD`,
           depositAmount: `$${b.deposit_amount} (refundable — no ARIA fee)`,
@@ -1462,7 +1462,7 @@ fastify.get('/bookings/all', async (request, reply) => {
         breakdown: {
           pricePerNight: `$${b.price_per_night}`, nights: b.nights,
           subtotal: `$${b.subtotal}`,
-          ariaFee: `$${b.aria_fee} (3% of subtotal only)`,
+          ariaFee: `$${b.aria_fee} (5% of subtotal only)`,
           taxes: `$${b.taxes} (${(jur.rate * 100).toFixed(2)}% — ${jur.name})`,
           bookingTotal: `$${b.total_amount} SuiUSD`,
           depositAmount: `$${b.deposit_amount} (refundable — no ARIA fee)`,

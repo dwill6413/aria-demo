@@ -36,7 +36,7 @@ export async function getSuiUSDLiquidity(amountUSD) {
 /**
  * Host payout in SuiUSD.
  *
- * The 3% ARIA fee is a GUEST-SIDE add-on — it is already part of bookingTotal
+ * The 5% ARIA fee is a GUEST-SIDE add-on — it is already part of bookingTotal
  * and is collected from the guest separately at settlement. It is NOT deducted
  * from the host. The host therefore receives the FULL subtotal. `ariaFee` is
  * returned for reference only.
@@ -46,7 +46,7 @@ export async function getSuiUSDLiquidity(amountUSD) {
  * (guest-side fee incidence).
  */
 export function calculateHostPayout(totalAmount) {
-  const ariaFee = Math.round(totalAmount * 0.03); // guest-side add-on, for reference only
+  const ariaFee = Math.round(totalAmount * 0.05); // guest-side add-on, for reference only
   const hostPayout = totalAmount;                 // host receives the full subtotal
   return {
     totalAmount,
@@ -54,6 +54,6 @@ export function calculateHostPayout(totalAmount) {
     hostPayout,
     currency: 'SuiUSD',
     settlementMethod: 'BookingPaymentEscrow',
-    note: 'Host receives the full rental subtotal; the 3% ARIA fee is a guest-side add-on, not a host deduction'
+    note: 'Host receives the full rental subtotal; the 5% ARIA fee is a guest-side add-on, not a host deduction'
   };
 }

@@ -194,7 +194,19 @@ export async function cancelBooking({ bookingRef, session, logger = console }) {
   }
 
   const today = new Date(); today.setHours(0, 0, 0, 0);
-  const beforeCheckIn = today < new Date(booking.check_in);
+  const checkInDate = new Date(booking.check_in);
+  const beforeCheckIn = today < checkInDate;
+  // Industry-standard tiered cancellation policy (Phase 2d): the security
+  // deposit isn't at risk just because a guest cancels — there's no stay to
+  // damage — so it's still released any time before check-in (beforeCheckIn,
+  // below). The STAY COST (rental + ARIA fee + tax) is a separate question:
+  // it's only refundable 15+ days out. Inside that window the booking is
+  // financially locked in — the guest's only options are to find a buyer on
+  // the resale market (open until 48h before check-in, see escrow.mjs) or
+  // forfeit the funds. This matches typical vacation-rental cancellation
+  // terms (e.g. Vrbo's standard policy).
+  const daysUntilCheckIn = Math.ceil((checkInDate - today) / (1000 * 60 * 60 * 24));
+  const fullRefundEligible = daysUntilCheckIn >= 15;
   const cancelledAt = new Date().toISOString();
 
   // M1: release the on-chain DEPOSIT escrow if one is actually held.
@@ -204,6 +216,9 @@ export async function cancelBooking({ bookingRef, session, logger = console }) {
     // Phase 1h.5: before check-in the arbitrator can refund the deposit
     // instantly via refund_deposit (v4), instead of stranding it until expiry.
     // Otherwise fall back to the permissionless auto_release (post-expiry only).
+    // Deliberately keyed on beforeCheckIn, NOT fullRefundEligible — the deposit
+    // is damage collateral, not stay-cost refund, so it returns whenever the
+    // stay itself won't happen, regardless of how close to check-in that is.
     if (beforeCheckIn) {
       escrowReleased = await refundDepositEscrow(booking.escrow_object_id);
       if (escrowReleased) logger?.info?.({ bookingRef }, 'cancelBooking: deposit refunded on-chain (pre-check-in)');
@@ -225,23 +240,25 @@ export async function cancelBooking({ bookingRef, session, logger = console }) {
     depositStatus = 'released';
   }
 
-  // Phase 1h.5: refund the PAYMENT escrow (rental + ARIA fee + tax). Industry
-  // standard "fee follows refund": a full refund is only owed before check-in.
-  // After check-in the payment is no longer refundable — the check-in sweep
-  // releases it to host/ARIA/tax instead.
+  // Phase 2d: refund the PAYMENT escrow (rental + ARIA fee + tax) — but only if
+  // cancelling 15+ days before check-in (fullRefundEligible). Inside that
+  // 14-day window the stay cost is locked in: the guest's recourse is the
+  // resale market (listing stays open until 48h before check-in), not a
+  // refund. The check-in sweep still releases held funds to host/ARIA/tax as
+  // usual when no refund is due.
   let paymentEscrowStatus = booking.payment_escrow_status;
   let paymentRefunded = false;
   if (booking.payment_escrow_object_id && booking.payment_escrow_status === 'held') {
-    if (beforeCheckIn) {
+    if (fullRefundEligible) {
       paymentRefunded = await refundPaymentEscrow(booking.payment_escrow_object_id);
       if (paymentRefunded) {
         paymentEscrowStatus = 'refunded';
-        logger?.info?.({ bookingRef }, 'cancelBooking: payment refunded on-chain (pre-check-in)');
+        logger?.info?.({ bookingRef }, 'cancelBooking: payment refunded on-chain (15+ days before check-in)');
       } else {
         logger?.warn?.({ bookingRef }, 'cancelBooking: payment refund not possible — left held');
       }
     } else {
-      logger?.info?.({ bookingRef }, 'cancelBooking: past check-in — payment not refundable, will release to host/ARIA/tax');
+      logger?.info?.({ bookingRef, daysUntilCheckIn }, 'cancelBooking: within 14-day window — payment not refundable, will release to host/ARIA/tax');
     }
   }
 
@@ -270,10 +287,15 @@ export async function cancelBooking({ bookingRef, session, logger = console }) {
     const depositNote = depositReleasedNow
       ? `<div style="background:#0a1a0a;border:1px solid #1a4a1a;border-radius:6px;padding:10px;margin-top:10px"><p style="color:#00ff44;font-size:12px;font-weight:600;margin:0 0 4px">🔓 Security deposit released</p><p style="color:#888;font-size:12px;margin:0">Your $${booking.deposit_amount} deposit has been returned.</p></div>`
       : `<div style="background:#0a0a1a;border:1px solid #1a1a3a;border-radius:6px;padding:10px;margin-top:10px"><p style="color:#4a9eff;font-size:12px;font-weight:600;margin:0 0 4px">🔒 Security deposit pending release</p><p style="color:#888;font-size:12px;margin:0">Your $${booking.deposit_amount} deposit will be released after the inspection window.</p></div>`;
+    const paymentNote = paymentRefunded
+      ? `<div style="background:#0a1a0a;border:1px solid #1a4a1a;border-radius:6px;padding:10px;margin-top:10px"><p style="color:#00ff44;font-size:12px;font-weight:600;margin:0 0 4px">🔓 Stay cost refunded</p><p style="color:#888;font-size:12px;margin:0">Cancelled 15+ days before check-in — your rental, ARIA fee, and tax have been refunded in full.</p></div>`
+      : (booking.payment_escrow_status === 'held' || paymentEscrowStatus === 'held')
+        ? `<div style="background:#1a0a0a;border:1px solid #3a1a1a;border-radius:6px;padding:10px;margin-top:10px"><p style="color:#ff4444;font-size:12px;font-weight:600;margin:0 0 4px">⚠️ Stay cost is non-refundable</p><p style="color:#888;font-size:12px;margin:0">This cancellation is within 14 days of check-in, so the rental, ARIA fee, and tax are not refunded — they'll be released to the host/ARIA/tax as scheduled. You could have listed this booking on the resale market instead to recover funds from a buyer.</p></div>`
+        : '';
     await resend.emails.send({
       from: 'ARIA <onboarding@resend.dev>', to: booking.guest_email,
       subject: `Booking Cancelled — ${booking.property_title} | Ref: ${bookingRef}`,
-      html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px"><h1 style="color:#ff4444;font-size:24px;margin:0 0 8px">❌ Booking Cancelled</h1><p style="color:#888;margin:0 0 24px">Your cancellation confirmation — ${escapeHtml(booking.guest_name)}</p><div style="background:#111;border:1px solid #222;border-radius:8px;padding:20px;margin-bottom:20px"><h2 style="margin:0 0 16px;font-size:18px">${escapeHtml(booking.property_title)}</h2><table style="width:100%;border-collapse:collapse"><tr><td style="color:#888;padding:6px 0">Booking Ref</td><td style="text-align:right">${escapeHtml(bookingRef)}</td></tr><tr><td style="color:#888;padding:6px 0">Check-in</td><td style="text-align:right">${booking.check_in}</td></tr><tr><td style="color:#888;padding:6px 0">Check-out</td><td style="text-align:right">${booking.check_out}</td></tr></table>${depositNote}</div><p style="color:#555;font-size:12px;text-align:center;margin:0">Powered by ARIA — Built on Sui</p></div>`
+      html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px"><h1 style="color:#ff4444;font-size:24px;margin:0 0 8px">❌ Booking Cancelled</h1><p style="color:#888;margin:0 0 24px">Your cancellation confirmation — ${escapeHtml(booking.guest_name)}</p><div style="background:#111;border:1px solid #222;border-radius:8px;padding:20px;margin-bottom:20px"><h2 style="margin:0 0 16px;font-size:18px">${escapeHtml(booking.property_title)}</h2><table style="width:100%;border-collapse:collapse"><tr><td style="color:#888;padding:6px 0">Booking Ref</td><td style="text-align:right">${escapeHtml(bookingRef)}</td></tr><tr><td style="color:#888;padding:6px 0">Check-in</td><td style="text-align:right">${booking.check_in}</td></tr><tr><td style="color:#888;padding:6px 0">Check-out</td><td style="text-align:right">${booking.check_out}</td></tr></table>${paymentNote}${depositNote}</div><p style="color:#555;font-size:12px;text-align:center;margin:0">Powered by ARIA — Built on Sui</p></div>`
     });
   } catch (err) { logger?.warn?.({ err, bookingRef }, 'cancelBooking: email failed'); }
 
@@ -284,12 +306,18 @@ export async function cancelBooking({ bookingRef, session, logger = console }) {
     depositStatus,
     paymentRefunded,
     paymentEscrowStatus,
+    fullRefundEligible,
+    daysUntilCheckIn,
     cancellationWalrusBlobId,
-    message: depositReleasedNow
-      ? (paymentRefunded
-          ? 'Booking cancelled. Payment and deposit refunded in full.'
-          : 'Booking cancelled. Deposit released.')
-      : 'Booking cancelled. Deposit will be released after the inspection window.'
+    message: fullRefundEligible
+      ? (depositReleasedNow
+          ? (paymentRefunded
+              ? 'Booking cancelled. Payment and deposit refunded in full.'
+              : 'Booking cancelled. Deposit released.')
+          : 'Booking cancelled. Deposit will be released after the inspection window.')
+      : (depositReleasedNow
+          ? 'Booking cancelled. Within 14 days of check-in, the stay cost is non-refundable per ARIA’s cancellation policy — only your security deposit was released. You could have listed this booking on the resale market to recover funds.'
+          : 'Booking cancelled. Within 14 days of check-in, the stay cost is non-refundable per ARIA’s cancellation policy. Your security deposit will be released after the inspection window.')
   };
 }
 
@@ -308,12 +336,12 @@ function buildConfirmationEmailHtml({ propertyTitle, bookingRef, checkIn, checkO
         <tr><td style="color:#888;padding:6px 0">Check-out</td><td style="text-align:right">${checkOut}</td></tr>
         <tr><td style="color:#888;padding:6px 0">Nights</td><td style="text-align:right">${nights}</td></tr>
         <tr><td style="color:#888;padding:6px 0">Subtotal</td><td style="text-align:right">$${subtotal}</td></tr>
-        <tr><td style="color:#888;padding:6px 0">ARIA Fee (3% of subtotal only)</td><td style="text-align:right;color:#00ff44">$${ariaFee}</td></tr>
+        <tr><td style="color:#888;padding:6px 0">ARIA Fee (5% of subtotal only)</td><td style="text-align:right;color:#00ff44">$${ariaFee}</td></tr>
         <tr><td style="color:#888;padding:6px 0">Taxes (${taxPct}% — ${jurisdictionName})</td><td style="text-align:right">$${taxes}</td></tr>
         <tr style="border-top:1px solid #333"><td style="padding:8px 0;font-weight:700">Booking Total</td><td style="text-align:right;font-weight:700;color:#00ff44">$${bookingTotal} SuiUSD</td></tr>
         <tr><td style="color:#4a9eff;padding:6px 0">🔒 Refundable Security Deposit</td><td style="text-align:right;color:#4a9eff">$${depositAmount} SuiUSD</td></tr>
       </table>
-      <p style="color:#555;font-size:12px;margin:12px 0 0;line-height:1.6">The $${depositAmount} deposit is locked into a Sui escrow contract once you sign the escrow transaction, and is returned after checkout. ARIA's 3% fee applies to your stay cost only — never to your deposit.</p>
+      <p style="color:#555;font-size:12px;margin:12px 0 0;line-height:1.6">The $${depositAmount} deposit is locked into a Sui escrow contract once you sign the escrow transaction, and is returned after checkout. ARIA's 5% fee applies to your stay cost only — never to your deposit.</p>
     </div>
     ${walrusHtml}
     <p style="color:#555;font-size:12px;text-align:center;margin:0">Powered by ARIA — Built on Sui | The Airbnb killer</p>
@@ -376,7 +404,7 @@ export async function createBooking({ propertyId, checkIn, checkOut, session, lo
   const propertyTitle = prop.title;
   const pricePerNight = prop.price;
   const subtotal       = pricePerNight * nights;
-  const ariaFee        = Math.round(subtotal * 0.03);
+  const ariaFee        = Math.round(subtotal * 0.05);
   const taxes          = Math.round(subtotal * jurisdiction.rate);
   const bookingTotal   = subtotal + ariaFee + taxes;
   const depositAmount  = Math.round(bookingTotal * 0.20);
@@ -441,7 +469,7 @@ export async function createBooking({ propertyId, checkIn, checkOut, session, lo
     breakdown: {
       pricePerNight: `$${pricePerNight}`, nights,
       subtotal: `$${subtotal}`,
-      ariaFee: `$${ariaFee} (3% of subtotal — not charged on deposit)`,
+      ariaFee: `$${ariaFee} (5% of subtotal — not charged on deposit)`,
       taxes: `$${taxes} (${taxPct}% — ${jurisdiction.name})`,
       bookingTotal: `$${bookingTotal} SuiUSD`,
       depositAmount: `$${depositAmount} (refundable, locked in Sui escrow once signed — no ARIA fee)`,

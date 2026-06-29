@@ -410,7 +410,7 @@ export default function Host() {
           {[
             { label: 'TOTAL BOOKINGS', value: activeBookings.length, color: '#00ff44', sub: `${cancelledBookings.length} cancelled` },
             { label: 'GROSS REVENUE', value: `$${totalRevenue.toLocaleString()}`, color: '#00ff44', sub: 'SuiUSD' },
-            { label: 'ARIA FEES (3%)', value: `$${totalAriaFees.toLocaleString()}`, color: '#ff4444', sub: 'vs 15% Airbnb' },
+            { label: 'ARIA FEES (5%)', value: `$${totalAriaFees.toLocaleString()}`, color: '#ff4444', sub: 'vs 15% Airbnb' },
             { label: 'YOUR EARNINGS', value: `$${hostEarnings.toLocaleString()}`, color: '#4a9eff', sub: 'net payout' },
             { label: 'ACTIVE LISTINGS', value: properties.length, color: '#00ff44', sub: 'properties' },
             { label: 'TAXES COLLECTED', value: `$${totalTaxes.toLocaleString()}`, color: '#ffaa00', sub: 'occupancy tax, varies by jurisdiction' },
@@ -477,7 +477,7 @@ export default function Host() {
               </div>
               <p style={{ color: '#888', fontSize: '13px', margin: '0 0 12px', lineHeight: '1.6' }}>Host payouts settle instantly via DeepBook on Sui. No 3–5 day bank delays.</p>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '12px' }}>
-                {[['Settlement Time','< 1 second','#00ff44'],['Airbnb Payout Delay','3–5 days','#ff4444'],['Your Net Rate','97% of booking','#4a9eff'],['Airbnb Net Rate','85% of booking','#ff4444']].map(([label, val, color], i) => (
+                {[['Settlement Time','< 1 second','#00ff44'],['Airbnb Payout Delay','3–5 days','#ff4444'],['Your Net Rate','95% of booking','#4a9eff'],['Airbnb Net Rate','85% of booking','#ff4444']].map(([label, val, color], i) => (
                   <div key={i} style={{ background: '#111', borderRadius: '8px', padding: '12px' }}>
                     <div style={{ fontSize: '10px', color: '#555', marginBottom: '4px' }}>{label}</div>
                     <div style={{ fontSize: '16px', fontWeight: '700', color }}>{val}</div>
@@ -628,7 +628,7 @@ export default function Host() {
                     <div style={{ display: 'flex', gap: '8px' }}>
                       {[['BOOKINGS', activeBookings.filter(b => b.propertyId === p.id || b.propertyId === String(p.id)).length, '#00ff44'],
                         ['REVENUE', `$${activeBookings.filter(b => b.propertyId === p.id || b.propertyId === String(p.id)).reduce((s, b) => s + (b.totalAmount || 0), 0).toLocaleString()}`, '#4a9eff'],
-                        ['ARIA FEE', '3%', '#00ff44']].map(([label, val, color]) => (
+                        ['ARIA FEE', '5%', '#00ff44']].map(([label, val, color]) => (
                         <div key={label} style={{ flex: 1, background: '#1a1a1a', borderRadius: '6px', padding: '8px', textAlign: 'center' }}>
                           <div style={{ fontSize: '10px', color: '#555', marginBottom: '2px' }}>{label}</div>
                           <div style={{ fontWeight: '700', color }}>{val}</div>

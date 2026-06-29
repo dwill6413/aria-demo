@@ -76,8 +76,15 @@ export default function Bookings() {
     setReviewSubmitting(false);
   };
 
-  const handleCancel = async (bookingRef) => {
-    if (!confirm('Cancel this booking? You will receive a full refund within 24 hours.')) return;
+  const handleCancel = async (booking) => {
+    const bookingRef = booking.bookingRef;
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const checkInDate = new Date(booking.checkIn);
+    const daysUntilCheckIn = Math.ceil((checkInDate - today) / (1000 * 60 * 60 * 24));
+    const confirmMsg = daysUntilCheckIn >= 15
+      ? 'Cancel this booking? It\'s 15+ days before check-in, so you\'ll receive a full refund of the stay cost. Your deposit is also released.'
+      : 'Cancel this booking? You\'re within 14 days of check-in, so the stay cost (rental + ARIA fee + tax) is non-refundable — only your security deposit will be released. Consider listing it on the resale market instead to recover funds. Continue with cancellation?';
+    if (!confirm(confirmMsg)) return;
     setCancellingId(bookingRef);
     const res = await authFetch(`${API}/booking/cancel`, {
       method: 'POST',
@@ -589,7 +596,7 @@ export default function Bookings() {
                     )}
                     {b.paymentStatus !== 'cancelled' ? (
                       <button
-                        onClick={() => handleCancel(b.bookingRef)}
+                        onClick={() => handleCancel(b)}
                         disabled={cancellingId === b.bookingRef}
                         style={{ background: 'transparent', border: '1px solid #441a1a', color: cancellingId === b.bookingRef ? '#555' : '#ff4444', fontSize: '12px', padding: '6px 12px', borderRadius: '6px', cursor: cancellingId === b.bookingRef ? 'not-allowed' : 'pointer', fontWeight: '600' }}>
                         {cancellingId === b.bookingRef ? 'Cancelling...' : '✕ Cancel Booking'}
@@ -667,7 +674,7 @@ export default function Bookings() {
                 <div style={{ color: '#4a9eff', fontWeight: 700, fontSize: '12px', marginBottom: '8px' }}>Review before you sign</div>
                 {[
                   ['Rental → host', `$${resumeModal.subtotal}`, 'released to your host at check-in'],
-                  ['ARIA fee (3%) → ARIA', `$${resumeModal.ariaFee}`, 'released at check-in'],
+                  ['ARIA fee (5%) → ARIA', `$${resumeModal.ariaFee}`, 'released at check-in'],
                   ['Taxes → tax remittance', `$${resumeModal.taxes}`, 'released at check-in'],
                   ['Refundable deposit → escrow', `$${resumeModal.depositAmount}`, 'returned after checkout'],
                 ].map(([label, amt, note], i) => (
@@ -681,7 +688,7 @@ export default function Bookings() {
                   <span style={{ color: '#00ff44', fontSize: '13px', fontWeight: 800 }}>${resumeModal.chargeAmount} SuiUSD</span>
                 </div>
                 <p style={{ color: '#789', fontSize: '10px', lineHeight: 1.5, margin: '8px 0 0' }}>
-                  Cancel before check-in for a full refund of everything above. Funds sit in smart-contract escrow — never in an ARIA wallet.
+                  Cancel 15+ days before check-in for a full refund of everything above. Inside 14 days of check-in, the stay cost is non-refundable — list it on the resale market instead. Funds sit in smart-contract escrow — never in an ARIA wallet.
                 </p>
               </div>
             )}

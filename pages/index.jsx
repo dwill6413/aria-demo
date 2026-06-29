@@ -62,7 +62,7 @@ const WHY_ARIA = [
   { icon: '🔒', title: 'On-Chain Escrow', desc: 'Security deposits are held by smart contract — not by ARIA. Released automatically when you approve.' },
   { icon: '✅', title: 'You Approve Everything', desc: 'Cancellations, deposit releases, and payouts all require your action. We never act on your behalf.' },
   { icon: '📋', title: 'Permanent Audit Trail', desc: 'Every booking and payment is stored immutably on Walrus. Your receipts exist forever, independently of ARIA.' },
-  { icon: '💸', title: '3% vs 15%', desc: 'Airbnb takes up to 15%. ARIA takes 3% — only on your stay cost, never on your deposit.' },
+  { icon: '💸', title: '5% vs 15%', desc: 'Airbnb takes up to 15%. ARIA takes 5% — only on your stay cost, never on your deposit.' },
 ];
 
 export default function Home() {
@@ -102,7 +102,7 @@ export default function Home() {
 
   const getJurisdiction  = (p) => (p?.taxRate != null ? { rate: p.taxRate, name: p.taxName } : { rate: 0.08, name: 'Occupancy Tax' });
   const getSubtotal      = (p, n) => p.price * n;
-  const getAriaFee       = (p, n) => Math.round(getSubtotal(p, n) * 0.03);
+  const getAriaFee       = (p, n) => Math.round(getSubtotal(p, n) * 0.05);
   const getTax           = (p, n) => Math.round(getSubtotal(p, n) * getJurisdiction(p).rate);
   const getBookingTotal  = (p, n) => getSubtotal(p, n) + getAriaFee(p, n) + getTax(p, n);
   const getDeposit       = (p, n) => Math.round(getBookingTotal(p, n) * 0.20);
@@ -536,7 +536,7 @@ export default function Home() {
                     <div><span style={{ fontSize: '17px', fontWeight: '700' }}>${p.price}</span><span style={{ color: '#666', fontSize: '13px' }}>/night</span></div>
                   </div>
                   <div style={{ marginTop: '12px', display: 'flex', gap: '8px' }}>
-                    {[['ARIA FEE','3%','#00ff44'],['AIRBNB FEE','15%','#ff4444'],['SETTLEMENT','instant','#4a9eff']].map(([label,val,color]) => (
+                    {[['ARIA FEE','5%','#00ff44'],['AIRBNB FEE','15%','#ff4444'],['SETTLEMENT','instant','#4a9eff']].map(([label,val,color]) => (
                       <div key={label} style={{ flex: 1, background: '#1a1a1a', borderRadius: '6px', padding: '8px', textAlign: 'center' }}>
                         <div style={{ fontSize: '10px', color: '#555', marginBottom: '2px' }}>{label}</div>
                         <div style={{ fontSize: '13px', fontWeight: '600', color }}>{val}</div>
@@ -613,7 +613,7 @@ export default function Home() {
                     <span style={{ fontSize: '14px' }}>${getSubtotal(selected, nights)}</span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                    <span style={{ color: '#888', fontSize: '14px' }}>ARIA fee (3% of stay cost)</span>
+                    <span style={{ color: '#888', fontSize: '14px' }}>ARIA fee (5% of stay cost)</span>
                     <span style={{ fontSize: '14px', color: '#00ff44' }}>${getAriaFee(selected, nights)}</span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px', paddingBottom: '12px', borderBottom: '1px solid #333' }}>
@@ -684,7 +684,7 @@ export default function Home() {
                       <span style={{ color: '#00ff44', fontSize: '14px' }}>🛡️</span>
                       <span style={{ color: '#fff', fontWeight: '600', fontSize: '13px' }}>Cancellation Policy</span>
                     </div>
-                    <p style={{ color: '#888', margin: 0, lineHeight: '1.5' }}>Cancel any time <strong style={{ color: '#fff' }}>before check-in</strong> for a full refund of your stay payment <em>and</em> deposit — ARIA's fee included. After check-in the stay payment is non-refundable.</p>
+                    <p style={{ color: '#888', margin: 0, lineHeight: '1.5' }}>Cancel <strong style={{ color: '#fff' }}>15+ days before check-in</strong> for a full refund of your stay payment — ARIA's fee included. Your deposit is always refunded on cancellation. Inside 14 days of check-in, the stay payment is non-refundable; you can list the booking on the resale market instead of losing the funds.</p>
                   </div>
                 </>
               )}
@@ -735,7 +735,7 @@ export default function Home() {
                       </div>
                       {[
                         ['Rental → host', `$${booking.subtotal}`, 'released to your host at check-in'],
-                        ['ARIA fee (3%) → ARIA', `$${booking.ariaFee}`, 'released at check-in'],
+                        ['ARIA fee (5%) → ARIA', `$${booking.ariaFee}`, 'released at check-in'],
                         ['Taxes → tax remittance', `$${booking.taxes}`, 'released at check-in'],
                         ['Refundable deposit → escrow', `$${booking.depositAmount}`, 'returned after checkout'],
                       ].map(([label, amt, note], i) => (
@@ -749,7 +749,7 @@ export default function Home() {
                         <span style={{ color: '#00ff44', fontSize: '13px', fontWeight: 800 }}>${booking.chargeAmount} SuiUSD</span>
                       </div>
                       <p style={{ color: '#789', fontSize: '10px', lineHeight: 1.5, margin: '8px 0 10px' }}>
-                        Cancel <strong style={{ color: '#9bb' }}>before check-in</strong> for a full refund of everything above, ARIA's fee included. After check-in the rental, fee, and tax are non-refundable; your deposit still returns after checkout. Funds sit in smart-contract escrow — never in an ARIA wallet.
+                        Cancel <strong style={{ color: '#9bb' }}>15+ days before check-in</strong> for a full refund of everything above, ARIA's fee included. Inside 14 days of check-in, the rental, fee, and tax are non-refundable — list the booking on the resale market to recover funds instead; your deposit still returns after checkout either way. Funds sit in smart-contract escrow — never in an ARIA wallet.
                       </p>
                       <button onClick={() => handleEscrowSign(booking.bookingRef, booking.escrowTxBytes)}
                         style={{ width: '100%', background: '#00ff44', color: '#000', border: 'none', borderRadius: '6px', padding: '11px', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}>
