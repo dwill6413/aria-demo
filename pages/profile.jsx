@@ -17,11 +17,19 @@ const US_STATES = [
   'ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY',
 ];
 
+const ID_TYPES = [
+  "Driver's License",
+  'Passport',
+  'State ID Card',
+  'Military ID',
+  'National ID Card',
+];
+
 const FIELDS = [
   { key: 'fullName', label: 'Full legal name', placeholder: 'Jordan A. Traveler' },
   { key: 'dob', label: 'Date of birth', placeholder: 'YYYY-MM-DD' },
   { key: 'phone', label: 'Phone number', placeholder: '+1 555 010 0000' },
-  { key: 'idType', label: 'ID type', placeholder: 'Passport / Driver license' },
+  { key: 'idType', label: 'ID type', type: 'select', options: ID_TYPES, placeholder: 'Select ID type' },
   { key: 'idNumber', label: 'ID number', placeholder: 'X1234567' },
   { key: 'idState', label: 'ID issuing state', type: 'select', options: US_STATES, placeholder: 'Select state' },
   { key: 'address', label: 'Home address', placeholder: '123 Main St, City, ST' },
