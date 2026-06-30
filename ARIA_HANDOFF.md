@@ -35,9 +35,7 @@
 > etc.) or opens the existing BookingPass QR flow.
 >
 > *Host side:*
-> - DB (`db.mjs`): `properties.check_in_type TEXT DEFAULT 'front_desk'`,
->   `properties.access_instructions_encrypted TEXT`, `bookings.checked_in BOOLEAN DEFAULT false`,
->   `bookings.checked_in_at TIMESTAMPTZ`.
+> - DB (`db.mjs`): new `property_checkin_settings` table (`property_id PK, check_in_type, access_instructions_encrypted, updated_at`) — covers both catalog and DB properties without shadow rows. Legacy columns `properties.check_in_type` / `properties.access_instructions_encrypted` are kept in `db.mjs` for backward compat but are no longer written. `bookings.checked_in BOOLEAN DEFAULT false`, `bookings.checked_in_at TIMESTAMPTZ`.
 > - Backend (`server.mjs`): `PUT /host/property/:id/access-instructions` (encrypt + store),
 >   `GET /host/property/:id/access-instructions` (decrypt + return, ownership-checked).
 >   AES-256-GCM via Node.js built-in `crypto`. Key = `CHECKIN_KEY` env var (64 hex chars / 32 bytes).
@@ -439,9 +437,9 @@ For the fee/payment-routing design see **`ARIA_FEE_DESIGN.md`**.
 `tax_remittances`, `host_profiles`, `sessions`, `property_ical_feeds`,
 `guest_identity_access_log`, `wallet_sends`.
 
-Key columns added June 30, 2026:
-- `properties.check_in_type TEXT DEFAULT 'front_desk'`
-- `properties.access_instructions_encrypted TEXT`
+Key columns/tables added June 30, 2026:
+- `property_checkin_settings (property_id PK, check_in_type, access_instructions_encrypted, updated_at)` — new dedicated table for check-in settings; covers catalog + DB properties cleanly
+- `properties.check_in_type` / `properties.access_instructions_encrypted` — legacy columns, kept for compat, no longer written by new code
 - `bookings.checked_in BOOLEAN DEFAULT false`
 - `bookings.checked_in_at TIMESTAMPTZ`
 

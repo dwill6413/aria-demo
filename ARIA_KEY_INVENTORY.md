@@ -81,7 +81,7 @@ load) in Railway environment variables.
 |---|---|
 | Type | **Symmetric AES-256-GCM key** — NOT a Sui keypair. 64 hex characters (32 bytes). |
 | Status | **Active — set in Railway (June 30, 2026).** |
-| Purpose | Encrypts/decrypts host-provided self check-in access instructions (door codes, wifi passwords, entry notes) stored in `properties.access_instructions_encrypted`. |
+| Purpose | Encrypts/decrypts host-provided self check-in access instructions (door codes, wifi passwords, entry notes) stored in `property_checkin_settings.access_instructions_encrypted`. |
 | Stored format | `iv_hex:ciphertext_hex:authtag_hex` — each field is separately hex-encoded; authentication tag provides tamper detection. |
 | Who uses it | Backend only (`encryptInstructions` / `decryptInstructions` helpers in `server.mjs`). Never sent to the frontend. |
 | Why server-side (not Walrus Seal) | Access instructions are operational data, not PII. Server-mediated AES-256-GCM is appropriate — equivalent to how standard hotel PMS systems protect door codes. Seal would require a Move contract upgrade (`seal_approve_checkin`), on-chain key management, and Seal network dependency for what amounts to a door code. |
