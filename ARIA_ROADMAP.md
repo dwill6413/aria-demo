@@ -1,9 +1,28 @@
 # ARIA — Product Roadmap & AI Handoff Document
-**Version:** 2.27 | **Updated:** June 29, 2026
+**Version:** 2.28 | **Updated:** June 30, 2026
 **Purpose:** Complete handoff for an AI assistant continuing ARIA development.
 Read this entire document before writing any code.
 
-> **June 29, 2026 (LATEST — catalog/db parity: all 4 gaps closed):** Direct ask:
+> **June 30, 2026 (LATEST — tax-routing design correction, no contract upgrade):**
+> Design fix: ARIA does not custody occupancy tax. Previously `release_payment`'s
+> 3-way split sent the tax leg to a separate ARIA-controlled
+> `ARIA_TAX_REMITTANCE_ADDRESS` wallet, which conflicted with the already-built
+> off-chain model where hosts self-remit tax (`tax_remittances` table,
+> `/tax/remit` route). Fixed so the tax leg now routes to the host's own payout
+> address — same wallet as the rental subtotal — so at check-in ARIA receives
+> only its 5% fee and the host receives rental+tax combined. No Move upgrade
+> needed (`tax_addr` was always a plain function argument, not hardcoded).
+> Changed: `escrow.mjs` (`buildBookingPaymentTransaction` sets `taxAddr = hostAddr`;
+> `verifyBookingPaymentTransaction` checks `pay.taxAddr` against the
+> authoritative host address instead of an env var), `bookings.mjs`/`server.mjs`
+> (`useCombined` now gates on `ARIA_FEE_ADDRESS` alone), `escrow.test.mjs`
+> (fixtures + a new tampered-tax-destination adversarial test). `ARIA_TAX_REMITTANCE_ADDRESS`
+> is retired — see `ARIA_KEY_INVENTORY.md` §5 and `ARIA_FEE_DESIGN.md` v2.2.
+> Tests updated; sandbox mount couldn't run `node escrow.test.mjs` this session
+> (stale FUSE cache on the project folder — known tech-debt item below), so
+> **run the suite before relying on it.**
+>
+> **June 29, 2026 (catalog/db parity: all 4 gaps closed):** Direct ask:
 > "make sure any imported property listings by a host inherit all functionality
 > as our hard coded test properties — no gaps." Audit found 4 places the 6
 > fixed `catalog.mjs` demo properties and host-imported (`properties` table)
@@ -611,9 +630,11 @@ original package ID (`0x538262...7fdbe`); no separate contract deployment.
    confirm + runCheckInReleaseSweep cron + refund-on-cancel; db columns + unique
    settlement_digest; +14 JS tests. Frontend done (index.jsx review-then-sign
    disclosure + ai.jsx chat disclosure + ai_route.mjs field forwarding).
-   REMAINING: generate/set ARIA_FEE_ADDRESS + ARIA_TAX_REMITTANCE_ADDRESS, run
-   both test suites + an in-browser smoke test, and the v4 on-chain publish —
-   still bundled with 2a's seal_approve so there is ONE v4 publish, not two.
+   Tax-routing corrected June 30, 2026: tax leg now routes to the host (rides
+   with the rental subtotal) instead of a separate ARIA-controlled
+   ARIA_TAX_REMITTANCE_ADDRESS wallet (retired) — ARIA only ever receives its
+   5% fee. LIVE since June 23 (ARIA_FEE_ADDRESS set, both suites passing,
+   v4 published) — re-run `node escrow.test.mjs` after the June 30 fix.
 🟨 Phase 2a: seal_approve() added to escrow.move (June 23, 2026) — CODE DONE,
    +3 Move tests. `public entry fun seal_approve<T>(id, escrow, ctx)` asserts
    id == address::to_bytes(escrow.guest) AND sender == escrow.host. Still needs
@@ -958,13 +979,15 @@ key is cold KeePass-only, never loaded by the backend) and ANTHROPIC_API_KEY
 AUTO_RELEASE_SWEEP_INTERVAL_MS = <optional, default 3600000 (1 hour) — sweep cadence
                            for runAutoReleaseSweep()>
 
-# Phase 1h.5 (June 23, 2026) — payment escrow. The combined payment+deposit
-# booking PTB only activates when BOTH treasury addresses below are set;
-# otherwise createBooking falls back to the deposit-only P0b build.
-ARIA_FEE_ADDRESS           = <receive-only Sui address for ARIA's 3% booking fee.
-                           NOT a signing key. NOT yet generated/set.>
-ARIA_TAX_REMITTANCE_ADDRESS = <receive-only Sui address for collected taxes.
-                           NOT a signing key. NOT yet generated/set.>
+# Phase 1h.5 (June 23, 2026; tax-routing corrected June 30) — payment escrow.
+# The combined payment+deposit booking PTB activates once the fee address
+# below is set; otherwise createBooking falls back to the deposit-only P0b build.
+ARIA_FEE_ADDRESS           = 0xcc27c579f88e82d0e78f159435675fecf4b1029405eb6f380553132f760ac6de
+                           (alias aria-fee, generated June 23, 2026). Receive-only —
+                           ARIA's 5% booking fee. NOT a signing key.
+# ARIA_TAX_REMITTANCE_ADDRESS — RETIRED June 30, 2026. ARIA does not custody tax;
+# the tax leg now routes to the host's own payout address (rides with the
+# rental subtotal). Do not set this env var. See ARIA_KEY_INVENTORY.md §5.
 PAYMENT_COIN_TYPE          = <optional, default 0x2::sui::SUI (testnet). Set to the
                            SuiUSD coin type on mainnet.>
 CHECKIN_RELEASE_SWEEP_INTERVAL_MS = <optional, defaults to AUTO_RELEASE_SWEEP_INTERVAL_MS

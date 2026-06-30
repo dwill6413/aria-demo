@@ -559,7 +559,9 @@ export async function createBooking({ propertyId, checkIn, checkOut, guests, ses
   try {
     const hostAddr = await getPropertyHostAddress(propertyId, logger);
     if (hostAddr) {
-      const useCombined = !!(process.env.ARIA_FEE_ADDRESS && process.env.ARIA_TAX_REMITTANCE_ADDRESS);
+      // Tax leg now rides with the host (rental+tax combined) — see escrow.mjs —
+      // so the only gate for building the combined payment escrow is the fee wallet.
+      const useCombined = !!process.env.ARIA_FEE_ADDRESS;
       // Phase 2c: read the host's resale opt-in + cap (Rail 1/2). When enabled,
       // buildBookingPaymentTransaction adds the create_resale_policy moveCall so
       // this booking can later be resold under these terms. Dormant otherwise.

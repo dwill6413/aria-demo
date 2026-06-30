@@ -643,6 +643,9 @@ await test('dollarsToUnits: ×1000 scaling, zero leg, and cents', () => {
 
 // Treasury + party addresses for the payment-escrow tests.
 const P_ARIA = '0x' + 'a'.repeat(64);
+// P_TAX is an attacker-controlled wallet used only in the tamper test below —
+// the tax leg's authoritative destination is now the host wallet itself
+// (tax rides with the rental subtotal; ARIA never custodies it on-chain).
 const P_TAX  = '0x' + 'b'.repeat(64);
 // create_payment_escrow(ref, guest, host, aria_addr, tax_addr, arbitrator,
 //   host_amount, aria_amount, tax_amount, release_ms, coin, clock)  +  the
@@ -651,7 +654,7 @@ const P_TAX  = '0x' + 'b'.repeat(64);
 function combinedTxData(o = {}) {
   const {
     ref = 'ARIA-2-x', guest = GUEST, host = HOST,
-    ariaAddr = P_ARIA, taxAddr = P_TAX, arb = ARB,
+    ariaAddr = P_ARIA, taxAddr = host, arb = ARB,
     hostUnits = 1000000, ariaUnits = 30000, taxUnits = 130000,
     releaseMs = 9999, depUnits = depositToMist(232).toString(),
   } = o;
@@ -691,7 +694,7 @@ await test('decodeCreatePaymentEscrowArgs: decodes all legs/destinations lag-fre
   assertEqual(d.guest, GUEST);
   assertEqual(d.host, HOST);
   assertEqual(d.ariaAddr, P_ARIA);
-  assertEqual(d.taxAddr, P_TAX);
+  assertEqual(d.taxAddr, HOST);
   assertEqual(d.arbitrator, ARB);
   assertEqual(d.hostAmount, '1000000');
   assertEqual(d.ariaAmount, '30000');
@@ -710,7 +713,7 @@ await test('decodeCreatePaymentEscrowArgs: wrong module / malformed — returns 
 // combined booking tx with both escrow object types present lag-free.
 process.env.ESCROW_MODULE_NAME = 'escrow';
 process.env.ARIA_FEE_ADDRESS = P_ARIA;
-process.env.ARIA_TAX_REMITTANCE_ADDRESS = P_TAX;
+// No ARIA_TAX_REMITTANCE_ADDRESS — tax destination authority is the host (EXPECTED.host).
 process.env.ARIA_ARBITRATOR_ADDRESS = ARB;
 const PAY_ID = '0x' + '7'.repeat(64);
 const DEP_ID = '0x' + '8'.repeat(64);
@@ -750,6 +753,12 @@ await test('verify §12 T1: tampered ARIA-fee destination is rejected', async ()
 
 await test('verify §12 T1: tampered host (rental) destination is rejected', async () => {
   mockPaymentChain({ host: '0x' + 'd'.repeat(64) });
+  const r = await verifyBookingPaymentTransaction('digest', EXPECTED);
+  assertEqual(r.ok, false);
+});
+
+await test('verify §12 T1: tampered tax destination is rejected', async () => {
+  mockPaymentChain({ taxAddr: P_TAX }); // attacker wallet instead of the host
   const r = await verifyBookingPaymentTransaction('digest', EXPECTED);
   assertEqual(r.ok, false);
 });

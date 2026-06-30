@@ -628,7 +628,9 @@ fastify.post('/booking/:bookingRef/escrow/rebuild', {
   const releaseMs = Date.now() + (
     Number.isFinite(Number(process.env.PAYMENT_RELEASE_OFFSET_MS))
       ? Math.max(60_000, Number(process.env.PAYMENT_RELEASE_OFFSET_MS)) : 300_000);
-  const useCombined = !!(process.env.ARIA_FEE_ADDRESS && process.env.ARIA_TAX_REMITTANCE_ADDRESS);
+  // Tax leg now rides with the host (rental+tax combined) — see escrow.mjs —
+  // so the only gate for building the combined payment escrow is the fee wallet.
+  const useCombined = !!process.env.ARIA_FEE_ADDRESS;
   let built;
   try {
     built = useCombined

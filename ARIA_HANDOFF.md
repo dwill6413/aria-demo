@@ -254,14 +254,17 @@
 > file-by-file log in `ARIA_FEE_DESIGN.md` §14. Summary: a new
 > `BookingPaymentEscrow<T>` (separate from the deposit's `BookingEscrow`) holds
 > rental + ARIA fee + tax, created in the SAME guest-signed PTB as the deposit
-> (one signature, two shared objects, atomic). `release_payment` does the 3-way
-> split at check-in (permissionless, auto-release key, via `runCheckInReleaseSweep`);
+> (one signature, two shared objects, atomic). `release_payment` does a 2-way
+> split at check-in (permissionless, auto-release key, via `runCheckInReleaseSweep`):
+> ARIA gets its 5% fee, the host gets rental + tax combined (tax_addr == host —
+> ARIA does not custody tax; the host self-remits, see `ARIA_FEE_DESIGN.md` v2.2).
 > `refund_payment` gives a full guest refund before check-in (arbitrator-gated);
 > `refund_deposit` returns the deposit early on cancel. Policy: **fee follows
 > refund** (full refund incl. fee before check-in, none after) — matches
 > Airbnb/Vrbo. Verification is lag-free PTB-arg decoding with a
 > **destination-authority** check (rental/fee/tax legs must point at the
-> authoritative host / `ARIA_FEE_ADDRESS` / `ARIA_TAX_REMITTANCE_ADDRESS`), plus
+> authoritative host / `ARIA_FEE_ADDRESS`; tax_addr is checked against the
+> same authoritative host address), plus
 > replay protection via a unique `settlement_digest`. **Tests written (12 Move +
 > 14 JS, incl. the adversarial matrix) but NOT run in the build sandbox** (the
 > `@mysten/sui` pnpm symlink is unreadable there and no `sui` binary) — run
@@ -320,15 +323,16 @@ For the fee/payment-routing design see **`ARIA_FEE_DESIGN.md`**.
 >   Non-custodial hold-and-release: a new `BookingPaymentEscrow<T>` holds
 >   rental + ARIA fee + tax, created in the same guest-signed PTB as the deposit
 >   escrow (one signature, two shared objects, atomic). `release_payment` does a
->   3-way split (`subtotal`→host, `ariaFee`→ARIA fee wallet, `taxes`→remittance)
->   at check-in — permissionless, signed by the existing zero-privilege
+>   2-way split (`subtotal+taxes`→host, `ariaFee`→ARIA fee wallet — ARIA does
+>   not custody tax; tax rides with the host, who self-remits off-chain) at
+>   check-in — permissionless, signed by the existing zero-privilege
 >   auto-release key via a new `runCheckInReleaseSweep` cron. `refund_payment`
 >   (arbitrator-gated, pre-check-in) gives a full guest refund on cancellation via
->   a new `/booking/cancel` route. Needs the **v4** contract upgrade — bundle with
->   Phase 2a's `seal_approve` (one publish). Adds two receive-only treasury
->   addresses (`ARIA_FEE_ADDRESS`, `ARIA_TAX_REMITTANCE_ADDRESS`); no new signing
+>   a new `/booking/cancel` route. Needed the **v4** contract upgrade — bundled with
+>   Phase 2a's `seal_approve` (one publish). Adds one receive-only treasury
+>   address (`ARIA_FEE_ADDRESS`); no new signing
 >   key. Fixes the `calculateHostPayout` fee double-count (host gets full
->   `subtotal`). SuiUSD-only; Stripe Connect deferred. Not yet built.
+>   `subtotal`). SuiUSD-only; Stripe Connect deferred.
 >
 > **June 18, 2026 update summary** (details throughout this doc):
 > - Smart contract upgraded to **package v3** (`0xec0d6bd4…644d8fa1`) adding a
@@ -935,12 +939,16 @@ DEMO_HOST_ADDRESS       = <optional, June 18, 2026 — a real Sui address to act
                            exercised end-to-end. If unset, escrow host falls back
                            to ARIA_AUTO_RELEASE_KEY's address. NOT YET SET in Railway.>
 AUTO_RELEASE_SWEEP_INTERVAL_MS = <optional, default 3600000 (1 hour)>
-ARIA_FEE_ADDRESS        = <Phase 1h.5 — receive-only Sui address for ARIA's 3%
-                           booking fee. NOT a signing key. NOT yet set. The
-                           combined payment+deposit booking PTB activates only
-                           when this AND ARIA_TAX_REMITTANCE_ADDRESS are set.>
-ARIA_TAX_REMITTANCE_ADDRESS = <Phase 1h.5 — receive-only Sui address for collected
-                           taxes. NOT a signing key. NOT yet set.>
+ARIA_FEE_ADDRESS        = 0xcc27c579f88e82d0e78f159435675fecf4b1029405eb6f380553132f760ac6de
+                           (alias aria-fee, generated June 23, 2026; see
+                           ARIA_KEY_INVENTORY.md §5). Receive-only — ARIA's 5%
+                           booking fee. NOT a signing key. The combined
+                           payment+deposit booking PTB activates once this is set.
+ARIA_TAX_REMITTANCE_ADDRESS = RETIRED (June 30, 2026). ARIA does not custody tax.
+                           The tax leg now routes to the host's own payout
+                           address (same wallet as the rental subtotal) — host
+                           receives rental+tax combined at check-in and
+                           self-remits off-chain. See ARIA_FEE_DESIGN.md v2.2.
 PAYMENT_COIN_TYPE       = <optional, default 0x2::sui::SUI (testnet); SuiUSD type on mainnet>
 CHECKIN_RELEASE_SWEEP_INTERVAL_MS = <optional, defaults to AUTO_RELEASE_SWEEP_INTERVAL_MS>
 REQUIRE_GUEST_VERIFICATION = <Phase 2e — 'true' to require a guest_verifications

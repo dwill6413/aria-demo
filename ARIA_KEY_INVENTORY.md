@@ -55,12 +55,12 @@ load) in Railway environment variables.
 
 | | |
 |---|---|
-| `ARIA_FEE_ADDRESS` | `0xcc27c579f88e82d0e78f159435675fecf4b1029405eb6f380553132f760ac6de` (alias `aria-fee`, generated June 23, 2026; recovery phrase in KeePass). Destination for ARIA's 3% booking fee leg of `release_payment` at check-in. |
-| `ARIA_TAX_REMITTANCE_ADDRESS` | `0xc75ae8270ca15de2ab0c10a8269d5b42459f813a125ac3cd29ba4a76a008637c` (alias `aria-tax`, generated June 23, 2026; recovery phrase in KeePass). Destination for the tax leg of `release_payment`. |
-| Status | **Receive-only — NOT signing keys.** The backend never loads a private key for either; they only ever appear as the `aria_addr` / `tax_addr` fields baked into a `BookingPaymentEscrow`, and as destinations of the on-chain split. |
-| Why low-risk | Nothing the backend does requires their private keys. A leak of the *address* is harmless (it only receives funds); secure the receiving wallet's keys in KeePass like any treasury. |
-| Verification role | `verifyBookingPaymentTransaction` rejects any booking PTB whose fee/tax legs don't point at exactly these addresses (destination-authority check), so a tampered transaction can't redirect ARIA's fee or the tax remittance. |
-| When to set | Generate two receiving wallets, set both as Railway env vars. Until BOTH are set, `createBooking` falls back to the deposit-only P0b build and no payment escrow is created. |
+| `ARIA_FEE_ADDRESS` | `0xcc27c579f88e82d0e78f159435675fecf4b1029405eb6f380553132f760ac6de` (alias `aria-fee`, generated June 23, 2026; recovery phrase in KeePass). Destination for ARIA's 5% booking fee leg of `release_payment` at check-in. |
+| `ARIA_TAX_REMITTANCE_ADDRESS` | **RETIRED (June 30, 2026).** `0xc75ae8270ca15de2ab0c10a8269d5b42459f813a125ac3cd29ba4a76a008637c` (alias `aria-tax`) is no longer used by the backend. Design correction: ARIA does not custody occupancy tax. The tax leg (`tax_addr`) now routes to the host's own payout address — the same wallet that receives the rental subtotal — so the host receives rental+tax combined at check-in and self-remits to the tax authority (tracked via `tax_remittances`/`/tax/remit`). No Move upgrade was needed since `tax_addr` is a plain function argument, not hardcoded. This row is kept for historical reference only; do not set this env var. |
+| Status | **Receive-only — NOT a signing key.** The backend never loads a private key for the fee wallet; it only appears as the `aria_addr` field baked into a `BookingPaymentEscrow`, and as a destination of the on-chain split. |
+| Why low-risk | Nothing the backend does requires its private key. A leak of the *address* is harmless (it only receives funds); secure the receiving wallet's key in KeePass like any treasury. |
+| Verification role | `verifyBookingPaymentTransaction` rejects any booking PTB whose fee leg doesn't point at exactly this address (destination-authority check), and likewise rejects a tax leg that doesn't point at the authoritative host address. |
+| When to set | Generate the fee-receiving wallet, set it as a Railway env var. Until set, `createBooking` falls back to the deposit-only P0b build and no payment escrow is created. |
 
 ---
 

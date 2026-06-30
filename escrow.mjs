@@ -815,9 +815,14 @@ export async function buildBookingPaymentTransaction(bookingRef, guestAddr, host
   const { subtotal, ariaFee, taxes, depositAmount, releaseMs, propertyId, checkInMs, checkOutMs } = amounts || {};
   if (!guestAddr || !hostAddr || !process.env.ESCROW_PACKAGE_ID) return null;
   const ariaAddr = process.env.ARIA_FEE_ADDRESS;
-  const taxAddr  = process.env.ARIA_TAX_REMITTANCE_ADDRESS;
-  if (!ariaAddr || !taxAddr) {
-    logger?.warn?.('buildBookingPaymentTransaction: ARIA_FEE_ADDRESS / ARIA_TAX_REMITTANCE_ADDRESS not set');
+  // Tax leg routes to the SAME wallet as the rental subtotal — the host.
+  // ARIA never custodies occupancy tax on-chain; the host receives rental+tax
+  // together at check-in and remains responsible for remitting tax to the
+  // authority themselves (tracked via tax_remittances / the host-only
+  // /tax/remit route — bookkeeping only, not fund custody).
+  const taxAddr  = hostAddr;
+  if (!ariaAddr) {
+    logger?.warn?.('buildBookingPaymentTransaction: ARIA_FEE_ADDRESS not set');
     return null;
   }
   // Same fallback rationale as buildEscrowTransaction: never silently hand
@@ -1249,7 +1254,8 @@ export async function verifyBookingPaymentTransaction(digest, expected = {}) {
   } = expected;
 
   const ariaAddr = process.env.ARIA_FEE_ADDRESS;
-  const taxAddr  = process.env.ARIA_TAX_REMITTANCE_ADDRESS;
+  // Tax destination authority is the host — same wallet as the rental subtotal.
+  // ARIA no longer custodies the tax leg on-chain (see buildBookingPaymentTransaction).
   const expectedArbitrator = process.env.ARIA_ARBITRATOR_ADDRESS || expectedHost;
   const mod = process.env.ESCROW_MODULE_NAME || 'escrow';
 
@@ -1300,8 +1306,8 @@ export async function verifyBookingPaymentTransaction(digest, expected = {}) {
   if (ariaAddr && pay.ariaAddr && !eq(pay.ariaAddr, ariaAddr)) {
     return { ok: false, reason: 'Payment ARIA-fee destination does not match the authoritative fee wallet' };
   }
-  if (taxAddr && pay.taxAddr && !eq(pay.taxAddr, taxAddr)) {
-    return { ok: false, reason: 'Payment tax destination does not match the authoritative remittance wallet' };
+  if (expectedHost && pay.taxAddr && !eq(pay.taxAddr, expectedHost)) {
+    return { ok: false, reason: 'Payment tax destination does not match the authoritative host payout address' };
   }
   if (expectedHost && pay.host && !eq(pay.host, expectedHost)) {
     return { ok: false, reason: 'Payment host destination does not match the authoritative host payout address' };

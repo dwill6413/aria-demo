@@ -1,11 +1,25 @@
 # ARIA — Fee Collection & Payment Routing Design
 
-**Version:** 2.1 (design) | **Created:** June 22, 2026 | **Revised:** June 22, 2026
-**Status:** Design — not yet implemented. Spec for build Phase 1h.5
-("Fee collection/routing"), the top remaining build item in `ARIA_ROADMAP.md`.
+**Version:** 2.2 (design) | **Created:** June 22, 2026 | **Revised:** June 30, 2026
+**Status:** Implemented (Phase 1h.5 shipped). Spec for build Phase 1h.5
+("Fee collection/routing"), tracked in `ARIA_ROADMAP.md`.
 **Scope this phase:** SuiUSD on-chain path only. Stripe Connect (fiat) is a
 future phase (§10), not built now — mirrors the P0b precedent of shipping the
 SuiUSD path first.
+
+> **v2.2 correction (June 30, 2026):** ARIA does **not** hold a separate
+> tax-remittance wallet. The tax leg routes to the **same address as the
+> rental subtotal — the host**. At check-in, ARIA receives only its fee
+> (`aria_amount`); the host receives `host_amount + tax_amount` (rental + tax)
+> in one transfer and is responsible for remitting the tax to the authority
+> themselves (tracked off-chain via `tax_remittances` / the host-only
+> `/tax/remit` route — bookkeeping only, ARIA never custodies the tax). The
+> contract's `tax_addr` parameter is unchanged (it's a plain argument to
+> `create_payment_escrow`, not hardcoded) — the backend now passes the host's
+> address for it instead of a dedicated `ARIA_TAX_REMITTANCE_ADDRESS` wallet.
+> `ARIA_TAX_REMITTANCE_ADDRESS` is retired; everywhere below that still
+> describes a 3-way split / separate remittance wallet is superseded by this
+> note pending a full doc pass.
 
 > **v2.1 change (production hardening):** added §12 "Production-readiness & safety
 > hardening" — the invariants and threat→mitigation analysis that make the build
@@ -191,7 +205,7 @@ tx.moveCall({
     tx.pure.string(bookingRef),
     tx.pure.address(guestAddr), tx.pure.address(hostAddr),
     tx.pure.address(process.env.ARIA_FEE_ADDRESS),
-    tx.pure.address(process.env.ARIA_TAX_REMITTANCE_ADDRESS),
+    tx.pure.address(hostAddr),   // tax_addr — rides with the host, not a separate ARIA wallet
     tx.pure.address(arbitrator),
     tx.pure.u64(toUnits(subtotal)),
     tx.pure.u64(toUnits(ariaFee)),
@@ -239,10 +253,11 @@ Primary verification is **lag-free PTB-argument decoding**, not object reads:
    - `host_amount == toUnits(subtotal)`, `aria_amount == toUnits(ariaFee)`,
      `tax_amount == toUnits(taxes)`, and their **sum == the funded coin value**.
    - **Destination authority:** `aria_addr == ARIA_FEE_ADDRESS`,
-     `tax_addr == ARIA_TAX_REMITTANCE_ADDRESS`, and `host == ` the property's
-     authoritative payout address (from `host_profiles`/`catalog`, **not** any
-     value echoed by the client). This blocks a tampered PTB that points the
-     rental or fee leg at an attacker-controlled wallet.
+     `tax_addr == ` the property's authoritative host payout address (same
+     check as `host`, since tax now rides with the host), and `host == ` the
+     property's authoritative payout address (from `host_profiles`/`catalog`,
+     **not** any value echoed by the client). This blocks a tampered PTB that
+     points the rental, fee, or tax leg at an attacker-controlled wallet.
    - `booking_ref` matches **this** booking, `guest == guestAddr`,
      `arbitrator == ARIA_ARBITRATOR_ADDRESS`, `release_time_ms ==` the booking's
      check-in basis (§7).
@@ -356,25 +371,30 @@ against racing the release cron with a status check, the same way
 | `pages/index.jsx`, `pages/ai.jsx` | Same single-signature UX; breakdown shows held→released routing and the cancellation policy. |
 | `db.mjs` | Add `payment_escrow_object_id TEXT`, `settlement_status TEXT` (`held`\|`released`\|`refunded`\|`failed`), `settlement_digest TEXT` to `bookings`, idempotent. |
 | `validation.mjs` | Schemas for `/booking/cancel` and the confirm route digest. |
-| **Env / Railway** | Add `ARIA_FEE_ADDRESS`, `ARIA_TAX_REMITTANCE_ADDRESS` (addresses only); optional `PAYMENT_COIN_TYPE`. |
-| `ARIA_KEY_INVENTORY.md` | Add the two receive-only treasury addresses (§9). |
+| **Env / Railway** | Add `ARIA_FEE_ADDRESS` (address only); optional `PAYMENT_COIN_TYPE`. No tax-wallet env var — tax rides with the host. |
+| `ARIA_KEY_INVENTORY.md` | Add the one receive-only treasury address (§9). |
 | `ARIA_ROADMAP.md` / `ARIA_HANDOFF.md` | Phase 1h.5 now depends on the v4 upgrade; note the bundling with Phase 2a. |
 
 ---
 
 ## 9. New keys (receive-only)
 
-Two new wallets, both **receive-only** — generated offline, private keys in
-KeePass only, **never loaded by the backend** (they only ever receive):
+One new wallet, **receive-only** — generated offline, private key in
+KeePass only, **never loaded by the backend** (it only ever receives):
 
 | Wallet | Env var | Backend loads key? | Purpose |
 |---|---|---|---|
-| ARIA fee wallet | `ARIA_FEE_ADDRESS` | No — address only | Receives the 3% platform fee at each check-in release. |
-| Tax remittance wallet | `ARIA_TAX_REMITTANCE_ADDRESS` | No — address only | Accrues occupancy tax for later off-chain remittance. |
+| ARIA fee wallet | `ARIA_FEE_ADDRESS` | No — address only | Receives the 5% platform fee at each check-in release. |
 
-A backend compromise cannot move their balances. Add both to
-`ARIA_KEY_INVENTORY.md` under a new "Receive-only treasury addresses" section.
-No new **signing** key is introduced: `release_payment` uses the existing
+There is no separate tax-remittance wallet. The tax leg's destination
+(`tax_addr`) is set to the host's authoritative payout address — the same
+wallet that receives the rental subtotal — so the host receives rental + tax
+combined at check-in and self-remits to the tax authority off-chain (tracked
+via `tax_remittances` / `/tax/remit`). `ARIA_TAX_REMITTANCE_ADDRESS` is
+retired.
+
+A backend compromise cannot move the fee wallet's balance. No new
+**signing** key is introduced: `release_payment` uses the existing
 zero-privilege auto-release key (#2), `refund_payment` uses the existing
 operational arbitrator key (#4).
 
