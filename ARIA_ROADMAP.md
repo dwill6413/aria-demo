@@ -797,6 +797,7 @@ evaluated and acted on. Scorecard/rationale: see the evaluation response.
 | **R11** — integration tests + CI | booking→confirm, cancel→escrow, auth middleware; wire `escrow.test.mjs` + `sui move test` into CI. |
 | **R12 / R13** | Incremental TS on backend; frontend componentization — as features demand. |
 | **R1 (full split)** | Break `server.mjs` into `routes/*.mjs` plugins (middleware half already done). |
+| **USDC → SuiUSD in-app swap (mainnet launch blocker)** | Guests will arrive with USDC (available on CEXs) and need SuiUSD to pay for bookings. SuiUSD is not on CEXs so an in-app swap is the critical onramp. Plan: DeepBook USDC/SuiUSD pool swap via `@mysten/deepbook-v3`, same non-custodial zkLogin sign pattern as send/escrow. "Swap" modal in the wallet UI alongside the existing Send button. **Cannot be built or tested on testnet** (no real stable coins exist there). Pre-mainnet gate: (1) confirm a USDC/SuiUSD DeepBook pool exists with usable liquidity; (2) confirm `@mysten/deepbook-v3` is gRPC-compatible (JSON-RPC sunset July 31, 2026); (3) get real coin types for both assets on mainnet. Alternative: if Sui or the SuiUSD team ships a native swap UI before launch, link out to it instead of building in-house. |
 | **M7 — secrets passed as Docker build ARG/ENV** | Railway/nixpacks injects all secrets (`ARIA_*_KEY`, `GOOGLE_CLIENT_SECRET`, `STRIPE_SECRET_KEY`, `SESSION_SECRET`, `XAI_API_KEY`, `SHINAMI_API_KEY`, …) as Docker `ARG`/`ENV` — flagged by `SecretsUsedInArgOrEnv` warnings in the build log (June 18, 2026). Secrets in build args can persist in image layers/history. Fine for demo; before mainnet, move to Railway **runtime** secrets or build-secret mounts so they aren't baked into the image. |
 | **M8 — audit `SHINAMI_API_KEY`** | Appears as a Railway env var / build arg but isn't referenced in the docs or (apparent) code. Confirm whether it's actually used (gas station / sponsored tx?) — if not, remove it from Railway like the retired `ANTHROPIC_API_KEY`. Also: `npm install` reports 3 moderate-severity advisories — run `npm audit` and triage before mainnet. |
 
@@ -1112,6 +1113,12 @@ These are NOT committed work — they're the idea bank to pull from next.
   neutral one.
 
 ### Theme B — New money mechanics (reuse the 3-way payment escrow + DeepBook)
+- 🔴 **USDC → SuiUSD in-app swap (mainnet launch blocker)** — guests arrive with USDC
+  from CEXs and need SuiUSD to book. DeepBook USDC/SuiUSD pool swap via
+  `@mysten/deepbook-v3`, zkLogin-signed (same non-custodial pattern as send/escrow).
+  "Swap" modal in wallet UI alongside Send. Cannot test on testnet (no real stable coins).
+  Pre-mainnet gates: pool liquidity, gRPC compatibility, mainnet coin types confirmed.
+  Alternative: link out to a native Sui swap UI if one ships before launch.
 - ⭐ **N-way payout split** *(low — trivial extension of `BookingPaymentEscrow`)* —
   generalize rental→host / fee→ARIA / tax→remittance to also auto-pay cleaner,
   co-host, property manager at check-in. Cheapest big win for real hosts.
