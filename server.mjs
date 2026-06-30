@@ -1590,12 +1590,16 @@ fastify.put('/host/property/:propertyId/access-instructions', {
   }
 
   try {
-    // UPSERT — catalog properties may not have a DB row yet; INSERT one to persist settings.
-    await pool.query(
-      `INSERT INTO properties (id, host_address, check_in_type, access_instructions_encrypted, title, location, price_per_night, bedrooms, bathrooms, max_guests)
-       VALUES ($3, $4, $1, $2, '', '', 0, 0, 0, 0)
+    const catalogProp = await getProperty(propertyId, fastify.log);
+    const result = await pool.query(
+      `INSERT INTO properties (id, host_address, title, location, price, beds, baths, check_in_type, access_instructions_encrypted)
+       VALUES ($3, $4, $5, $6, $7, $8, $9, $1, $2)
        ON CONFLICT (id) DO UPDATE SET check_in_type=$1, access_instructions_encrypted=$2`,
-      [checkInType, encrypted, propertyId, session.suiAddress]
+      [
+        checkInType, encrypted, propertyId, session.suiAddress,
+        catalogProp?.title || '', catalogProp?.location || '',
+        catalogProp?.price || 0, catalogProp?.beds || 1, catalogProp?.baths || 1
+      ]
     );
   } catch (err) {
     fastify.log.error({ err, propertyId }, 'access-instructions: update failed');
