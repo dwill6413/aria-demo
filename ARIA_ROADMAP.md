@@ -634,10 +634,9 @@ original package ID (`0x538262...7fdbe`); no separate contract deployment.
 ✅ Phase 1f2: P0b — Guest wallet funds escrow (done June 16, 2026)
 ✅ Phase 1g2: P1b — Deployer/backend-signer separation (done June 17, 2026)
 ✅ Phase 1h: P2 — Auto-release cron job (done June 17, 2026)
-⬜ Phase 1h.5: Fee collection/routing mechanism — DESIGN COMPLETE June 22, 2026
-   (ARIA_FEE_DESIGN.md v2.1); build pending. Hold-and-release: BookingPaymentEscrow
-   holds rental+fee+tax, 3-way split released at check-in, full refund to guest
-   before check-in. SuiUSD-only; needs the v4 contract upgrade (bundled w/ 2a).
+✅ Phase 1h.5: Fee collection/routing mechanism — built and live; see the
+   fuller entry below (this line previously duplicated it as still-pending —
+   stale, corrected June 30, 2026).
 ✅ Phase 1i: P2 — Production host address lookup (done June 17, 2026)
 ✅ Phase 1j: P2 — Claim/dispute backend routes (done June 17, 2026)
 ✅ Phase 1k: P3 — STATUS_RESOLVED removed + 30-day expiry bound added, upgrade
@@ -663,8 +662,12 @@ original package ID (`0x538262...7fdbe`); no separate contract deployment.
    Tax-routing corrected June 30, 2026: tax leg now routes to the host (rides
    with the rental subtotal) instead of a separate ARIA-controlled
    ARIA_TAX_REMITTANCE_ADDRESS wallet (retired) — ARIA only ever receives its
-   5% fee. LIVE since June 23 (ARIA_FEE_ADDRESS set, both suites passing,
-   v4 published) — re-run `node escrow.test.mjs` after the June 30 fix.
+   5% fee. **Two destination wallets, not three:** the contract still tracks
+   host_amount/aria_amount/tax_amount as three separate line items for
+   auditability, but tax_addr == hostAddr now, so funds actually land in only
+   two wallets at release — host (subtotal + tax) and ARIA (fee). LIVE since
+   June 23 (ARIA_FEE_ADDRESS set, both suites passing, v4 published) — re-run
+   `node escrow.test.mjs` after the June 30 fix.
 🟨 Phase 2a: seal_approve() added to escrow.move (June 23, 2026) — CODE DONE,
    +3 Move tests. `public entry fun seal_approve<T>(id, escrow, ctx)` asserts
    id == address::to_bytes(escrow.guest) AND sender == escrow.host. Still needs
