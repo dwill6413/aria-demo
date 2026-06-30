@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import { authFetch } from '../lib/authFetch';
+import { useWalletBalance } from '../lib/useWalletBalance';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -79,6 +80,7 @@ export default function Host() {
   // listing (handlePublish branches PATCH vs POST off this).
   const [editingId, setEditingId] = useState(null);
   const [deactivatingId, setDeactivatingId] = useState(null);
+  const wallet = useWalletBalance(user?.address);
 
   const copyAddr = () => {
     navigator.clipboard.writeText(user?.address);
@@ -587,6 +589,15 @@ export default function Host() {
                 {addrCopied ? '✓' : '⧉'}
               </button>
             </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'flex-end', marginTop: '2px' }}>
+              <span style={{ fontSize: '11px', color: wallet.lowBalance ? '#d23f3f' : '#717171', fontWeight: '600' }}>
+                {wallet.display ?? (wallet.loading ? '···' : '0 SUI')}
+              </span>
+              <button onClick={wallet.refresh} title="Refresh balance" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#999', fontSize: '11px', padding: 0 }}>↻</button>
+              {wallet.lowBalance && (
+                <a href="https://faucet.sui.io/" target="_blank" rel="noreferrer" style={{ color: '#1f6fd6', fontSize: '11px', textDecoration: 'underline' }}>Get testnet SUI</a>
+              )}
+            </div>
           </div>
           <button onClick={() => router.push('/bookings')} style={{ background: 'transparent', border: '1px solid #ddd', color: '#717171', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>Guest View</button>
           <button onClick={() => router.push('/')} style={{ background: 'transparent', border: '1px solid #ddd', color: '#717171', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>Back to Search</button>
@@ -608,6 +619,15 @@ export default function Host() {
           <div style={{ paddingBottom: '8px', borderBottom: '1px solid #ebebeb' }}>
             <div style={{ fontSize: '13px', fontWeight: '600', color: '#222' }}>{user?.name}</div>
             <div style={{ fontSize: '11px', color: '#1f6fd6', marginTop: '2px', fontWeight: '700' }}>Host Dashboard</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px' }}>
+              <span style={{ fontSize: '12px', color: wallet.lowBalance ? '#d23f3f' : '#717171', fontWeight: '600' }}>
+                💰 {wallet.display ?? (wallet.loading ? '···' : '0 SUI')}
+              </span>
+              <button onClick={wallet.refresh} title="Refresh balance" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#999', fontSize: '12px', padding: 0 }}>↻</button>
+              {wallet.lowBalance && (
+                <a href="https://faucet.sui.io/" target="_blank" rel="noreferrer" style={{ color: '#1f6fd6', fontSize: '12px', textDecoration: 'underline' }}>Get testnet SUI</a>
+              )}
+            </div>
           </div>
           {[
             { label: '👤 Guest View', path: '/bookings' },

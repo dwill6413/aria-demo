@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import { authFetch } from '../lib/authFetch';
 import { signTransactionWithZkLogin, submitSignedTransaction, signPersonalMessageWithZkLogin } from '../lib/zklogin';
+import { useWalletBalance } from '../lib/useWalletBalance';
 import { fromBase64 } from '@mysten/sui/utils';
 import { QRCodeSVG } from 'qrcode.react';
 
@@ -46,6 +47,7 @@ export default function Bookings() {
   const [marketOpen, setMarketOpen] = useState(false);
   const [market, setMarket] = useState([]);
   const [marketLoading, setMarketLoading] = useState(false);
+  const wallet = useWalletBalance(user?.address);
 
   const copyAddr = () => {
     navigator.clipboard.writeText(user?.address);
@@ -366,6 +368,15 @@ export default function Bookings() {
                 {addrCopied ? '✓' : '⧉'}
               </button>
             </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'flex-end', marginTop: '2px' }}>
+              <span style={{ fontSize: '11px', color: wallet.lowBalance ? '#d23f3f' : '#717171', fontWeight: '600' }}>
+                {wallet.display ?? (wallet.loading ? '···' : '0 SUI')}
+              </span>
+              <button onClick={wallet.refresh} title="Refresh balance" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#999', fontSize: '11px', padding: 0 }}>↻</button>
+              {wallet.lowBalance && (
+                <a href="https://faucet.sui.io/" target="_blank" rel="noreferrer" style={{ color: '#1f6fd6', fontSize: '11px', textDecoration: 'underline' }}>Get testnet SUI</a>
+              )}
+            </div>
           </div>
           <button onClick={() => router.push('/profile')}
             style={{ background: 'transparent', border: `1px solid ${user?.hasGuestProfile === false ? '#ffe7a0' : '#ddd'}`, color: user?.hasGuestProfile === false ? '#a66a00' : '#717171', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', fontWeight: user?.hasGuestProfile === false ? '600' : '400' }}>
@@ -396,6 +407,15 @@ export default function Bookings() {
               <button onClick={copyAddr} title="Copy address" style={{ background: 'none', border: 'none', cursor: 'pointer', color: addrCopied ? '#00913f' : '#999', fontSize: '13px', padding: '0 2px', flexShrink: 0 }}>
                 {addrCopied ? '✓' : '⧉'}
               </button>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px' }}>
+              <span style={{ fontSize: '12px', color: wallet.lowBalance ? '#d23f3f' : '#717171', fontWeight: '600' }}>
+                💰 {wallet.display ?? (wallet.loading ? '···' : '0 SUI')}
+              </span>
+              <button onClick={wallet.refresh} title="Refresh balance" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#999', fontSize: '12px', padding: 0 }}>↻</button>
+              {wallet.lowBalance && (
+                <a href="https://faucet.sui.io/" target="_blank" rel="noreferrer" style={{ color: '#1f6fd6', fontSize: '12px', textDecoration: 'underline' }}>Get testnet SUI</a>
+              )}
             </div>
           </div>
           <button onClick={() => { router.push('/profile'); setMenuOpen(false); }} style={{ background: '#f7f7f7', border: '1px solid #ebebeb', color: '#222', borderRadius: '8px', padding: '12px 16px', fontSize: '14px', textAlign: 'left', cursor: 'pointer' }}>

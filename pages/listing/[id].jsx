@@ -3,6 +3,7 @@ import { useRouter } from 'next/router';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 import { beginZkLogin, signTransactionWithZkLogin, submitSignedTransaction } from '../../lib/zklogin';
+import { useWalletBalance } from '../../lib/useWalletBalance';
 import { fromBase64 } from '@mysten/sui/utils';
 import { authFetch } from '../../lib/authFetch';
 import { PROPERTY_DISPLAY, PLACEHOLDER_IMAGE, mergeProperty } from '../../lib/propertyDisplay';
@@ -41,6 +42,7 @@ export default function Listing() {
   const [escrowError, setEscrowError] = useState('');
   const [addrCopied, setAddrCopied] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
+  const wallet = useWalletBalance(user?.address);
 
   const nights = checkIn && checkOut ? Math.round((checkOut - checkIn) / (1000 * 60 * 60 * 24)) : 0;
 
@@ -243,6 +245,13 @@ export default function Listing() {
         {user ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <span style={{ fontSize: '12px', color: '#717171' }}>{user.name}</span>
+            <span style={{ fontSize: '12px', color: wallet.lowBalance ? '#d23f3f' : '#717171', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '4px' }}>
+              {wallet.display ?? (wallet.loading ? '···' : '0 SUI')}
+              <button onClick={wallet.refresh} title="Refresh balance" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#999', fontSize: '12px', padding: 0 }}>↻</button>
+            </span>
+            {wallet.lowBalance && (
+              <a href="https://faucet.sui.io/" target="_blank" rel="noreferrer" style={{ color: '#1f6fd6', fontSize: '12px', textDecoration: 'underline' }}>Get testnet SUI</a>
+            )}
             <button onClick={() => router.push('/bookings')} style={{ background: 'transparent', border: '1px solid #ddd', color: '#444', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>My Bookings</button>
           </div>
         ) : (
@@ -474,6 +483,12 @@ export default function Listing() {
                       {booking.depositAmount && !booking.escrowTxBytes && (
                         <div style={{ marginTop: '8px', color: '#d23f3f', fontSize: '11px', textAlign: 'left' }}>
                           ⚠️ {booking.escrowBuildErrorMessage || 'We couldn’t prepare your escrow transaction, so nothing is funded yet.'} Your dates are held, but no money has moved.
+                          {booking.escrowBuildErrorCode === 'insufficient_balance' && (
+                            <a href="https://faucet.sui.io/" target="_blank" rel="noreferrer"
+                              style={{ display: 'block', marginTop: '6px', color: '#1f6fd6', fontSize: '11px', textDecoration: 'underline' }}>
+                              Get testnet SUI from the faucet →
+                            </a>
+                          )}
                           <button onClick={() => router.push('/bookings')}
                             style={{ display: 'block', marginTop: '6px', background: 'transparent', color: '#1f6fd6', border: '1px solid #1f6fd6', borderRadius: '6px', padding: '6px 10px', fontSize: '11px', cursor: 'pointer' }}>
                             Go to My Bookings to finish

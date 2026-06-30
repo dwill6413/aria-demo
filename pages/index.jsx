@@ -5,6 +5,7 @@ import 'react-datepicker/dist/react-datepicker.css';
 import { beginZkLogin } from '../lib/zklogin';
 import { authFetch } from '../lib/authFetch';
 import { PROPERTY_DISPLAY, mergeProperty } from '../lib/propertyDisplay';
+import { useWalletBalance } from '../lib/useWalletBalance';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
@@ -33,6 +34,7 @@ export default function Home() {
   const [liveRatings, setLiveRatings] = useState({});
   const [menuOpen, setMenuOpen] = useState(false);
   const [addrCopied, setAddrCopied] = useState(false);
+  const wallet = useWalletBalance(user?.address);
   // Horizontal scroll row (Airbnb-style "Popular homes" carousel) — ref lets
   // the arrow buttons scroll the row without re-rendering on every scroll event.
   const scrollRowRef = useRef(null);
@@ -240,6 +242,15 @@ export default function Home() {
                 {addrCopied ? '✓' : '⧉'}
               </button>
             </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'flex-end', marginTop: '2px' }}>
+              <span style={{ fontSize: '11px', color: wallet.lowBalance ? '#d23f3f' : '#717171', fontWeight: '600' }}>
+                {wallet.display ?? (wallet.loading ? '···' : '0 SUI')}
+              </span>
+              <button onClick={wallet.refresh} title="Refresh balance" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#999', fontSize: '11px', padding: 0 }}>↻</button>
+              {wallet.lowBalance && (
+                <a href="https://faucet.sui.io/" target="_blank" rel="noreferrer" style={{ color: '#1f6fd6', fontSize: '11px', textDecoration: 'underline' }}>Get testnet SUI</a>
+              )}
+            </div>
           </div>
           <button onClick={() => router.push('/bookings')} style={{ background: 'transparent', border: '1px solid #ddd', color: '#444', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>My Bookings</button>
           <button onClick={() => router.push('/profile')}
@@ -274,6 +285,15 @@ export default function Home() {
               <button onClick={copyAddr} title="Copy address" style={{ background: 'none', border: 'none', cursor: 'pointer', color: addrCopied ? '#00913f' : '#999', fontSize: '13px', padding: '0 2px', flexShrink: 0 }}>
                 {addrCopied ? '✓' : '⧉'}
               </button>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px' }}>
+              <span style={{ fontSize: '12px', color: wallet.lowBalance ? '#d23f3f' : '#717171', fontWeight: '600' }}>
+                💰 {wallet.display ?? (wallet.loading ? '···' : '0 SUI')}
+              </span>
+              <button onClick={wallet.refresh} title="Refresh balance" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#999', fontSize: '12px', padding: 0 }}>↻</button>
+              {wallet.lowBalance && (
+                <a href="https://faucet.sui.io/" target="_blank" rel="noreferrer" style={{ color: '#1f6fd6', fontSize: '12px', textDecoration: 'underline' }}>Get testnet SUI</a>
+              )}
             </div>
           </div>
           {[
