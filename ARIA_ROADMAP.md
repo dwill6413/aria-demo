@@ -750,7 +750,7 @@ evaluated and acted on. Scorecard/rationale: see the evaluation response.
 
 | Rec | Why deferred / what's needed |
 |---|---|
-| **`cancel_escrow` / `refund_deposit` contract fn (v4)** | Proper instant pre-expiry refund on cancel. **Now promoted to a v1 requirement of Phase 1h.5** (`ARIA_FEE_DESIGN.md` v2.1 §7/§11): `refund_deposit` (arbitrator-signed, pre-check-in) ships in the same v4 upgrade so `/booking/cancel` returns deposit + payment together instead of making a cancelling guest wait for `auto_release` at expiry. No longer a deferred fast-follow. |
+| **`refund_deposit` contract fn (v4)** | **✅ Done, live** — shipped in `7b09e73` alongside the Phase 1h.5 payment escrow, confirmed on `origin/main`. Arbitrator-signed, pre-check-in instant refund; `bookings.mjs` calls `refundDepositEscrow()` from `/booking/cancel` so a cancelling guest gets deposit + payment back together instead of waiting for `auto_release` at expiry. Move-tested (`test_refund_deposit_to_guest`, `test_refund_deposit_non_arbitrator_fails`); no dedicated JS unit test found by name in `escrow.test.mjs` — worth confirming coverage there. |
 | **R6** — scope `/bookings/all` to host's properties | Multi-tenant isolation; only matters once host-owned listings ship. |
 | **M3** — per-user zkLogin salt (+ migration) | salt `'0'` lets anyone derive a user's Sui address from their Google `sub`. Re-derives addresses → migration required. |
 | **M4** — DB TLS CA cert | `rejectUnauthorized:false` is a MITM risk; supply the Railway CA cert. |
