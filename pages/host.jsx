@@ -926,8 +926,8 @@ export default function Host() {
                         </div>
                       );
                     })()}
-                    {/* P4: self check-in settings — DB-sourced properties only */}
-                    {p.source === 'db' && (() => {
+                    {/* P4: self check-in settings — all listed properties */}
+                    {(() => {
                       const ci = checkInSettings[p.id];
                       // Lazy-load on first render of this card
                       if (!ci) { loadCheckInSettings(p.id); return null; }
