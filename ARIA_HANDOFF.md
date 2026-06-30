@@ -871,11 +871,16 @@ Railway runs **Node 22** (`nixpacks.toml`: `nodejs_22`). Required by
 
 ## Current Technical Debt
 
-1. Properties frontend-hardcoded; `properties` table empty. `catalog.mjs`
-   `hostAddress` is `null` for all 6 demo properties — escrow `host` falls back
-   to `DEMO_HOST_ADDRESS` (if set) else the auto-release key. Until a real host
-   address is wired, the claim/dispute flow can't be exercised end-to-end
-   (on-chain `claim_damage` asserts `sender == host`).
+1. **Host onboarding is built and live** (`83bd6fe`, confirmed pushed) — 4-step
+   apply/approve flow, `host_profiles` table, `POST`/`PATCH /host/properties`.
+   `properties` table is **not** empty (real host-created listings exist).
+   Stale note corrected June 30, 2026: only the 6 *original* hardcoded
+   `catalog.mjs` demo properties still have `hostAddress: null` — escrow `host`
+   for those specifically falls back to `DEMO_HOST_ADDRESS` (if set) else the
+   auto-release key. Until that var is set in Railway, claim/dispute can't be
+   exercised end-to-end on the 6 demo properties specifically (on-chain
+   `claim_damage` asserts `sender == host`) — host-created listings are
+   unaffected, they already carry a real `payout_sui_address`.
 2. Frontend tax/price duplication — `catalog.mjs` centralizes backend; frontend copy remains.
 3. Stripe: create-intent only; webhooks missing.
 4. Error handling inconsistent in some routes.
