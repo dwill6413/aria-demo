@@ -91,6 +91,22 @@ load) in Railway environment variables.
 
 ---
 
+## 8. zkLogin salt (`ZKLOGIN_SALT` / `NEXT_PUBLIC_ZKLOGIN_SALT`)
+
+| | |
+|---|---|
+| Type | **Numeric string** — 16-byte random value expressed as a decimal integer. NOT a Sui keypair. |
+| Value | `59495786400363606476793255475060161673` |
+| Status | **Active — set in Railway + Vercel (June 30, 2026).** |
+| Purpose | Deriving each user's Sui address from their Google `sub` via `jwtToAddress(id_token, salt)`. Both frontend and backend must use the same value or login breaks. |
+| Why numeric | The zkLogin prover requires exactly 16 bytes. `crypto.randomBytes(16).toString('hex')` produces 32 hex chars which the prover rejects as "must be 16 bytes." Use BigInt conversion: `node -e "const b = require('crypto').randomBytes(16); console.log(BigInt('0x' + b.toString('hex')).toString())"` |
+| Railway var | `ZKLOGIN_SALT` (backend — `auth.mjs`) |
+| Vercel var | `NEXT_PUBLIC_ZKLOGIN_SALT` (frontend — `lib/zklogin.js`) |
+| Risk if changed | All existing user addresses are re-derived — every user gets a new Sui address and loses access to any funds in their old address. Rotate only with a migration plan. |
+| Risk if leaked | Anyone with the salt + a user's Google `sub` can derive that user's Sui address (public info anyway). Salt is not a secret in the cryptographic sense — it just must be consistent. |
+
+---
+
 ## Not ARIA-controlled keys (for context, not in your vault)
 
 - **Guest wallets** — each guest signs `create_escrow` with their own zkLogin-derived wallet. ARIA never holds or sees their private key.
@@ -109,7 +125,7 @@ load) in Railway environment variables.
 
 ---
 
-*Created June 17, 2026 (P2). Last updated June 30, 2026: added §7 `CHECKIN_KEY` — AES-256-GCM symmetric key for self check-in access instruction encryption (P4). Prior June 25, 2026: deployer key #1 signed the
+*Created June 17, 2026 (P2). Last updated June 30, 2026: added §8 `ZKLOGIN_SALT` (numeric 16-byte value, set in Railway + Vercel; closes M3); added §7 `CHECKIN_KEY` — AES-256-GCM symmetric key for self check-in access instruction encryption (P4). Prior June 25, 2026: deployer key #1 signed the
 **v5** (Phase 2a BookingPass), **v6** (Phase 2c resale market), and **v7** (pre-mainnet
 u128 hardening) upgrades; UpgradeCap now at version 7. No keys rotated or generated for
 v5/v6/v7 — same deployer, auto-release, arbitrator, and treasury addresses as before. (Prior June 23, 2026: arbitrator key #4
