@@ -209,6 +209,8 @@ export default function Host() {
   // P4: load + save check-in settings per property (DB-source only).
   const loadCheckInSettings = async (propertyId) => {
     if (checkInSettings[propertyId]) return; // already loaded
+    // Seed defaults immediately so the block renders while fetching
+    setCheckInSettings(prev => ({ ...prev, [propertyId]: { checkInType: 'front_desk', instructions: '', saving: false, saved: false } }));
     try {
       const res = await authFetch(`${API}/host/property/${propertyId}/access-instructions`);
       if (!res.ok) return;
