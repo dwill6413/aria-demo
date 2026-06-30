@@ -2201,7 +2201,10 @@ fastify.post('/host/apply', {
   if (validateBody(hostApplySchema, request, reply)) return;
 
   const { name, email, phone, propertyAddress, city, state, zip, country,
-          jurisdiction, strPermit, payoutSuiAddress, payoutNotes, termsAgreed, complianceConfirmed } = request.body;
+          jurisdiction, strPermit, payoutNotes, termsAgreed, complianceConfirmed } = request.body;
+  // payout_sui_address is always session.suiAddress — never accepted from the
+  // client — so a host can never end up with a payout destination that isn't
+  // their own signing wallet (see validation.mjs comment for why).
 
   if (!termsAgreed || !complianceConfirmed)
     return reply.code(400).send({ error: 'Terms agreement and compliance confirmation are required' });
@@ -2228,7 +2231,7 @@ fastify.post('/host/apply', {
       [session.suiAddress, email.toLowerCase(), name, phone || null,
        propertyAddress || null, city || null, state || null, zip || null, country || 'US',
        jurisdiction || null, strPermit || null,
-       payoutSuiAddress || session.suiAddress, payoutNotes || null]
+       session.suiAddress, payoutNotes || null]
     );
 
     try {

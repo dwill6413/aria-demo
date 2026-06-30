@@ -14,11 +14,6 @@ const inputStyle = {
 
 const labelStyle = { fontSize: '12px', color: '#717171', marginBottom: '6px', fontWeight: '600', display: 'block' };
 
-// Basic client-side sanity check only — the server is the real authority on
-// whether this is a valid, usable Sui address. This just catches obvious
-// typos (wrong prefix/length) before they're submitted.
-const isValidSuiAddress = (addr) => /^0x[a-fA-F0-9]{64}$/.test((addr || '').trim());
-
 export default function BecomeHost() {
   const router = useRouter();
   const [user, setUser] = useState(null);
@@ -80,7 +75,9 @@ export default function BecomeHost() {
   const canProceed = () => {
     if (step === 0) return form.name.trim() && form.email.trim();
     if (step === 1) return true; // All optional
-    if (step === 2) return isValidSuiAddress(form.payoutSuiAddress);
+    // payoutSuiAddress is always the user's own connected wallet (read-only,
+    // pre-filled from session — see Step 3 JSX), so this step never blocks.
+    if (step === 2) return true;
     if (step === 3) return form.termsAgreed && form.complianceConfirmed;
     return true;
   };
@@ -268,13 +265,15 @@ export default function BecomeHost() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                 <div>
                   <label style={labelStyle}>SUI WALLET ADDRESS</label>
-                  <input value={form.payoutSuiAddress} onChange={set('payoutSuiAddress')} placeholder="0x..."
-                    style={{ ...inputStyle, fontFamily: 'monospace', fontSize: '12px', border: form.payoutSuiAddress && !isValidSuiAddress(form.payoutSuiAddress) ? '1px solid #d23f3f' : inputStyle.border }} />
-                  {form.payoutSuiAddress && !isValidSuiAddress(form.payoutSuiAddress) ? (
-                    <div style={{ fontSize: '11px', color: '#d23f3f', marginTop: '4px' }}>Doesn't look like a valid Sui address (expected 0x followed by 64 hex characters).</div>
-                  ) : (
-                    <div style={{ fontSize: '11px', color: '#999', marginTop: '4px' }}>Pre-filled with your connected wallet. Change if you prefer a different payout address.</div>
-                  )}
+                  <input value={form.payoutSuiAddress} readOnly disabled
+                    style={{ ...inputStyle, fontFamily: 'monospace', fontSize: '12px', background: '#f0f0f0', color: '#555', cursor: 'not-allowed' }} />
+                  <div style={{ fontSize: '11px', color: '#999', marginTop: '4px' }}>
+                    This is your connected ARIA wallet and can't be changed. ARIA always pays
+                    out to the same address you sign in with, because it's also the address
+                    that signs damage claims and decrypts guest verification on your
+                    properties — keeping these in sync prevents you from ever locking
+                    yourself out of either one.
+                  </div>
                 </div>
                 <div>
                   <label style={labelStyle}>PAYOUT NOTES (optional)</label>

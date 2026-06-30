@@ -41,10 +41,13 @@ export const hostApplySchema = z.object({
   country: z.string().optional().nullable(),
   jurisdiction: z.string().optional().nullable(),
   strPermit: z.string().optional().nullable(),
-  // Enforce the Sui address format server-side (0x + 64 hex) when provided —
-  // previously accepted any string. Still optional/nullable so applicants who
-  // haven't set a payout wallet yet aren't blocked.
-  payoutSuiAddress: z.string().regex(/^0x[0-9a-fA-F]{64}$/, 'payoutSuiAddress must be a 0x-prefixed 64-character hex Sui address').optional().nullable(),
+  // payoutSuiAddress is intentionally NOT accepted here (removed June 30, 2026).
+  // ARIA always pays a host into their own zkLogin signing wallet
+  // (session.suiAddress) — never a client-supplied address — because
+  // claim_damage/seal_approve both assert sender == escrow.host on-chain, and
+  // escrow.host is derived from this same value. Letting a host point payouts
+  // at a different (e.g. receive-only) address would silently lock them out of
+  // filing damage claims or decrypting guest PII. One address, no exceptions.
   payoutNotes: z.string().optional().nullable(),
   termsAgreed: z.boolean(),
   complianceConfirmed: z.boolean()
