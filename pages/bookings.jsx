@@ -707,9 +707,12 @@ export default function Bookings() {
                       if (!canCheckIn) return null;
                       if (b.checkedIn) {
                         return (
-                          <span style={{ background: '#eafaf0', border: '1px solid #c8ebd9', color: '#00913f', fontSize: '11px', padding: '6px 12px', borderRadius: '6px', fontWeight: '600' }}>
-                            ✅ Checked In
-                          </span>
+                          <button
+                            onClick={() => submitCheckIn(b)}
+                            disabled={checkInBooking?.bookingRef === b.bookingRef && checkInStatus === 'loading'}
+                            style={{ background: '#eafaf0', border: '1px solid #c8ebd9', color: '#00913f', fontSize: '11px', padding: '6px 12px', borderRadius: '6px', fontWeight: '600', cursor: 'pointer' }}>
+                            {checkInBooking?.bookingRef === b.bookingRef && checkInStatus === 'loading' ? 'Loading…' : '✅ Checked In — View Instructions'}
+                          </button>
                         );
                       }
                       return (
