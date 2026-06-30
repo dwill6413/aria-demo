@@ -680,7 +680,8 @@ but worth a check before the deadline.
 
 ### Testnet → mainnet changes (one line each)
 
-- **Coin type**: `'0x2::sui::SUI'` → actual SuiUSD coin type address
+- **Coin type**: `'0x2::sui::SUI'` → native USDC on Sui mainnet: `0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC` (Circle-issued, available on Coinbase/Kraken — no in-app swap needed if this is the payment coin). Set `PAYMENT_COIN_TYPE` in Railway and `NEXT_PUBLIC_PAYMENT_COIN_TYPE` in Vercel.
+- **SuiUSD label rename**: Changing the payment coin also means renaming all "SuiUSD" display strings to "USDC" — 35 occurrences across 12 files confirmed June 30, 2026. Bulk rename: `grep -rl "SuiUSD" --include="*.{jsx,mjs,js}" . | xargs sed -i 's/SuiUSD/USDC/g'`, then manually check `db.mjs` column default, `become-host.jsx` Transak sentence, and `ai_route.mjs` system prompt. See `ARIA_ROADMAP.md` tech debt for the full file list.
 - **Expiry**: `Date.now() + 300_000n` (5 min testnet) → `checkoutMs + 432_000_000n` (5 days)
 - **Move.toml**: `rev = "framework/testnet"` → `rev = "framework/mainnet"`
 - **UpgradeCap**: keep for testnet → burn after independent audit for mainnet
