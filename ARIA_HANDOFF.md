@@ -48,11 +48,11 @@
 > migrated DB can optionally `DROP COLUMN` the orphaned columns manually (not
 > done automatically — didn't want a destructive schema change unsupervised).
 >
-> **Files touched:** `server.mjs`, `ai_route.mjs`, `db.mjs`. **Not yet
-> pushed/deployed as of this entry** — see the recurring sandbox-reliability
-> note added to `ARIA_ROADMAP.md` Tech Debt below; user runs `git add
-> server.mjs ai_route.mjs db.mjs && git commit && git push` themselves once
-> ready.
+> **Files touched:** `server.mjs`, `ai_route.mjs`, `db.mjs`. **Committed and
+> pushed to `origin/main`** (commit `264b4b6`, "Catalog/DB parity fixes:
+> tax jurisdiction, canManageProperty, iCal title, dead columns; update
+> docs" — confirmed via `git log origin/main`, June 30 2026). Railway/Vercel
+> auto-deploy from `main`; not independently re-verified live in this pass.
 >
 > **⚠️ Operational note — recurring local file truncation during this
 > session.** Five separate times across this session (3 files the first time:
@@ -131,13 +131,12 @@
 > discussed mid-session (`UPDATE properties SET id = 1000 WHERE id = 1`) — either
 > works, Remove is cleaner.
 >
-> **Deploy status: code written + verified via Read, NOT YET pushed/deployed as of
-> this entry** (sandbox can't reliably run git — see recurring note in
-> ARIA_ROADMAP.md tech debt). Files touched: `escrow.mjs`, `server.mjs`,
-> `pages/bookings.jsx`, `pages/host.jsx`, `pages/index.jsx`, `db.mjs`. User needs
-> to `git add escrow.mjs server.mjs pages/bookings.jsx pages/host.jsx
-> pages/index.jsx db.mjs && git commit && git push` themselves, then confirm in
-> Railway/Vercel.
+> **Deploy status: committed and pushed to `origin/main`** (commits `f352bea`,
+> `81c3aef`, `8cb6d31` — property-id collision fix in three passes — confirmed
+> via `git log origin/main`, June 30 2026). Files touched: `escrow.mjs`,
+> `server.mjs`, `pages/bookings.jsx`, `pages/host.jsx`, `pages/index.jsx`,
+> `db.mjs`. Railway/Vercel auto-deploy from `main`; not independently
+> re-verified live in this pass.
 >
 > **Still pending, explicitly parked by user:** Task #4 — reconcile the booking
 > wallet-funding root-cause hypothesis for `ARIA-2-1782401744020-a944c8` (a
