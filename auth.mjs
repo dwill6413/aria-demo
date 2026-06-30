@@ -128,10 +128,9 @@ export async function handleZkLoginCallback(request, reply) {
       throw new Error('Nonce mismatch');
     }
 
-    // NOTE: salt is kept at '0' to preserve existing derived addresses.
-    // Rotating to a per-user secret salt is a separate, data-migrating change.
-    // Must match the SALT constant in lib/zklogin.js.
-    const salt = '0';
+    // Must match NEXT_PUBLIC_ZKLOGIN_SALT in lib/zklogin.js (Vercel).
+    // Set ZKLOGIN_SALT in Railway env vars. Defaults to '0' for local dev only.
+    const salt = process.env.ZKLOGIN_SALT || '0';
     const suiAddress = jwtToAddress(id_token, salt, true);
 
     // Cryptographically strong, opaque session id (was Math.random()).
