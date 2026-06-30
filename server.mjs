@@ -2425,6 +2425,69 @@ async function runCheckInReleaseSweep() {
   }
 }
 
+// Abandoned-booking sweep (Tech Debt Backlog item "Unsigned-booking trap"):
+// createBooking() inserts the row and reserves the dates (the conflict check
+// in createBooking only excludes payment_status='cancelled') the instant a
+// guest starts checkout — but nothing on-chain happens until that guest signs
+// and submits the escrow PTB from their own wallet. If they close the tab,
+// lose connectivity, or just change their mind, the booking sits forever at
+// deposit_status='pending' with escrow_object_id/payment_escrow_object_id
+// both still null, blocking those dates for every other guest with no
+// recourse short of a human finding and cancelling it manually.
+// No funds are ever at risk here — by definition nothing was signed, so
+// there's nothing to refund/release on-chain (same as the "nothing was ever
+// locked on-chain" branch in cancelBooking) — this is purely a calendar
+// hygiene sweep. The WHERE clause on the UPDATE re-checks the same
+// disqualifying conditions as the SELECT so a guest who signs in the gap
+// between the two queries simply doesn't match and is left alone (no row
+// locking needed — createBooking's advisory lock only ever inserts new rows,
+// it doesn't race against this UPDATE on an existing one).
+async function runAbandonedBookingSweep() {
+  const cutoff = new Date(Date.now() - ABANDONED_BOOKING_TTL_MS).toISOString();
+  let stale;
+  try {
+    const result = await pool.query(
+      `SELECT booking_ref, guest_email, guest_name, property_title, check_in, check_out FROM bookings
+       WHERE payment_status = 'confirmed' AND deposit_status = 'pending'
+       AND escrow_object_id IS NULL AND payment_escrow_object_id IS NULL
+       AND created_at < $1`,
+      [cutoff]
+    );
+    stale = result.rows;
+  } catch (err) {
+    fastify.log.error({ err }, 'Abandoned-booking sweep query failed');
+    return;
+  }
+
+  for (const booking of stale) {
+    let updated;
+    try {
+      const result = await pool.query(
+        `UPDATE bookings SET payment_status='cancelled', cancelled_at=NOW(), deposit_status='released'
+         WHERE booking_ref=$1 AND payment_status='confirmed' AND deposit_status='pending'
+         AND escrow_object_id IS NULL AND payment_escrow_object_id IS NULL`,
+        [booking.booking_ref]
+      );
+      updated = result.rowCount > 0;
+    } catch (err) {
+      fastify.log.error({ err, bookingRef: booking.booking_ref }, 'Abandoned-booking sweep: DB update failed');
+      continue;
+    }
+    if (!updated) continue; // guest signed in the gap between SELECT and UPDATE — leave it alone
+    fastify.log.info({ bookingRef: booking.booking_ref }, 'Abandoned-booking sweep: unsigned booking auto-cancelled, dates freed');
+
+    if (booking.guest_email) {
+      try {
+        await resend.emails.send({
+          from: 'ARIA <onboarding@resend.dev>', to: booking.guest_email,
+          subject: `Booking Hold Expired — ${booking.property_title} | Ref: ${booking.booking_ref}`,
+          html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px"><h1 style="color:#ffaa00;font-size:24px;margin:0 0 8px">⏳ Booking Hold Expired</h1><p style="color:#888;margin:0 0 24px">${escapeHtml(booking.guest_name || '')}</p><div style="background:#111;border:1px solid #222;border-radius:8px;padding:20px;margin-bottom:20px"><h2 style="margin:0 0 16px;font-size:18px">${escapeHtml(booking.property_title)}</h2><table style="width:100%;border-collapse:collapse"><tr><td style="color:#888;padding:6px 0">Booking Ref</td><td style="text-align:right">${escapeHtml(booking.booking_ref)}</td></tr><tr><td style="color:#888;padding:6px 0">Check-in</td><td style="text-align:right">${booking.check_in}</td></tr><tr><td style="color:#888;padding:6px 0">Check-out</td><td style="text-align:right">${booking.check_out}</td></tr></table><p style="color:#888;font-size:12px;margin:16px 0 0;line-height:1.6">We held these dates while you completed checkout, but didn't see a signed payment within the hold window — no charge was ever made. The dates are now released back to the calendar. Feel free to book again whenever you're ready.</p></div><p style="color:#555;font-size:12px;text-align:center;margin:0">Powered by ARIA — Built on Sui</p></div>`
+        });
+      } catch (err) { fastify.log.warn({ err, bookingRef: booking.booking_ref }, 'Abandoned-booking sweep: notification email failed'); }
+    }
+  }
+}
+
 // Re-entrancy guards (Codex review, June 24 2026): the sweeps `await` each
 // on-chain release serially, so a run can outlast its interval as volume grows;
 // without a guard the next tick (or the startup timeout) would start a second
@@ -2433,6 +2496,7 @@ async function runCheckInReleaseSweep() {
 // scale follow-ups — see roadmap tech debt.)
 let _autoSweepRunning = false;
 let _checkInSweepRunning = false;
+let _abandonedSweepRunning = false;
 async function guardedAutoReleaseSweep() {
   if (_autoSweepRunning) { fastify.log.warn('Auto-release sweep already running — skipping this tick'); return; }
   _autoSweepRunning = true;
@@ -2447,6 +2511,13 @@ async function guardedCheckInReleaseSweep() {
   catch (err) { fastify.log.error({ err }, 'Check-in release sweep crashed'); }
   finally { _checkInSweepRunning = false; }
 }
+async function guardedAbandonedBookingSweep() {
+  if (_abandonedSweepRunning) { fastify.log.warn('Abandoned-booking sweep already running — skipping this tick'); return; }
+  _abandonedSweepRunning = true;
+  try { await runAbandonedBookingSweep(); }
+  catch (err) { fastify.log.error({ err }, 'Abandoned-booking sweep crashed'); }
+  finally { _abandonedSweepRunning = false; }
+}
 
 const AUTO_RELEASE_SWEEP_INTERVAL_MS = Number(process.env.AUTO_RELEASE_SWEEP_INTERVAL_MS || 60 * 60 * 1000); // hourly by default
 setInterval(guardedAutoReleaseSweep, AUTO_RELEASE_SWEEP_INTERVAL_MS);
@@ -2457,6 +2528,18 @@ setTimeout(guardedAutoReleaseSweep, 30_000);
 const CHECKIN_RELEASE_SWEEP_INTERVAL_MS = Number(process.env.CHECKIN_RELEASE_SWEEP_INTERVAL_MS || AUTO_RELEASE_SWEEP_INTERVAL_MS);
 setInterval(guardedCheckInReleaseSweep, CHECKIN_RELEASE_SWEEP_INTERVAL_MS);
 setTimeout(guardedCheckInReleaseSweep, 35_000);
+
+// Abandoned-booking sweep: 15-minute TTL by default — long enough that a
+// guest who steps away mid-signing can come back via
+// POST /booking/:bookingRef/escrow/rebuild and still find their booking
+// intact, short enough that an abandoned cart doesn't block a property's
+// dates for long. Runs far more often than the other two sweeps (every 5
+// minutes) since the whole point is freeing dates quickly, not waiting for
+// an on-chain deadline.
+const ABANDONED_BOOKING_TTL_MS = Number(process.env.ABANDONED_BOOKING_TTL_MS || 15 * 60 * 1000);
+const ABANDONED_BOOKING_SWEEP_INTERVAL_MS = Number(process.env.ABANDONED_BOOKING_SWEEP_INTERVAL_MS || 5 * 60 * 1000);
+setInterval(guardedAbandonedBookingSweep, ABANDONED_BOOKING_SWEEP_INTERVAL_MS);
+setTimeout(guardedAbandonedBookingSweep, 20_000);
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 const port = parseInt(process.env.PORT || '3001');

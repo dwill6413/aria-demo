@@ -205,6 +205,11 @@ export async function initDB() {
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_bookings_settlement_digest ON bookings(settlement_digest) WHERE settlement_digest IS NOT NULL`);
   // Check-in sweep scans for held payment escrows past their release time.
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_bookings_payment_escrow ON bookings(payment_escrow_status, payment_release_ms)`);
+  // Abandoned-booking sweep (June 30, 2026) scans for never-signed bookings
+  // past the TTL — partial index keeps it tiny since 'pending' rows are a
+  // small, fast-churning slice of the table (most bookings move to 'held'
+  // within seconds of being created).
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_bookings_abandoned_sweep ON bookings(created_at) WHERE payment_status = 'confirmed' AND deposit_status = 'pending'`);
 
   // ── §5f: DB integrity (June 24, 2026) ─────────────────────────────────────
   // One review per booking — previously only enforced in app code. Guarded so a

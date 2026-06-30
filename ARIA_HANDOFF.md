@@ -951,6 +951,11 @@ ARIA_TAX_REMITTANCE_ADDRESS = RETIRED (June 30, 2026). ARIA does not custody tax
                            self-remits off-chain. See ARIA_FEE_DESIGN.md v2.2.
 PAYMENT_COIN_TYPE       = <optional, default 0x2::sui::SUI (testnet); SuiUSD type on mainnet>
 CHECKIN_RELEASE_SWEEP_INTERVAL_MS = <optional, defaults to AUTO_RELEASE_SWEEP_INTERVAL_MS>
+ABANDONED_BOOKING_TTL_MS = <optional, default 900000 (15 min). June 30, 2026 —
+                           runAbandonedBookingSweep() cancels bookings still
+                           confirmed/pending/un-escrowed past this age, freeing
+                           the dates. See Tech Debt "Unsigned-booking trap.">
+ABANDONED_BOOKING_SWEEP_INTERVAL_MS = <optional, default 300000 (5 min) — sweep cadence>
 REQUIRE_GUEST_VERIFICATION = <Phase 2e — 'true' to require a guest_verifications
                            row before booking (both REST + AI). Default off so it
                            stays dormant until the /profile UI is live + tested.>

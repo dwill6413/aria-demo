@@ -1,9 +1,37 @@
 # ARIA — Product Roadmap & AI Handoff Document
-**Version:** 2.28 | **Updated:** June 30, 2026
+**Version:** 2.29 | **Updated:** June 30, 2026
 **Purpose:** Complete handoff for an AI assistant continuing ARIA development.
 Read this entire document before writing any code.
 
-> **June 30, 2026 (LATEST — tax-routing design correction, no contract upgrade):**
+> **June 30, 2026 (LATEST — abandoned-booking sweep shipped):** Tech Debt
+> "Unsigned-booking trap" fix #2 (the open item) is done: `createBooking`'s
+> availability check only ever excluded `payment_status='cancelled'` — it had
+> no time dimension — so a guest who started checkout and never signed the
+> escrow PTB (stuck at `deposit_status='pending'`, `escrow_object_id` and
+> `payment_escrow_object_id` both null) blocked the property's dates
+> indefinitely, with no on-chain funds ever at risk. Added
+> `runAbandonedBookingSweep()` in `server.mjs`, same cron pattern as the
+> existing auto-release/check-in sweeps (`setInterval` + startup `setTimeout`,
+> re-entrancy guard): every 5 minutes (`ABANDONED_BOOKING_SWEEP_INTERVAL_MS`)
+> it finds bookings still `confirmed`/`pending`/un-escrowed past a 15-minute
+> TTL (`ABANDONED_BOOKING_TTL_MS`) and flips them to `payment_status='cancelled',
+> deposit_status='released'` (the same terminal state `cancelBooking` already
+> uses for "nothing was ever locked on-chain"), freeing the dates for other
+> guests. The UPDATE re-checks the same disqualifying conditions as the SELECT
+> so a guest who signs in the gap is left untouched — no locking needed. Sends
+> a "Booking Hold Expired" email (Resend) so a returning guest isn't confused
+> by a dead booking ref. 15 minutes was chosen to stay longer than a normal
+> signing flow but still comfortably inside the existing
+> `/booking/:bookingRef/escrow/rebuild` resume window. Added a partial index
+> `idx_bookings_abandoned_sweep ON bookings(created_at) WHERE payment_status =
+> 'confirmed' AND deposit_status = 'pending'` (`db.mjs`) so the sweep query
+> stays cheap as the table grows. No tests added — there's no existing test
+> harness for the DB-backed cron sweeps (the other two sweeps aren't unit
+> tested either; `escrow.test.mjs` only covers `escrow.mjs`'s pure
+> build/verify/decode logic) — **run the server locally and confirm the new
+> sweep doesn't error on boot before deploying.**
+>
+> **June 30, 2026 (tax-routing design correction, no contract upgrade):**
 > Design fix: ARIA does not custody occupancy tax. Previously `release_payment`'s
 > 3-way split sent the tax leg to a separate ARIA-controlled
 > `ARIA_TAX_REMITTANCE_ADDRESS` wallet, which conflicted with the already-built
@@ -18,9 +46,8 @@ Read this entire document before writing any code.
 > (`useCombined` now gates on `ARIA_FEE_ADDRESS` alone), `escrow.test.mjs`
 > (fixtures + a new tampered-tax-destination adversarial test). `ARIA_TAX_REMITTANCE_ADDRESS`
 > is retired — see `ARIA_KEY_INVENTORY.md` §5 and `ARIA_FEE_DESIGN.md` v2.2.
-> Tests updated; sandbox mount couldn't run `node escrow.test.mjs` this session
-> (stale FUSE cache on the project folder — known tech-debt item below), so
-> **run the suite before relying on it.**
+> Confirmed: `node escrow.test.mjs` 79/79 passed and `sui move test` 52/52
+> passed (user ran both locally after the fix).
 >
 > **June 29, 2026 (catalog/db parity: all 4 gaps closed):** Direct ask:
 > "make sure any imported property listings by a host inherit all functionality
@@ -678,7 +705,7 @@ original package ID (`0x538262...7fdbe`); no separate contract deployment.
 | Production host address | **Done** | Phase 1i — `getPropertyHostAddress()` in `bookings.mjs`; `catalog.mjs` still needs real per-property `hostAddress` values set once hosts are onboarded |
 | Claim/dispute routes | **Done** | Phase 1j — `/booking/claim-damage`, `/booking/dispute-claim`, `/booking/resolve-dispute` |
 | Properties frontend-hardcoded / host onboarding | Medium | `properties` table empty; `catalog.mjs` carries `hostAddress` per property, hand-maintained. Building real "hosts add their own listings" replaces `DEMO_HOST_ADDRESS` entirely: each property row carries its owner's address and `getPropertyHostAddress` resolves it per-property via `host_profiles.payout_sui_address` (the contract is already multi-host-correct — every escrow bakes in its own host and gates `claim_damage`/`seal_approve`/payout on `sender == escrow.host`). **DESIGN CONSTRAINT (surfaced June 23, 2026):** because `claim_damage` AND `seal_approve` both assert `sender == escrow.host`, a host's `payout_sui_address` must be an address the host can actually SIGN with (their own zkLogin/wallet) — not a receive-only exchange address — or they could receive payouts but never file a damage claim or decrypt a guest's identity. When building host onboarding, either require the payout address to equal the host's signing wallet, or split `host_profiles` into a receive-only `payout_address` and a separate `operator_address` (the one baked into the escrow's `host` field for signing). |
-| **Unsigned-booking trap (UX, found June 23, 2026 via QA)** | 🟨 Fix #1 DONE June 23 | A booking is created (`payment_status='confirmed'`) BEFORE the guest signs the escrow PTB; the "Approve & sign" panel was ephemeral homepage-modal state, so navigating away stranded the booking (no escrow, but it still blocks the dates). **✅ Resume-signing shipped:** `POST /booking/:ref/escrow/rebuild` (guest-owned, `deposit_status='pending'`; recomputes host + a fresh `release_time` and rebuilds the combined PTB via `buildBookingPaymentTransaction`) + a "✍️ Complete payment & sign" button on My Bookings (`pages/bookings.jsx`) that shows the same pre-sign disclosure and runs sign→submit→`/escrow/confirm`. **Still open:** (2) **abandoned-booking sweep** — auto-cancel + free the calendar after a short TTL (a stranded booking still holds the dates until cancelled/signed). |
+| **Unsigned-booking trap (UX, found June 23, 2026 via QA)** | **Done** — both fixes shipped | A booking is created (`payment_status='confirmed'`) BEFORE the guest signs the escrow PTB; the "Approve & sign" panel was ephemeral homepage-modal state, so navigating away stranded the booking (no escrow, but it still blocks the dates). **✅ Fix #1 (June 23):** resume-signing — `POST /booking/:ref/escrow/rebuild` (guest-owned, `deposit_status='pending'`; recomputes host + a fresh `release_time` and rebuilds the combined PTB via `buildBookingPaymentTransaction`) + a "✍️ Complete payment & sign" button on My Bookings (`pages/bookings.jsx`). **✅ Fix #2 (June 30):** `runAbandonedBookingSweep()` in `server.mjs` — every 5 min, auto-cancels bookings still `confirmed`/`pending`/un-escrowed past a 15-min TTL (`ABANDONED_BOOKING_TTL_MS`), freeing the dates and emailing the guest. Same cron pattern as the existing sweeps; backed by a new partial index `idx_bookings_abandoned_sweep` (`db.mjs`). |
 | Frontend tax/price duplication | Low | `catalog.mjs` centralizes backend |
 | Stripe webhooks | Medium | Create-intent only |
 | No automated tests | Medium | Backend unit tests in `escrow.test.mjs` — **78 passing** (incl. resale verifier + `isObjectMutated` gRPC-shape tests). Move suite **52 tests** (incl. 8 resale cases). **No frontend tests** — and the resale UI (list/cancel/buy/market modal in `bookings.jsx`, host toggle in `host.jsx`, ID `idState` field in `profile.jsx`) is entirely unverified by automated tests; route-level tests would require the `server.mjs` split below. |
@@ -992,6 +1019,15 @@ PAYMENT_COIN_TYPE          = <optional, default 0x2::sui::SUI (testnet). Set to 
                            SuiUSD coin type on mainnet.>
 CHECKIN_RELEASE_SWEEP_INTERVAL_MS = <optional, defaults to AUTO_RELEASE_SWEEP_INTERVAL_MS
                            — cadence for runCheckInReleaseSweep()>
+
+# Abandoned-booking sweep (June 30, 2026) — frees calendar dates held by a
+# guest who never signed the escrow PTB. Both optional.
+ABANDONED_BOOKING_TTL_MS           = <optional, default 900000 (15 min) — how long an
+                           unsigned booking sits before runAbandonedBookingSweep()
+                           cancels it and frees the dates>
+ABANDONED_BOOKING_SWEEP_INTERVAL_MS = <optional, default 300000 (5 min) — sweep cadence;
+                           runs far more often than the other sweeps since the goal
+                           is freeing dates quickly, not waiting on an on-chain deadline>
 ```
 
 **To add for Phase 2:** *(none)* — the revised Seal design (above) adds
