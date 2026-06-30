@@ -1,4 +1,5 @@
 import Fastify from 'fastify';
+import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
 import cors from '@fastify/cors';
 import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
@@ -38,11 +39,40 @@ import {
   guestProfileSchema,
   resaleListSchema, resaleTransferConfirmSchema, resaleSettingsSchema,
   walletSendBuildSchema, walletSendConfirmSchema,
+  accessInstructionsSchema,
   propertyCreateSchema, listingExtractSchema, listingBulkExtractSchema, listingPhotoSchema,
   messageSendSchema, reviewSubmitSchema
 } from './validation.mjs';
 
 dotenvConfig();
+
+// ─── Self check-in encryption (P4) ───────────────────────────────────────────
+// AES-256-GCM. Key = CHECKIN_KEY env var (64 hex chars = 32 bytes).
+// Stored format: iv_hex:ciphertext_hex:tag_hex (all colon-separated hex).
+// Backend-mediated reveal: ARIA decrypts on the server and returns plaintext
+// only to the authenticated booking guest within the check-in window.
+// TODO: migrate to Seal seal_approve_checkin (on-chain time gate, fully
+// non-custodial) once the Move contract is upgraded for that hook.
+function encryptInstructions(plaintext) {
+  const keyHex = process.env.CHECKIN_KEY || '';
+  if (keyHex.length !== 64) throw new Error('CHECKIN_KEY must be 64 hex chars (32 bytes)');
+  const key = Buffer.from(keyHex, 'hex');
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', key, iv);
+  const ct = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `${iv.toString('hex')}:${ct.toString('hex')}:${tag.toString('hex')}`;
+}
+
+function decryptInstructions(blob) {
+  const keyHex = process.env.CHECKIN_KEY || '';
+  if (keyHex.length !== 64) throw new Error('CHECKIN_KEY not configured');
+  const [ivHex, ctHex, tagHex] = blob.split(':');
+  const key = Buffer.from(keyHex, 'hex');
+  const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(ivHex, 'hex'));
+  decipher.setAuthTag(Buffer.from(tagHex, 'hex'));
+  return decipher.update(Buffer.from(ctHex, 'hex')) + decipher.final('utf8');
+}
 
 // ─── Sui Escrow Client ────────────────────────────────────────────────────────
 // suiClient/autoReleaseKeypair setup and the escrow PTB build/verify/auto-release
@@ -1520,6 +1550,141 @@ fastify.post('/wallet/send/confirm', {
   return { success: true, digest };
 });
 
+// ── Self check-in: access instructions (P4) ─────────────────────────────────
+
+// PUT /host/property/:propertyId/access-instructions
+// Host saves check-in type + access instructions (encrypted before storing).
+fastify.put('/host/property/:propertyId/access-instructions', {
+  config: { rateLimit: { max: 30, timeWindow: '1 hour', errorResponseBuilder: () => ({ error: 'Too many updates.' }) } }
+}, async (request, reply) => {
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
+  if (!(await isHost(session))) return reply.code(403).send({ error: 'Host access required' });
+  if (validateBody(accessInstructionsSchema, request, reply)) return;
+
+  const propertyId = Number(request.params.propertyId);
+  const { checkInType, instructions } = request.body;
+
+  // Verify this host owns the property.
+  const pr = await pool.query('SELECT host_address FROM properties WHERE id = $1', [propertyId]);
+  if (!pr.rows[0]) return reply.code(404).send({ error: 'Property not found' });
+  if (normalizeAddr(pr.rows[0].host_address) !== normalizeAddr(session.suiAddress))
+    return reply.code(403).send({ error: 'You do not own this property' });
+
+  let encrypted = null;
+  if (checkInType === 'self' && instructions?.trim()) {
+    try {
+      encrypted = encryptInstructions(instructions.trim());
+    } catch (err) {
+      fastify.log.error({ err }, 'access-instructions: encryption failed');
+      return reply.code(500).send({ error: 'Could not encrypt access instructions — check CHECKIN_KEY configuration.' });
+    }
+  }
+
+  try {
+    await pool.query(
+      `UPDATE properties SET check_in_type=$1, access_instructions_encrypted=$2 WHERE id=$3`,
+      [checkInType, encrypted, propertyId]
+    );
+  } catch (err) {
+    fastify.log.error({ err, propertyId }, 'access-instructions: update failed');
+    return reply.code(500).send({ error: 'Could not save access instructions' });
+  }
+  fastify.log.info({ propertyId, checkInType, hasInstructions: !!encrypted }, 'Access instructions updated');
+  return { success: true, checkInType };
+});
+
+// GET /host/property/:propertyId/access-instructions
+// Host reads their own plaintext instructions back (for editing).
+fastify.get('/host/property/:propertyId/access-instructions', async (request, reply) => {
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
+  if (!(await isHost(session))) return reply.code(403).send({ error: 'Host access required' });
+
+  const propertyId = Number(request.params.propertyId);
+  const pr = await pool.query('SELECT host_address, check_in_type, access_instructions_encrypted FROM properties WHERE id=$1', [propertyId]);
+  if (!pr.rows[0]) return reply.code(404).send({ error: 'Property not found' });
+  if (normalizeAddr(pr.rows[0].host_address) !== normalizeAddr(session.suiAddress))
+    return reply.code(403).send({ error: 'You do not own this property' });
+
+  const row = pr.rows[0];
+  let instructions = '';
+  if (row.access_instructions_encrypted) {
+    try { instructions = decryptInstructions(row.access_instructions_encrypted); }
+    catch (err) { fastify.log.error({ err, propertyId }, 'access-instructions: decryption failed'); }
+  }
+  return { checkInType: row.check_in_type || 'front_desk', instructions };
+});
+
+// POST /booking/:bookingRef/checkin
+// Guest-side check-in. Verifies: authenticated guest, correct wallet, active
+// booking, within check-in window. For self check-in, decrypts and returns
+// the property's access instructions. Marks booking checked_in=true.
+fastify.post('/booking/:bookingRef/checkin', {
+  config: { rateLimit: { max: 20, timeWindow: '1 hour', errorResponseBuilder: () => ({ error: 'Too many check-in attempts.' }) } }
+}, async (request, reply) => {
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
+
+  const { bookingRef } = request.params;
+  const bk = await pool.query(
+    `SELECT b.*, p.check_in_type, p.access_instructions_encrypted
+     FROM bookings b
+     LEFT JOIN properties p ON p.id = b.property_id
+     WHERE b.booking_ref = $1`, [bookingRef]
+  );
+  const booking = bk.rows[0];
+  if (!booking) return reply.code(404).send({ error: 'Booking not found' });
+  if (booking.wallet_address !== session.suiAddress)
+    return reply.code(403).send({ error: 'This is not your booking' });
+  if (booking.cancelled_at)
+    return reply.code(400).send({ error: 'This booking has been cancelled' });
+  if (booking.deposit_status !== 'held' && booking.payment_status !== 'confirmed')
+    return reply.code(400).send({ error: 'Booking is not in an active state' });
+
+  // Time gate: allow check-in from 2 hours before the check-in date (midnight UTC)
+  // through the end of the check-out date.
+  const checkInMs = Date.parse(booking.check_in);
+  const checkOutMs = Date.parse(booking.check_out) + 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const GRACE_MS = 2 * 60 * 60 * 1000; // 2h early grace
+  if (now < checkInMs - GRACE_MS)
+    return reply.code(400).send({ error: `Check-in opens on ${new Date(checkInMs).toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}. Come back closer to your arrival.` });
+  if (now > checkOutMs)
+    return reply.code(400).send({ error: 'Your stay has ended — check-in is no longer available.' });
+
+  // Mark checked_in (idempotent — guests can re-open instructions anytime).
+  if (!booking.checked_in) {
+    try {
+      await pool.query(
+        `UPDATE bookings SET checked_in=true, checked_in_at=NOW() WHERE booking_ref=$1`,
+        [bookingRef]
+      );
+    } catch (err) {
+      fastify.log.error({ err, bookingRef }, 'checkin: status update failed');
+    }
+  }
+
+  const checkInType = booking.check_in_type || 'front_desk';
+
+  if (checkInType === 'self') {
+    let instructions = '';
+    if (booking.access_instructions_encrypted) {
+      try { instructions = decryptInstructions(booking.access_instructions_encrypted); }
+      catch (err) {
+        fastify.log.error({ err, bookingRef }, 'checkin: decryption failed');
+        return reply.code(500).send({ error: 'Could not retrieve access instructions — please contact your host.' });
+      }
+    }
+    fastify.log.info({ bookingRef, guest: session.suiAddress }, 'Self check-in: instructions revealed');
+    return { success: true, checkInType: 'self', instructions, property: booking.property_title };
+  }
+
+  // Front-desk: signal the frontend to open the BookingPass QR modal.
+  fastify.log.info({ bookingRef, guest: session.suiAddress }, 'Front-desk check-in initiated');
+  return { success: true, checkInType: 'front_desk', property: booking.property_title };
+});
+
 // ── Host resale settings (Rail 1 opt-in + Rail 2 cap) ───────────────────────
 // GET returns the host's per-listing settings; POST upserts them. Stored in
 // property_resale_settings keyed by catalog property_id (the demo listings have
@@ -1835,6 +2000,8 @@ fastify.get('/bookings/history', async (request, reply) => {
         resaleListed: b.resale_listed === true,
         resaleAskPrice: b.resale_ask_price,
         resaleCount: b.resale_count || 0,
+        checkedIn: b.checked_in === true,
+        checkedInAt: b.checked_in_at || null,
         faceValue: chargeAmount,
         originalWalletAddress: b.original_wallet_address,
         resaleWalrusBlobId: b.resale_walrus_blob_id,

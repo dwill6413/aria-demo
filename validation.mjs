@@ -137,6 +137,12 @@ export const walletSendConfirmSchema = z.object({
   amount: z.union([z.string(), z.number()])
 });
 
+// ── Self check-in access instructions (P4) ───────────────────────────────────
+export const accessInstructionsSchema = z.object({
+  checkInType: z.enum(['front_desk', 'self']),
+  instructions: z.string().max(2000).optional()
+});
+
 // Host sets per-listing transfer opt-in (Rail 1) + premium cap in bps (Rail 2).
 // maxPremiumBps 0 = face-value-only resale. Cap at 100% (10000 bps) so a typo
 // can't open an unbounded markup.

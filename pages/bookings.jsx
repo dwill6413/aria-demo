@@ -57,6 +57,48 @@ export default function Bookings() {
   const [sendStatus, setSendStatus] = useState('idle'); // idle|signing|submitting|confirming|done|error
   const [sendError, setSendError] = useState('');
   const [sendDigest, setSendDigest] = useState('');
+  // P4: guest self check-in — Check In button → backend time-gate → instructions modal
+  const [checkInBooking, setCheckInBooking] = useState(null); // booking being checked in
+  const [checkInStatus, setCheckInStatus] = useState('idle'); // idle|loading|done|error
+  const [checkInError, setCheckInError] = useState('');
+  const [checkInResult, setCheckInResult] = useState(null); // { checkInType, instructions?, property }
+
+  const submitCheckIn = async (b) => {
+    setCheckInBooking(b);
+    setCheckInStatus('loading');
+    setCheckInError('');
+    setCheckInResult(null);
+    try {
+      const res = await authFetch(`${API}/booking/${encodeURIComponent(b.bookingRef)}/checkin`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setCheckInError(data.error || 'Check-in failed. Please try again.');
+        setCheckInStatus('error');
+        return;
+      }
+      if (data.checkInType === 'front_desk') {
+        // Open the existing BookingPass modal
+        setCheckInBooking(null);
+        setCheckInStatus('idle');
+        openPass(b);
+      } else {
+        setCheckInResult(data);
+        setCheckInStatus('done');
+        // Refresh booking list so checkedIn badge shows immediately
+        refreshBookings();
+      }
+    } catch (err) {
+      setCheckInError(err.message || 'Could not reach the server. Please try again.');
+      setCheckInStatus('error');
+    }
+  };
+
+  const closeCheckIn = () => {
+    setCheckInBooking(null);
+    setCheckInStatus('idle');
+    setCheckInError('');
+    setCheckInResult(null);
+  };
 
   const copyAddr = () => {
     navigator.clipboard.writeText(user?.address);
@@ -655,6 +697,30 @@ export default function Bookings() {
                         🎫 Check-in Pass
                       </button>
                     )}
+                    {/* P4: Check In button — active bookings with held deposit, within 2h grace window */}
+                    {b.paymentStatus !== 'cancelled' && b.depositStatus === 'held' && (() => {
+                      const nowMs = Date.now();
+                      const checkInMs = new Date(b.checkIn).getTime();
+                      const checkOutMs = new Date(b.checkOut).getTime();
+                      const GRACE_MS = 2 * 60 * 60 * 1000;
+                      const canCheckIn = nowMs >= checkInMs - GRACE_MS && nowMs <= checkOutMs + 24 * 60 * 60 * 1000;
+                      if (!canCheckIn) return null;
+                      if (b.checkedIn) {
+                        return (
+                          <span style={{ background: '#eafaf0', border: '1px solid #c8ebd9', color: '#00913f', fontSize: '11px', padding: '6px 12px', borderRadius: '6px', fontWeight: '600' }}>
+                            ✅ Checked In
+                          </span>
+                        );
+                      }
+                      return (
+                        <button
+                          onClick={() => submitCheckIn(b)}
+                          disabled={checkInBooking?.bookingRef === b.bookingRef && checkInStatus === 'loading'}
+                          style={{ background: '#00913f', border: 'none', color: '#fff', fontSize: '12px', padding: '6px 14px', borderRadius: '6px', cursor: 'pointer', fontWeight: '700' }}>
+                          {checkInBooking?.bookingRef === b.bookingRef && checkInStatus === 'loading' ? 'Checking in…' : '🔑 Check In'}
+                        </button>
+                      );
+                    })()}
                     {b.paymentStatus !== 'cancelled' && b.walrusBlobId && (
                       <a href={`https://aggregator.walrus-testnet.walrus.space/v1/blobs/${b.walrusBlobId}`}
                         target="_blank" rel="noreferrer"
@@ -716,6 +782,42 @@ export default function Bookings() {
           </div>
         )}
       </div>
+
+      {/* P4: Check-in modal — error state or self check-in instructions */}
+      {checkInBooking && checkInStatus !== 'idle' && checkInStatus !== 'loading' && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 110, padding: '24px' }}>
+          <div style={{ background: '#fff', border: '1px solid #ebebeb', borderRadius: '16px', width: '100%', maxWidth: '520px', padding: '32px', boxShadow: '0 8px 32px rgba(0,0,0,0.18)' }}>
+            {checkInStatus === 'error' ? (
+              <>
+                <h3 style={{ margin: '0 0 8px', fontSize: '20px', fontWeight: '700', color: '#d23f3f' }}>Check-in Unavailable</h3>
+                <p style={{ color: '#717171', fontSize: '14px', margin: '0 0 24px', lineHeight: 1.5 }}>{checkInError}</p>
+                <button onClick={closeCheckIn}
+                  style={{ background: '#f7f7f7', border: '1px solid #ddd', color: '#222', borderRadius: '8px', padding: '12px 24px', fontSize: '14px', cursor: 'pointer', fontWeight: '600' }}>
+                  Close
+                </button>
+              </>
+            ) : checkInStatus === 'done' && checkInResult ? (
+              <>
+                <h3 style={{ margin: '0 0 4px', fontSize: '20px', fontWeight: '700', color: '#00913f' }}>✅ You're Checked In!</h3>
+                <p style={{ color: '#717171', fontSize: '13px', margin: '0 0 20px' }}>{checkInResult.property}</p>
+                <div style={{ background: '#f0f7ff', border: '1px solid #c8dff7', borderRadius: '10px', padding: '16px', marginBottom: '24px' }}>
+                  <div style={{ fontSize: '11px', color: '#1f6fd6', fontWeight: '700', marginBottom: '10px', letterSpacing: '0.08em' }}>🔑 ACCESS INSTRUCTIONS</div>
+                  <pre style={{ margin: 0, fontFamily: 'inherit', fontSize: '14px', color: '#222', lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                    {checkInResult.instructions}
+                  </pre>
+                </div>
+                <p style={{ color: '#999', fontSize: '11px', margin: '0 0 20px', lineHeight: 1.4 }}>
+                  Screenshot or note these details — they will only be shown while your stay is active.
+                </p>
+                <button onClick={closeCheckIn}
+                  style={{ background: '#00913f', border: 'none', color: '#fff', borderRadius: '8px', padding: '12px 24px', fontSize: '14px', cursor: 'pointer', fontWeight: '700' }}>
+                  Got it
+                </button>
+              </>
+            ) : null}
+          </div>
+        </div>
+      )}
 
       {/* Review Modal */}
       {reviewingBooking && (

@@ -352,6 +352,17 @@ export async function initDB() {
   // Replay guard: one row per on-chain tx (partial — NULLs don't collide).
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_sends_tx_digest ON wallet_sends(tx_digest) WHERE tx_digest IS NOT NULL`);
 
+  // ── Self check-in (P4) ──────────────────────────────────────────────────────
+  // check_in_type: 'front_desk' (existing BookingPass QR flow) or 'self'
+  // (host provides encrypted access instructions revealed at check-in time).
+  // access_instructions_encrypted: AES-256-GCM blob, key from CHECKIN_KEY env.
+  await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS check_in_type TEXT DEFAULT 'front_desk'`);
+  await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS access_instructions_encrypted TEXT`);
+  // checked_in: flipped to true the first time the guest calls /booking/:ref/checkin
+  // successfully. checked_in_at records the timestamp for support/audit.
+  await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS checked_in BOOLEAN DEFAULT false`);
+  await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS checked_in_at TIMESTAMPTZ`);
+
   // ── Phase 3a: host-created listings (the `properties` table goes live) ───
   // Until now this table was scaffolded but never written to — the 6 demo
   // properties live in catalog.mjs instead (see its header comment). This is

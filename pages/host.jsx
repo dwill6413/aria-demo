@@ -61,6 +61,9 @@ export default function Host() {
   const [resaleSettings, setResaleSettings] = useState({}); // { [propertyId]: { transferAllowed, maxPremiumBps } }
   const [resaleEnabled, setResaleEnabled] = useState(false); // global flag (RESALE_ENABLED)
   const [savingResale, setSavingResale] = useState({});      // { [propertyId]: true } while saving
+  // P4: per-listing self check-in settings.
+  // { [propertyId]: { checkInType: 'front_desk'|'self', instructions: string, saving: bool, saved: bool } }
+  const [checkInSettings, setCheckInSettings] = useState({});
 
   // Phase 3a: Add Property (manual entry + AI-paste import + bulk import)
   const [showAddModal, setShowAddModal] = useState(false);
@@ -138,6 +141,9 @@ export default function Host() {
           if (rsData.settings) setResaleSettings(rsData.settings);
           setResaleEnabled(!!rsData.resaleEnabled);
         } catch {}
+        // P4: load check-in type + instructions for each property (DB-only).
+        // Lazy per-property — only load for properties the host created (source==='db').
+        // Catalog properties don't have DB rows to update.
         setLoading(false);
       })
       .catch(() => { router.push('/'); });
@@ -198,6 +204,35 @@ export default function Host() {
       alert(err.message || 'Could not save resale settings');
     }
     setSavingResale(prev => ({ ...prev, [propertyId]: false }));
+  };
+
+  // P4: load + save check-in settings per property (DB-source only).
+  const loadCheckInSettings = async (propertyId) => {
+    if (checkInSettings[propertyId]) return; // already loaded
+    try {
+      const res = await authFetch(`${API}/host/property/${propertyId}/access-instructions`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setCheckInSettings(prev => ({ ...prev, [propertyId]: { checkInType: data.checkInType || 'front_desk', instructions: data.instructions || '', saving: false, saved: false } }));
+    } catch {}
+  };
+
+  const saveCheckInSettings = async (propertyId) => {
+    const cur = checkInSettings[propertyId] || { checkInType: 'front_desk', instructions: '' };
+    setCheckInSettings(prev => ({ ...prev, [propertyId]: { ...cur, saving: true, saved: false } }));
+    try {
+      const res = await authFetch(`${API}/host/property/${propertyId}/access-instructions`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ checkInType: cur.checkInType, instructions: cur.instructions }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Save failed');
+      setCheckInSettings(prev => ({ ...prev, [propertyId]: { ...cur, saving: false, saved: true } }));
+      setTimeout(() => setCheckInSettings(prev => ({ ...prev, [propertyId]: { ...prev[propertyId], saved: false } })), 2500);
+    } catch (err) {
+      alert(err.message || 'Could not save check-in settings');
+      setCheckInSettings(prev => ({ ...prev, [propertyId]: { ...cur, saving: false } }));
+    }
   };
 
   // ── Phase 3a: Add Property handlers ─────────────────────────────────────────
@@ -888,6 +923,48 @@ export default function Host() {
                           <p style={{ color: '#a66a00', fontSize: '10px', margin: '8px 0 0', lineHeight: 1.5 }}>
                             {resaleEnabled ? 'Applies to future bookings. Any markup splits ARIA 10% / you 45% / seller 45%.' : 'Resale is globally disabled until launch — this just stages your preference.'}
                           </p>
+                        </div>
+                      );
+                    })()}
+                    {/* P4: self check-in settings — DB-sourced properties only */}
+                    {p.source === 'db' && (() => {
+                      const ci = checkInSettings[p.id];
+                      // Lazy-load on first render of this card
+                      if (!ci) { loadCheckInSettings(p.id); return null; }
+                      const isSelf = ci.checkInType === 'self';
+                      return (
+                        <div style={{ background: '#f0f7ff', border: '1px solid #c8dff7', borderRadius: '8px', padding: '10px', marginBottom: '10px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div style={{ fontSize: '10px', color: '#1f6fd6', fontWeight: '700' }}>🔑 CHECK-IN TYPE</div>
+                            <div style={{ display: 'flex', gap: '6px' }}>
+                              <button onClick={() => setCheckInSettings(prev => ({ ...prev, [p.id]: { ...prev[p.id], checkInType: 'front_desk' } }))}
+                                style={{ background: !isSelf ? '#1f6fd6' : '#fff', color: !isSelf ? '#fff' : '#717171', border: '1px solid #c8dff7', borderRadius: '6px', fontSize: '11px', padding: '3px 10px', cursor: 'pointer', fontWeight: !isSelf ? '700' : '400' }}>
+                                Front Desk
+                              </button>
+                              <button onClick={() => setCheckInSettings(prev => ({ ...prev, [p.id]: { ...prev[p.id], checkInType: 'self' } }))}
+                                style={{ background: isSelf ? '#1f6fd6' : '#fff', color: isSelf ? '#fff' : '#717171', border: '1px solid #c8dff7', borderRadius: '6px', fontSize: '11px', padding: '3px 10px', cursor: 'pointer', fontWeight: isSelf ? '700' : '400' }}>
+                                Self Check-in
+                              </button>
+                            </div>
+                          </div>
+                          {isSelf && (
+                            <>
+                              <textarea
+                                placeholder={'Door code: 1234\nLockbox: left side of garage\nWifi: NetworkName / password123\nParking: spot 4B behind building'}
+                                value={ci.instructions}
+                                onChange={e => setCheckInSettings(prev => ({ ...prev, [p.id]: { ...prev[p.id], instructions: e.target.value } }))}
+                                rows={4}
+                                style={{ width: '100%', marginTop: '10px', background: '#fff', border: '1px solid #c8dff7', borderRadius: '6px', padding: '8px 10px', fontSize: '12px', color: '#222', outline: 'none', resize: 'vertical', boxSizing: 'border-box', fontFamily: 'inherit', lineHeight: 1.5 }}
+                              />
+                              <p style={{ color: '#717171', fontSize: '10px', margin: '4px 0 8px', lineHeight: 1.4 }}>
+                                Encrypted before saving. Only revealed to the confirmed guest within 2 hours of their check-in date.
+                              </p>
+                            </>
+                          )}
+                          <button onClick={() => saveCheckInSettings(p.id)} disabled={ci.saving}
+                            style={{ marginTop: isSelf ? 0 : '8px', background: ci.saved ? '#eafaf0' : '#1f6fd6', color: ci.saved ? '#00913f' : '#fff', border: 'none', borderRadius: '6px', padding: '5px 14px', fontSize: '11px', fontWeight: '600', cursor: ci.saving ? 'wait' : 'pointer' }}>
+                            {ci.saving ? 'Saving…' : ci.saved ? '✓ Saved' : 'Save'}
+                          </button>
                         </div>
                       );
                     })()}
