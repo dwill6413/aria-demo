@@ -800,6 +800,11 @@ export default function Host() {
                               {b.depositStatus === 'released' ? '🔓 Deposit released' : b.depositStatus === 'held' ? `🔒 Deposit $${b.depositAmount} held` : '⏳ Deposit not yet confirmed'}
                             </span>
                           )}
+                          {b.checkedIn && (
+                            <span style={{ background: '#eafaf0', border: '1px solid #c8ebd9', color: '#00913f', fontSize: '11px', fontWeight: '600', padding: '2px 8px', borderRadius: '20px' }}>
+                              ✅ Checked In{b.checkedInAt ? ` · ${new Date(b.checkedInAt).toLocaleTimeString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` : ''}
+                            </span>
+                          )}
                         </div>
                       </div>
                       <div style={{ textAlign: 'right' }}>

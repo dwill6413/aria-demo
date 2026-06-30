@@ -2052,6 +2052,7 @@ fastify.get('/bookings/all', async (request, reply) => {
         cancellationWalrusBlobId: b.cancellation_walrus_blob_id,
         guestName: b.guest_name, guestEmail: b.guest_email,
         walletAddress: b.wallet_address, timestamp: b.created_at,
+        checkedIn: b.checked_in === true, checkedInAt: b.checked_in_at || null,
         jurisdiction: jur.taxName,
         // ariaFee/taxes above are raw numeric fields — host.jsx revenue
         // summaries sum these directly instead of regex-parsing the display
