@@ -120,6 +120,23 @@ export const resaleTransferConfirmSchema = z.object({
   digest: z.string().min(1, 'digest is required')
 });
 
+// ── Plain wallet send (P3) ────────────────────────────────────────────────────
+// amount is a decimal SUI string (e.g. "1.5"), not mist — the route parses it
+// with parseToMist (exact, no float error) and re-validates >0 before
+// building. toAddress shape (0x + 64 hex) is checked in the route with
+// isValidSuiAddress rather than a regex here, so it stays in sync with
+// whatever the SDK currently accepts.
+export const walletSendBuildSchema = z.object({
+  toAddress: z.string().min(1, 'toAddress is required'),
+  amount: z.union([z.string(), z.number()])
+});
+
+export const walletSendConfirmSchema = z.object({
+  digest: z.string().min(1, 'digest is required'),
+  toAddress: z.string().min(1, 'toAddress is required'),
+  amount: z.union([z.string(), z.number()])
+});
+
 // Host sets per-listing transfer opt-in (Rail 1) + premium cap in bps (Rail 2).
 // maxPremiumBps 0 = face-value-only resale. Cap at 100% (10000 bps) so a typo
 // can't open an unbounded markup.

@@ -48,11 +48,63 @@ export default function Bookings() {
   const [market, setMarket] = useState([]);
   const [marketLoading, setMarketLoading] = useState(false);
   const wallet = useWalletBalance(user?.address);
+  // Plain wallet send (P3) — move SUI out of this ARIA wallet to any address,
+  // no external Sui Wallet extension required (zkLogin already gives this
+  // browser session full signing authority over the user's own funds).
+  const [sendOpen, setSendOpen] = useState(false);
+  const [sendToAddress, setSendToAddress] = useState('');
+  const [sendAmount, setSendAmount] = useState('');
+  const [sendStatus, setSendStatus] = useState('idle'); // idle|signing|submitting|confirming|done|error
+  const [sendError, setSendError] = useState('');
+  const [sendDigest, setSendDigest] = useState('');
 
   const copyAddr = () => {
     navigator.clipboard.writeText(user?.address);
     setAddrCopied(true);
     setTimeout(() => setAddrCopied(false), 2000);
+  };
+
+  const openSend = () => {
+    setSendError(''); setSendStatus('idle'); setSendDigest('');
+    setSendToAddress(''); setSendAmount('');
+    setSendOpen(true);
+  };
+
+  const submitSend = async () => {
+    const to = sendToAddress.trim();
+    const amt = Number(sendAmount);
+    if (!to) { setSendError('Enter a recipient address.'); return; }
+    if (!Number.isFinite(amt) || amt <= 0) { setSendError('Enter a valid amount.'); return; }
+    setSendError('');
+    try {
+      setSendStatus('signing');
+      const buildRes = await authFetch(`${API}/wallet/send/build`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toAddress: to, amount: sendAmount }),
+      });
+      const built = await buildRes.json();
+      if (!buildRes.ok || !built.sendTxBytes) throw new Error(built.error || 'Could not prepare this transfer');
+      const signature = await signTransactionWithZkLogin(fromBase64(built.sendTxBytes));
+      setSendStatus('submitting');
+      const digest = await submitSignedTransaction(built.sendTxBytes, signature);
+      setSendStatus('confirming');
+      const confirmRes = await authFetch(`${API}/wallet/send/confirm`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ digest, toAddress: to, amount: sendAmount }),
+      });
+      const confirmData = await confirmRes.json();
+      if (!confirmRes.ok || !confirmData.success) {
+        const msg = confirmData.error || 'Transfer could not be verified on-chain';
+        throw new Error(confirmData.retryable ? `${msg} It may already have gone through — check your balance before retrying.` : msg);
+      }
+      setSendDigest(digest);
+      setSendStatus('done');
+      wallet.refresh();
+    } catch (err) {
+      console.error('Send failed:', err);
+      setSendError(err.message || 'Could not complete this transfer.');
+      setSendStatus('error');
+    }
   };
 
   const handleSubmitReview = async () => {
@@ -373,6 +425,7 @@ export default function Bookings() {
                 {wallet.display ?? (wallet.loading ? '···' : '0 SUI')}
               </span>
               <button onClick={wallet.refresh} title="Refresh balance" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#999', fontSize: '11px', padding: 0 }}>↻</button>
+              <button onClick={openSend} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#1f6fd6', fontSize: '11px', fontWeight: '600', padding: 0, textDecoration: 'underline' }}>Send</button>
               {wallet.lowBalance && (
                 <a href="https://faucet.sui.io/" target="_blank" rel="noreferrer" style={{ color: '#1f6fd6', fontSize: '11px', textDecoration: 'underline' }}>Get testnet SUI</a>
               )}
@@ -413,6 +466,7 @@ export default function Bookings() {
                 💰 {wallet.display ?? (wallet.loading ? '···' : '0 SUI')}
               </span>
               <button onClick={wallet.refresh} title="Refresh balance" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#999', fontSize: '12px', padding: 0 }}>↻</button>
+              <button onClick={() => { setMenuOpen(false); openSend(); }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#1f6fd6', fontSize: '12px', fontWeight: '600', padding: 0, textDecoration: 'underline' }}>Send</button>
               {wallet.lowBalance && (
                 <a href="https://faucet.sui.io/" target="_blank" rel="noreferrer" style={{ color: '#1f6fd6', fontSize: '12px', textDecoration: 'underline' }}>Get testnet SUI</a>
               )}
@@ -811,6 +865,51 @@ export default function Bookings() {
               style={{ width: '100%', marginTop: '16px', background: 'transparent', border: '1px solid #ddd', color: '#717171', borderRadius: '8px', padding: '11px', fontSize: '13px', cursor: 'pointer' }}>
               Close
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Send funds modal — plain SUI transfer out of this wallet, no external wallet needed */}
+      {sendOpen && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '24px' }}>
+          <div style={{ background: '#fff', border: '1px solid #ebebeb', borderRadius: '16px', width: '100%', maxWidth: '440px', padding: '32px', boxShadow: '0 8px 32px rgba(0,0,0,0.18)' }}>
+            <h3 style={{ margin: '0 0 4px', fontSize: '20px', fontWeight: '700', color: '#222' }}>💸 Send SUI</h3>
+            <p style={{ color: '#717171', fontSize: '13px', margin: '0 0 20px' }}>
+              From your ARIA wallet ({wallet.display ?? '0 SUI'} available) to any Sui address — your own Sui Wallet, an exchange, anywhere.
+            </p>
+            {sendStatus === 'done' ? (
+              <>
+                <div style={{ background: '#eafaf0', border: '1px solid #c8ecd9', borderRadius: '8px', padding: '14px', marginBottom: '20px', fontSize: '13px', color: '#00913f' }}>
+                  ✓ Sent. <a href={`https://suiscan.xyz/testnet/tx/${sendDigest}`} target="_blank" rel="noreferrer" style={{ color: '#00913f', textDecoration: 'underline' }}>View on explorer</a>
+                </div>
+                <button onClick={() => setSendOpen(false)} style={{ width: '100%', background: '#222', color: '#fff', border: 'none', borderRadius: '8px', padding: '11px', fontSize: '13px', fontWeight: '700', cursor: 'pointer' }}>Done</button>
+              </>
+            ) : (
+              <>
+                <label style={{ fontSize: '12px', color: '#717171', fontWeight: '600' }}>RECIPIENT ADDRESS</label>
+                <input type="text" placeholder="0x…" value={sendToAddress} onChange={e => setSendToAddress(e.target.value)}
+                  disabled={['signing','submitting','confirming'].includes(sendStatus)}
+                  style={{ width: '100%', marginTop: '6px', marginBottom: '14px', background: '#fff', border: '1px solid #ddd', borderRadius: '8px', padding: '10px 12px', color: '#222', fontSize: '13px', outline: 'none', boxSizing: 'border-box', fontFamily: 'monospace' }} />
+                <label style={{ fontSize: '12px', color: '#717171', fontWeight: '600' }}>AMOUNT (SUI)</label>
+                <input type="number" min="0" step="0.0001" placeholder="0.00" value={sendAmount} onChange={e => setSendAmount(e.target.value)}
+                  disabled={['signing','submitting','confirming'].includes(sendStatus)}
+                  style={{ width: '100%', marginTop: '6px', marginBottom: '8px', background: '#fff', border: '1px solid #ddd', borderRadius: '8px', padding: '10px 12px', color: '#222', fontSize: '15px', outline: 'none', boxSizing: 'border-box' }} />
+                <p style={{ color: '#999', fontSize: '11px', margin: '0 0 16px' }}>Leave a little SUI behind to cover gas on future transactions.</p>
+                {sendError && <p style={{ color: '#d23f3f', fontSize: '12px', margin: '0 0 12px' }}>{sendError}</p>}
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <button onClick={() => setSendOpen(false)}
+                    disabled={['signing','submitting','confirming'].includes(sendStatus)}
+                    style={{ flex: 1, background: 'transparent', border: '1px solid #ddd', color: '#717171', borderRadius: '8px', padding: '11px', fontSize: '13px', cursor: 'pointer' }}>
+                    Cancel
+                  </button>
+                  <button onClick={submitSend}
+                    disabled={['signing','submitting','confirming'].includes(sendStatus)}
+                    style={{ flex: 2, background: '#222', color: '#fff', border: 'none', borderRadius: '8px', padding: '11px', fontSize: '13px', fontWeight: '700', cursor: 'pointer' }}>
+                    {sendStatus === 'signing' ? 'Sign in wallet…' : sendStatus === 'submitting' ? 'Submitting…' : sendStatus === 'confirming' ? 'Confirming…' : 'Send'}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

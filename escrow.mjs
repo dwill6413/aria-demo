@@ -1079,6 +1079,66 @@ export async function buildCancelResaleListingTransaction(sellerAddr, policyId, 
   }
 }
 
+// ── Plain wallet send (P3) ───────────────────────────────────────────────────
+// A bare SUI transfer with no Move contract involved — the user wants to move
+// funds OUT of their ARIA zkLogin wallet to any address (their own hardware/
+// extension wallet, an exchange, another testnet address). Built server-side
+// and signed client-side via the exact same non-custodial path as every other
+// flow above: coinWithBalance resolves the coin from the SENDER's own balance
+// at build time, so ARIA never holds a key that can move it. There's no
+// escrow/resale object on either side of this, so the only thing to check
+// afterward is the plain balance change itself — see verifySendTransaction.
+export async function buildSendTransaction(fromAddr, { toAddress, amountMist }, logger = console) {
+  if (!fromAddr || !toAddress || amountMist == null)
+    return { txBytes: null, errorCode: 'bad_request', errorMessage: 'Missing sender, recipient, or amount.' };
+  try {
+    const tx = new Transaction();
+    tx.setSender(fromAddr);
+    const coin = coinWithBalance({ balance: BigInt(amountMist) });
+    tx.transferObjects([coin], toAddress);
+    const txBytes = await tx.build({ client: suiClient });
+    return { txBytes: toBase64(txBytes) };
+  } catch (err) {
+    logger?.error?.({ message: err.message, name: err.name }, 'buildSendTransaction error');
+    return { txBytes: null, ...classifyEscrowBuildError(err) };
+  }
+}
+
+/// Verify a completed plain transfer on-chain before reporting success. A
+/// valid send MUST (a) succeed, (b) be signed by the expected sender, and
+/// (c) show a balanceChange crediting the recipient with EXACTLY amountMist
+/// of SUI — checking the actual balance change (not just "the tx succeeded")
+/// is what stops a sender from reporting a real-but-unrelated digest, or one
+/// that paid a different recipient/amount, as proof of this specific send.
+export async function verifySendTransaction(digest, expectedSender, expectedRecipient, amountMist, logger = console) {
+  let result;
+  try {
+    result = await suiClient.core.getTransaction({
+      digest,
+      include: { transaction: true, balanceChanges: true },
+    });
+  } catch (err) {
+    logger?.warn?.({ digest, err: err.message }, 'verifySendTransaction: getTransaction failed');
+    return { ok: false, retryable: true, reason: 'Send not yet verifiable on-chain — please retry in a moment.' };
+  }
+  if (result?.$kind !== 'Transaction') {
+    const errMsg = result?.FailedTransaction?.status?.error?.message;
+    return { ok: false, reason: errMsg || 'Send transaction did not succeed on-chain' };
+  }
+  const txn = result.Transaction;
+  const actualSender = txn?.transaction?.sender;
+  if (expectedSender && actualSender && normalizeAddr(actualSender) !== normalizeAddr(expectedSender)) {
+    return { ok: false, reason: 'Transaction sender does not match the signed-in wallet' };
+  }
+  const credit = (txn?.balanceChanges || []).find(
+    (c) => c.coinType === '0x2::sui::SUI' && normalizeAddr(c.address) === normalizeAddr(expectedRecipient)
+  );
+  if (!credit || BigInt(credit.amount) !== BigInt(amountMist)) {
+    return { ok: false, reason: 'On-chain transfer does not match the reported recipient and amount' };
+  }
+  return { ok: true, sender: actualSender };
+}
+
 /// Verify a completed buy_resale on-chain before the confirm route writes Postgres.
 /// A successful buy MUST (a) be signed by the expected buyer and (b) mutate BOTH the
 /// deposit and payment escrows (their `guest` reassigned to the buyer). Never trust

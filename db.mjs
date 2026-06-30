@@ -332,6 +332,26 @@ export async function initDB() {
   // Browse the open resale market: listed bookings only.
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_bookings_resale_listed ON bookings(resale_listed) WHERE resale_listed = true`);
 
+  // ── Plain wallet sends (P3) ──────────────────────────────────────────────
+  // Audit trail for "send funds out of your ARIA wallet" — there's no booking
+  // or escrow object backing this, so unlike every other money-moving table
+  // here this one isn't read back to drive app state. It exists purely so
+  // support can answer "I sent X and it's not showing up" by looking up the
+  // digest, the same way pii_access_log exists for access (not state) audit.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS wallet_sends (
+      id              SERIAL PRIMARY KEY,
+      from_address    TEXT NOT NULL,
+      to_address      TEXT NOT NULL,
+      amount_mist     TEXT NOT NULL,
+      tx_digest       TEXT,
+      created_at      TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_wallet_sends_from_address ON wallet_sends(from_address)`);
+  // Replay guard: one row per on-chain tx (partial — NULLs don't collide).
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_sends_tx_digest ON wallet_sends(tx_digest) WHERE tx_digest IS NOT NULL`);
+
   // ── Phase 3a: host-created listings (the `properties` table goes live) ───
   // Until now this table was scaffolded but never written to — the 6 demo
   // properties live in catalog.mjs instead (see its header comment). This is
