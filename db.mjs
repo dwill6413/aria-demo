@@ -5,7 +5,10 @@ if (!process.env.DATABASE_URL) console.warn('WARNING: DATABASE_URL not set');
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
+  // DATABASE_URL uses Railway's private internal network (postgres.railway.internal)
+  // — traffic never leaves Railway's network so SSL is unnecessary.
+  // Falls back to strict SSL for any non-internal connection string (e.g. mainnet external DB).
+  ssl: process.env.DATABASE_URL?.includes('.railway.internal') ? false : { rejectUnauthorized: true }
 });
 
 export async function initDB() {
