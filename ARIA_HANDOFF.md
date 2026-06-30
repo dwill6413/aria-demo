@@ -976,8 +976,10 @@ Railway runs **Node 22** (`nixpacks.toml`: `nodejs_22`). Required by
    `refund_payment` in `escrow.move`) holds rental+fee+tax and splits it 3-way on
    release. Wired into `bookings.mjs`/`server.mjs`. ARIA fee is 5%; Stripe
    Connect-style split for the card path is still not built.
-8. `@mysten/deepbook-v3` may still use JSON-RPC internally for price/liquidity
-   reads — not yet checked against the July 31 2026 sunset (read-only, lower priority).
+8. `@mysten/deepbook-v3` is in `package.json` but **not imported anywhere in the codebase**
+   (confirmed June 30, 2026). `deepbook.mjs` uses a plain `fetch` to the DeepBook indexer
+   REST API — no SDK, no JSON-RPC. **No July 31 2026 sunset exposure.** The package can
+   stay for when the USDC→SuiUSD swap feature is built at mainnet.
 
 ---
 
