@@ -1566,11 +1566,18 @@ fastify.put('/host/property/:propertyId/access-instructions', {
   const propertyId = Number(request.params.propertyId);
   const { checkInType, instructions } = request.body;
 
-  // Verify this host owns the property.
+  // Verify this host owns the property (catalog or DB).
   const pr = await pool.query('SELECT host_address FROM properties WHERE id = $1', [propertyId]);
-  if (!pr.rows[0]) return reply.code(404).send({ error: 'Property not found' });
-  if (normalizeAddr(pr.rows[0].host_address) !== normalizeAddr(session.suiAddress))
+  if (!pr.rows[0]) {
+    // Catalog property — use canManageProperty which resolves both sources.
+    const canManage = await canManageProperty(session, propertyId);
+    if (!canManage) return reply.code(403).send({ error: 'You do not own this property' });
+    // Catalog properties have no DB row to UPDATE — insert one to persist check-in settings.
+    const catalogProp = await getProperty(propertyId, fastify.log);
+    if (!catalogProp) return reply.code(404).send({ error: 'Property not found' });
+  } else if (normalizeAddr(pr.rows[0].host_address) !== normalizeAddr(session.suiAddress)) {
     return reply.code(403).send({ error: 'You do not own this property' });
+  }
 
   let encrypted = null;
   if (checkInType === 'self' && instructions?.trim()) {
@@ -1583,9 +1590,12 @@ fastify.put('/host/property/:propertyId/access-instructions', {
   }
 
   try {
+    // UPSERT — catalog properties may not have a DB row yet; INSERT one to persist settings.
     await pool.query(
-      `UPDATE properties SET check_in_type=$1, access_instructions_encrypted=$2 WHERE id=$3`,
-      [checkInType, encrypted, propertyId]
+      `INSERT INTO properties (id, host_address, check_in_type, access_instructions_encrypted, title, location, price_per_night, bedrooms, bathrooms, max_guests)
+       VALUES ($3, $4, $1, $2, '', '', 0, 0, 0, 0)
+       ON CONFLICT (id) DO UPDATE SET check_in_type=$1, access_instructions_encrypted=$2`,
+      [checkInType, encrypted, propertyId, session.suiAddress]
     );
   } catch (err) {
     fastify.log.error({ err, propertyId }, 'access-instructions: update failed');
@@ -1604,7 +1614,14 @@ fastify.get('/host/property/:propertyId/access-instructions', async (request, re
 
   const propertyId = Number(request.params.propertyId);
   const pr = await pool.query('SELECT host_address, check_in_type, access_instructions_encrypted FROM properties WHERE id=$1', [propertyId]);
-  if (!pr.rows[0]) return reply.code(404).send({ error: 'Property not found' });
+  // Catalog properties don't exist in the properties table — fall back to canManageProperty
+  // which resolves hostAddress for both catalog and DB properties.
+  if (!pr.rows[0]) {
+    const canManage = await canManageProperty(session, propertyId);
+    if (!canManage) return reply.code(403).send({ error: 'You do not own this property' });
+    // Catalog property with no DB row — return defaults (no saved instructions yet)
+    return { checkInType: 'front_desk', instructions: '' };
+  }
   if (normalizeAddr(pr.rows[0].host_address) !== normalizeAddr(session.suiAddress))
     return reply.code(403).send({ error: 'You do not own this property' });
 
