@@ -879,15 +879,16 @@ Railway runs **Node 22** (`nixpacks.toml`: `nodejs_22`). Required by
 2. Frontend tax/price duplication — `catalog.mjs` centralizes backend; frontend copy remains.
 3. Stripe: create-intent only; webhooks missing.
 4. Error handling inconsistent in some routes.
-5. No automated backend/frontend tests beyond `escrow.test.mjs` (39 tests) and
-   the Move suite (28 tests). No frontend tests.
+5. No automated backend/frontend tests beyond `escrow.test.mjs` (**78 passing**,
+   per `ARIA_ROADMAP.md` §5 — count above is stale) and the Move suite
+   (**52 tests**). No frontend tests.
 6. `hosts` table unused (legacy). `zod` adopted (`validation.mjs`).
    *(`@anthropic-ai/sdk` was removed June 18, 2026 — no longer a dependency.)*
-7. **Fee collection/routing mechanism — zero implementation.** ARIA's revenue
-   (booking fee) is entirely separate from the escrow (guest security deposit) —
-   no mechanism exists to collect or route ARIA's cut. Needs design for both
-   Stripe (Connect-style split) and SuiUSD on-chain (PTB split between host and
-   ARIA, similar to `resolve_dispute`'s split logic). **Top remaining build item.**
+7. ~~Fee collection/routing mechanism — zero implementation.~~ **Done, live since
+   June 23, 2026.** `BookingPaymentEscrow` (`create_payment_escrow`/`release_payment`/
+   `refund_payment` in `escrow.move`) holds rental+fee+tax and splits it 3-way on
+   release. Wired into `bookings.mjs`/`server.mjs`. ARIA fee is 5%; Stripe
+   Connect-style split for the card path is still not built.
 8. `@mysten/deepbook-v3` may still use JSON-RPC internally for price/liquidity
    reads — not yet checked against the July 31 2026 sunset (read-only, lower priority).
 
