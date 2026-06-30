@@ -1,9 +1,46 @@
 # ARIA — Product Roadmap & AI Handoff Document
-**Version:** 2.29 | **Updated:** June 30, 2026
+**Version:** 2.30 | **Updated:** June 30, 2026
 **Purpose:** Complete handoff for an AI assistant continuing ARIA development.
 Read this entire document before writing any code.
 
-> **June 30, 2026 (LATEST — abandoned-booking sweep shipped):** Tech Debt
+> **June 30, 2026 (LATEST — wallet balance, zkLogin send, and self check-in shipped):**
+> Three wallet/UX features shipped and verified end-to-end in-browser. No Move contract changes.
+>
+> **P3 — Wallet balance display.** `lib/useWalletBalance.js` hook polls `GET /wallet/balance`
+> every 30s. Balance shown in header of all authenticated pages with low-balance faucet link
+> and manual refresh. Verified: live SUI balance displays correctly.
+>
+> **P3 — zkLogin plain-SUI send.** Guests can send SUI to any address from the ARIA UI
+> (homepage + bookings page) without any external wallet extension. Uses `coinWithBalance` +
+> `tx.transferObjects` on the backend; `signTransactionWithZkLogin` + `submitSignedTransaction`
+> on the frontend. Full non-custodial build→sign→submit→confirm with on-chain balance-change
+> verification. Audit log in `wallet_sends` table. Verified end-to-end in-browser.
+>
+> **P4 — Self check-in with encrypted access instructions.** Host-configurable per property:
+> "Front Desk" (existing BookingPass QR flow) or "Self Check-in" (encrypted access instructions
+> revealed at check-in time). Key details:
+> - AES-256-GCM server-side encryption (Node.js built-in crypto, `CHECKIN_KEY` env var).
+>   Deliberately NOT Walrus Seal — access instructions are operational data, not PII;
+>   server-mediated trust is appropriate and far simpler.
+> - Time gate: 2h before check-in date through checkout + 24h.
+> - Idempotent check-in: guests can re-open instructions anytime during their stay
+>   ("✅ Checked In — View Instructions" button).
+> - Host bookings view shows "✅ Checked In · [timestamp]" badge per booking.
+> - New DB columns: `properties.check_in_type`, `properties.access_instructions_encrypted`,
+>   `bookings.checked_in`, `bookings.checked_in_at`.
+> - New routes: `PUT/GET /host/property/:id/access-instructions`, `POST /booking/:ref/checkin`.
+> - New env var: `CHECKIN_KEY` (already set in Railway).
+> - Verified end-to-end in-browser.
+>
+> **Also fixed this session:** CORS `PUT` method was missing from `@fastify/cors` config
+> (blocked the access-instructions save). Catalog properties now show check-in settings
+> block (fixed `loadCheckInSettings` to seed defaults before fetch; removed `source === 'db'`
+> guard). Host `/bookings/all` response now includes `checkedIn`/`checkedInAt` fields.
+>
+> **Files touched:** `escrow.mjs`, `db.mjs`, `validation.mjs`, `server.mjs`,
+> `pages/bookings.jsx`, `pages/host.jsx`, `pages/index.jsx`, `lib/useWalletBalance.js` (new).
+
+> **June 30, 2026 (abandoned-booking sweep shipped):** Tech Debt
 > "Unsigned-booking trap" fix #2 (the open item) is done: `createBooking`'s
 > availability check only ever excluded `payment_status='cancelled'` — it had
 > no time dimension — so a guest who started checkout and never signed the

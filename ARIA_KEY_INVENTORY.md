@@ -75,6 +75,22 @@ load) in Railway environment variables.
 
 ---
 
+## 7. Check-in encryption key (`CHECKIN_KEY`)
+
+| | |
+|---|---|
+| Type | **Symmetric AES-256-GCM key** — NOT a Sui keypair. 64 hex characters (32 bytes). |
+| Status | **Active — set in Railway (June 30, 2026).** |
+| Purpose | Encrypts/decrypts host-provided self check-in access instructions (door codes, wifi passwords, entry notes) stored in `properties.access_instructions_encrypted`. |
+| Stored format | `iv_hex:ciphertext_hex:authtag_hex` — each field is separately hex-encoded; authentication tag provides tamper detection. |
+| Who uses it | Backend only (`encryptInstructions` / `decryptInstructions` helpers in `server.mjs`). Never sent to the frontend. |
+| Why server-side (not Walrus Seal) | Access instructions are operational data, not PII. Server-mediated AES-256-GCM is appropriate — equivalent to how standard hotel PMS systems protect door codes. Seal would require a Move contract upgrade (`seal_approve_checkin`), on-chain key management, and Seal network dependency for what amounts to a door code. |
+| Risk if leaked | An attacker with the key AND database access could decrypt stored access instructions. Rotate the key in Railway and re-save all host instructions if compromised. The key does NOT grant any Sui signing capability. |
+| Rotation | Generate a new 64-char hex key, update `CHECKIN_KEY` in Railway, then have each host re-save their access instructions (re-encryption happens on save). |
+| Generate new key | `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
+
+---
+
 ## Not ARIA-controlled keys (for context, not in your vault)
 
 - **Guest wallets** — each guest signs `create_escrow` with their own zkLogin-derived wallet. ARIA never holds or sees their private key.
@@ -93,7 +109,7 @@ load) in Railway environment variables.
 
 ---
 
-*Created June 17, 2026 (P2). Last updated June 25, 2026: deployer key #1 signed the
+*Created June 17, 2026 (P2). Last updated June 30, 2026: added §7 `CHECKIN_KEY` — AES-256-GCM symmetric key for self check-in access instruction encryption (P4). Prior June 25, 2026: deployer key #1 signed the
 **v5** (Phase 2a BookingPass), **v6** (Phase 2c resale market), and **v7** (pre-mainnet
 u128 hardening) upgrades; UpgradeCap now at version 7. No keys rotated or generated for
 v5/v6/v7 — same deployer, auto-release, arbitrator, and treasury addresses as before. (Prior June 23, 2026: arbitrator key #4

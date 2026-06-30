@@ -1,7 +1,82 @@
 # ARIA — Technical Handoff Document
-**Version:** 4.30 | **Updated:** June 29, 2026
+**Version:** 4.31 | **Updated:** June 30, 2026
 
-> **June 29, 2026 (LATEST — catalog/db parity audit + fixes, all 4 gaps closed):**
+> **June 30, 2026 (LATEST — wallet balance display, zkLogin send, and self check-in with encrypted access instructions):**
+> Three features shipped and verified end-to-end in-browser this session. No Move contract changes.
+>
+> **1. Wallet balance display (P3 — wallet UX).** Added `lib/useWalletBalance.js` hook
+> that polls `GET /wallet/balance` every 30 seconds and on-demand. Balance (in SUI) is
+> displayed in the header of all authenticated pages (`index.jsx`, `bookings.jsx`,
+> `host.jsx`, `listing/[id].jsx`) with a low-balance faucet link and a ↻ refresh button.
+>
+> **2. zkLogin plain-SUI send (P3 — wallet UX).** Guests can now send SUI to any address
+> directly from the ARIA UI — no external Sui Wallet extension required. The flow reuses
+> zkLogin's existing browser-side signing authority:
+> - Backend (`escrow.mjs`): `buildSendTransaction` + `verifySendTransaction` exports.
+>   Uses `coinWithBalance({ balance: BigInt(amountMist) })` + `tx.transferObjects`.
+>   `verifySendTransaction` reads `balanceChanges` from `getTransaction` to confirm
+>   recipient received exactly the declared amount.
+> - Backend (`server.mjs`): `POST /wallet/send/build` + `POST /wallet/send/confirm` routes.
+>   Uses `isValidSuiAddress` + `parseToMist` for safe validation. Logs to `wallet_sends`
+>   audit table.
+> - Frontend: "Send" button + full Send modal added to both `pages/bookings.jsx` and
+>   `pages/index.jsx` (homepage is where most users send from). Same non-custodial
+>   build→sign→submit→confirm pattern as escrow. Explorer link on success.
+> - DB (`db.mjs`): `wallet_sends` table (`from_address`, `to_address`, `amount_mist`,
+>   `tx_digest`, `created_at`) with unique index on `tx_digest`.
+> - Validation (`validation.mjs`): `walletSendBuildSchema`, `walletSendConfirmSchema`.
+> - CORS: `PUT` added to allowed methods (`server.mjs` `@fastify/cors` config) —
+>   was missing, blocked the access-instructions save route.
+> - **Verified end-to-end in-browser (Jun 30 2026).**
+>
+> **3. Guest self check-in with AES-256-GCM encrypted access instructions (P4 — check-in UX).**
+> Hosts can now choose between two check-in types per property. Guests get a time-gated
+> Check In button that either reveals self check-in access instructions (door codes, wifi,
+> etc.) or opens the existing BookingPass QR flow.
+>
+> *Host side:*
+> - DB (`db.mjs`): `properties.check_in_type TEXT DEFAULT 'front_desk'`,
+>   `properties.access_instructions_encrypted TEXT`, `bookings.checked_in BOOLEAN DEFAULT false`,
+>   `bookings.checked_in_at TIMESTAMPTZ`.
+> - Backend (`server.mjs`): `PUT /host/property/:id/access-instructions` (encrypt + store),
+>   `GET /host/property/:id/access-instructions` (decrypt + return, ownership-checked).
+>   AES-256-GCM via Node.js built-in `crypto`. Key = `CHECKIN_KEY` env var (64 hex chars / 32 bytes).
+>   Stored format: `iv_hex:ciphertext_hex:authtag_hex`.
+> - Frontend (`pages/host.jsx`): per-property CHECK-IN TYPE toggle (Front Desk / Self Check-in)
+>   + textarea for instructions when Self selected + Save button. Lazy-loads existing settings
+>   on first card render. Fixed: `loadCheckInSettings` now seeds default state before fetch
+>   so the block renders for all properties (including catalog properties), not just DB-sourced ones.
+>   Fixed: removed `source === 'db'` guard — all listed properties get the check-in settings block.
+>
+> *Guest side:*
+> - Backend (`server.mjs`): `POST /booking/:bookingRef/checkin` — verifies session,
+>   wallet ownership, booking active, deposit held. Time gate: opens 2 hours before
+>   check-in date (midnight UTC), closes 24h after checkout. Returns decrypted instructions
+>   for `self` type; returns `{ checkInType: 'front_desk' }` for front-desk (frontend
+>   opens existing BookingPass). Marks `checked_in=true` idempotently (guests can re-open).
+> - Frontend (`pages/bookings.jsx`): "🔑 Check In" button appears within the check-in
+>   window on active bookings. Self check-in: shows instructions modal with a "Got it"
+>   button. Front-desk: opens existing BookingPass QR modal. After first check-in, badge
+>   changes to "✅ Checked In — View Instructions" (clickable — re-fetches instructions
+>   so guests don't need to screenshot). Host bookings view also shows "✅ Checked In ·
+>   [timestamp]" badge per booking.
+> - New env var: `CHECKIN_KEY` — must be 64 hex chars (32 bytes). Generate:
+>   `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
+>   Add to Railway. Intentionally NOT using Walrus Seal — server-side encryption is
+>   appropriate here (access instructions are operational, not PII; one key, all properties;
+>   backend-mediated trust model equivalent to standard hotel systems).
+> - Validation (`validation.mjs`): `accessInstructionsSchema`.
+> - **Verified end-to-end in-browser (Jun 30 2026):** host saved self check-in instructions,
+>   guest checked in, modal showed decrypted door code / wifi. Re-open flow verified.
+>   Host bookings view shows checked-in badge with timestamp.
+>
+> **Files touched this session:** `escrow.mjs`, `db.mjs`, `validation.mjs`, `server.mjs`,
+> `pages/bookings.jsx`, `pages/host.jsx`, `pages/index.jsx`, `lib/useWalletBalance.js` (new).
+> **Committed and pushed to `origin/main`** (commits `05cf775`, `0717df9`, `8ac5809`,
+> and several follow-up fixes for CORS, catalog property rendering, and host check-in badge).
+> Railway/Vercel auto-deploy from `main`.
+
+> **June 29, 2026 (catalog/db parity audit + fixes, all 4 gaps closed):**
 > Off-chain only, no new Move package. Prompted by a direct ask: "make sure any
 > imported property listings by a host inherit all functionality as our hard
 > coded test properties — no gaps." A read-only audit (cross-checked manually,
@@ -358,14 +433,20 @@ For the fee/payment-routing design see **`ARIA_FEE_DESIGN.md`**.
 
 ---
 
-## Database Tables (10)
+## Database Tables (11)
 
 `properties`, `bookings`, `reviews`, `messages`, `hosts` (legacy/unused),
 `tax_remittances`, `host_profiles`, `sessions`, `property_ical_feeds`,
-plus `escrow_object_id TEXT` column on `bookings`.
+`guest_identity_access_log`, `wallet_sends`.
+
+Key columns added June 30, 2026:
+- `properties.check_in_type TEXT DEFAULT 'front_desk'`
+- `properties.access_instructions_encrypted TEXT`
+- `bookings.checked_in BOOLEAN DEFAULT false`
+- `bookings.checked_in_at TIMESTAMPTZ`
 
 `initDB()` in `db.mjs` creates all tables idempotently (`IF NOT EXISTS`) and adds
-the `escrow_object_id` column via `ALTER TABLE IF NOT EXISTS`.
+columns via `ALTER TABLE … ADD COLUMN IF NOT EXISTS`.
 
 ---
 
@@ -855,9 +936,10 @@ Railway runs **Node 22** (`nixpacks.toml`: `nodejs_22`). Required by
 | `nixpacks.toml` | Railway build config | Node 22 required |
 | `contracts/aria_escrow/` | Move smart contract | escrow.move + **28 tests** (25 prior + 3 added for `finalize_claim`) |
 | `pages/ai.jsx` | AI chat UI | HTML-escaped output |
-| `pages/bookings.jsx` | Guest dashboard | Full wallet address + copy button |
-| `pages/host.jsx` | Host dashboard | Full wallet address + copy button |
-| `pages/index.jsx` | Homepage + booking modal | Full wallet address + copy button |
+| `lib/useWalletBalance.js` | Wallet balance hook | Polls `GET /wallet/balance` every 30s; used by all authenticated pages |
+| `pages/bookings.jsx` | Guest dashboard | Balance display, Send modal, Check In button + instructions modal |
+| `pages/host.jsx` | Host dashboard | Balance display, check-in type settings per property card, checked-in badge on bookings |
+| `pages/index.jsx` | Homepage + booking modal | Balance display, Send modal |
 
 ---
 
@@ -964,6 +1046,15 @@ ABANDONED_BOOKING_SWEEP_INTERVAL_MS = <optional, default 300000 (5 min) — swee
 REQUIRE_GUEST_VERIFICATION = <Phase 2e — 'true' to require a guest_verifications
                            row before booking (both REST + AI). Default off so it
                            stays dormant until the /profile UI is live + tested.>
+CHECKIN_KEY             = <64 hex chars (32 bytes) — AES-256-GCM key for encrypting
+                           host access instructions (door codes, wifi, etc.).
+                           Added June 30, 2026. Generate:
+                           node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+                           Set in Railway. If unset, PUT /host/property/:id/access-instructions
+                           throws "CHECKIN_KEY must be 64 hex chars".
+                           One key for all properties/hosts — server-mediated trust model,
+                           intentionally not using Walrus Seal (appropriate for non-PII
+                           operational data). ALREADY SET in Railway (June 30, 2026).>
 
 Vercel (frontend), Phase 2:
 NEXT_PUBLIC_ESCROW_PACKAGE_ID = <the v4 package id once published — used by
