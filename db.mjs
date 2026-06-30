@@ -356,11 +356,21 @@ export async function initDB() {
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_sends_tx_digest ON wallet_sends(tx_digest) WHERE tx_digest IS NOT NULL`);
 
   // ── Self check-in (P4) ──────────────────────────────────────────────────────
-  // check_in_type: 'front_desk' (existing BookingPass QR flow) or 'self'
-  // (host provides encrypted access instructions revealed at check-in time).
-  // access_instructions_encrypted: AES-256-GCM blob, key from CHECKIN_KEY env.
+  // property_checkin_settings: dedicated table for check-in type + encrypted
+  // access instructions. Covers BOTH catalog (ids 1-6) and host-imported DB
+  // properties without creating shadow rows in the properties table.
+  // The columns on `properties` (check_in_type, access_instructions_encrypted)
+  // are kept for backward compatibility but are no longer written by new code.
   await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS check_in_type TEXT DEFAULT 'front_desk'`);
   await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS access_instructions_encrypted TEXT`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS property_checkin_settings (
+      property_id INTEGER PRIMARY KEY,
+      check_in_type TEXT NOT NULL DEFAULT 'front_desk',
+      access_instructions_encrypted TEXT,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
   // checked_in: flipped to true the first time the guest calls /booking/:ref/checkin
   // successfully. checked_in_at records the timestamp for support/audit.
   await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS checked_in BOOLEAN DEFAULT false`);

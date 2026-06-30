@@ -1567,17 +1567,10 @@ fastify.put('/host/property/:propertyId/access-instructions', {
   const { checkInType, instructions } = request.body;
 
   // Verify this host owns the property (catalog or DB).
-  const pr = await pool.query('SELECT host_address FROM properties WHERE id = $1', [propertyId]);
-  if (!pr.rows[0]) {
-    // Catalog property — use canManageProperty which resolves both sources.
-    const canManage = await canManageProperty(session, propertyId);
-    if (!canManage) return reply.code(403).send({ error: 'You do not own this property' });
-    // Catalog properties have no DB row to UPDATE — insert one to persist check-in settings.
-    const catalogProp = await getProperty(propertyId, fastify.log);
-    if (!catalogProp) return reply.code(404).send({ error: 'Property not found' });
-  } else if (normalizeAddr(pr.rows[0].host_address) !== normalizeAddr(session.suiAddress)) {
+  if (!(await canManageProperty(session, propertyId)))
     return reply.code(403).send({ error: 'You do not own this property' });
-  }
+  const prop = await getProperty(propertyId, fastify.log);
+  if (!prop) return reply.code(404).send({ error: 'Property not found' });
 
   let encrypted = null;
   if (checkInType === 'self' && instructions?.trim()) {
@@ -1590,16 +1583,11 @@ fastify.put('/host/property/:propertyId/access-instructions', {
   }
 
   try {
-    const catalogProp = await getProperty(propertyId, fastify.log);
-    const result = await pool.query(
-      `INSERT INTO properties (id, host_address, title, location, price, beds, baths, check_in_type, access_instructions_encrypted)
-       VALUES ($3, $4, $5, $6, $7, $8, $9, $1, $2)
-       ON CONFLICT (id) DO UPDATE SET check_in_type=$1, access_instructions_encrypted=$2`,
-      [
-        checkInType, encrypted, propertyId, session.suiAddress,
-        catalogProp?.title || '', catalogProp?.location || '',
-        catalogProp?.price || 0, catalogProp?.beds || 1, catalogProp?.baths || 1
-      ]
+    await pool.query(
+      `INSERT INTO property_checkin_settings (property_id, check_in_type, access_instructions_encrypted, updated_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (property_id) DO UPDATE SET check_in_type=$2, access_instructions_encrypted=$3, updated_at=NOW()`,
+      [propertyId, checkInType, encrypted]
     );
   } catch (err) {
     fastify.log.error({ err, propertyId }, 'access-instructions: update failed');
@@ -1617,25 +1605,22 @@ fastify.get('/host/property/:propertyId/access-instructions', async (request, re
   if (!(await isHost(session))) return reply.code(403).send({ error: 'Host access required' });
 
   const propertyId = Number(request.params.propertyId);
-  const pr = await pool.query('SELECT host_address, check_in_type, access_instructions_encrypted FROM properties WHERE id=$1', [propertyId]);
-  // Catalog properties don't exist in the properties table — fall back to canManageProperty
-  // which resolves hostAddress for both catalog and DB properties.
-  if (!pr.rows[0]) {
-    const canManage = await canManageProperty(session, propertyId);
-    if (!canManage) return reply.code(403).send({ error: 'You do not own this property' });
-    // Catalog property with no DB row — return defaults (no saved instructions yet)
-    return { checkInType: 'front_desk', instructions: '' };
-  }
-  if (normalizeAddr(pr.rows[0].host_address) !== normalizeAddr(session.suiAddress))
+  if (!(await canManageProperty(session, propertyId)))
     return reply.code(403).send({ error: 'You do not own this property' });
+  const prop = await getProperty(propertyId, fastify.log);
+  if (!prop) return reply.code(404).send({ error: 'Property not found' });
 
-  const row = pr.rows[0];
+  const cs = await pool.query(
+    `SELECT check_in_type, access_instructions_encrypted FROM property_checkin_settings WHERE property_id=$1`,
+    [propertyId]
+  );
+  const row = cs.rows[0];
   let instructions = '';
-  if (row.access_instructions_encrypted) {
+  if (row?.access_instructions_encrypted) {
     try { instructions = decryptInstructions(row.access_instructions_encrypted); }
     catch (err) { fastify.log.error({ err, propertyId }, 'access-instructions: decryption failed'); }
   }
-  return { checkInType: row.check_in_type || 'front_desk', instructions };
+  return { checkInType: row?.check_in_type || 'front_desk', instructions };
 });
 
 // POST /booking/:bookingRef/checkin
@@ -1650,9 +1635,9 @@ fastify.post('/booking/:bookingRef/checkin', {
 
   const { bookingRef } = request.params;
   const bk = await pool.query(
-    `SELECT b.*, p.check_in_type, p.access_instructions_encrypted
+    `SELECT b.*, COALESCE(cs.check_in_type, 'front_desk') AS check_in_type, cs.access_instructions_encrypted
      FROM bookings b
-     LEFT JOIN properties p ON p.id = b.property_id
+     LEFT JOIN property_checkin_settings cs ON cs.property_id = b.property_id
      WHERE b.booking_ref = $1`, [bookingRef]
   );
   const booking = bk.rows[0];
