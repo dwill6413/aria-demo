@@ -303,12 +303,24 @@ export async function buildEscrowTransaction(bookingRef, guestAddr, hostAddr, de
 //   - amount is symbolic (depositToMist's floor-at-1) — meaningless here,
 //     since seal_approve never inspects amount, status, or expiry, only
 //     guest/host addresses.
-//   - expiry_ms is set ~1 year out so this object is never a realistic
-//     auto_release candidate — moot anyway since auto_release is only ever
-//     invoked by this codebase against escrow_object_id / payment_escrow_
-//     object_id (see guardedAutoReleaseSweep in server.mjs), and this id is
-//     deliberately never written to either column — only to the dedicated
-//     identity_attestation_object_id (db.mjs).
+//   - expiry_ms: the contract hard-caps this at MAX_EXPIRY_MS (escrow.move —
+//     2_592_000_000ms = exactly 30 days; create_escrow aborts with
+//     EExpiryTooFar past that, confirmed live testnet during this feature's
+//     first test — a 365-day attempt failed on-chain and this function
+//     correctly returned null rather than writing any bad state). Set to 29
+//     days here (a day of margin under the cap). This means Stripe-booking
+//     identity access is NOT indefinite the way a SuiUSD booking's is —
+//     after ~29 days this object becomes a permissionless auto_release
+//     target for anyone, at which point seal_approve has nothing left to
+//     check against. Acceptable for the testnet demo; before mainnet,
+//     revisit with either a renewal sweep (re-create on expiry) or a
+//     lazy-create fallback in /host/guest-identity itself.
+//   - moot regardless: auto_release is only ever invoked by this codebase
+//     against escrow_object_id / payment_escrow_object_id (see
+//     guardedAutoReleaseSweep in server.mjs), and this id is deliberately
+//     never written to either column — only to the dedicated
+//     identity_attestation_object_id (db.mjs) — so ARIA's own sweep will
+//     never touch it either way.
 //   - callers MUST treat a null return as "no identity access for this
 //     booking" and must never fall back to an off-chain authorization path.
 export async function createIdentityAttestationEscrow(bookingRef, guestAddr, hostAddr, logger = console) {
@@ -317,7 +329,7 @@ export async function createIdentityAttestationEscrow(bookingRef, guestAddr, hos
   const mod = process.env.ESCROW_MODULE_NAME || 'escrow';
   try {
     const arbitrator = process.env.ARIA_ARBITRATOR_ADDRESS || hostAddr;
-    const expiryMs = BigInt(Date.now()) + 365n * 24n * 60n * 60n * 1000n; // ~1 year — see isolation notes above
+    const expiryMs = BigInt(Date.now()) + 29n * 24n * 60n * 60n * 1000n; // 29 days — contract caps at 30 (MAX_EXPIRY_MS), see notes above
     const attestationMist = depositToMist(1); // trivial, symbolic testnet amount
 
     const tx = new Transaction();
