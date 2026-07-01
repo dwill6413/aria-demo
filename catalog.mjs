@@ -15,23 +15,31 @@
 // bookings.mjs referred to — the `properties` DB table was scaffolded for a
 // future "hosts add their own listings" feature but is still empty (see
 // ARIA_ROADMAP.md tech debt backlog), so for these fixed demo properties the
-// host mapping lives here instead of a DB join. null means "no real host
-// configured yet for this demo property" — bookings.mjs's
-// getPropertyHostAddress() falls back to the auto-release key's address in
-// that case, same placeholder behavior as before this field existed. Once a
-// real host applies via /host/apply and is approved, set their sui_address
-// here so createBooking looks up their host_profiles.payout_sui_address.
+// host mapping lives here instead of a DB join. Now wired to
+// OFFICIAL_HOST_ADDRESS below (was null while no real host had been approved
+// yet) — bookings.mjs's getPropertyHostAddress() prefers that host's
+// host_profiles.payout_sui_address when one exists, falling back to
+// OFFICIAL_HOST_ADDRESS itself otherwise; only an unset (null) hostAddress
+// falls back further to the auto-release key placeholder.
 // maxGuests mirrors each property's bed count × 2 (matches PROPERTY_DISPLAY's
 // beds in pages/*.jsx) — the authoritative occupancy cap createBooking()
 // enforces server-side, since the cosmetic beds/baths fields themselves only
 // ever lived client-side for these 6 fixed demo properties.
+// The 6 fixed demo properties all belong to the official operator account
+// (cwilliams36092@gmail.com's zkLogin wallet) — set once here so
+// canManageProperty/getPropertyHostAddress attribute them correctly instead
+// of falling back to the auto-release key placeholder, and so a second
+// (test) account approved as a host via /host/apply never appears to own
+// them (see pages/host.jsx's refreshProperties ownership filter).
+const OFFICIAL_HOST_ADDRESS = '0x528819eb5fac69c3c480f2f3fc85a2843ed93a54d8f8467e269964a16f949659';
+
 export const PROPERTIES = {
-  1: { title: 'Oceanfront Villa',    price: 285, hostAddress: null, maxGuests: 8 },
-  2: { title: 'Downtown Loft',       price: 145, hostAddress: null, maxGuests: 4 },
-  3: { title: 'Mountain Cabin',      price: 195, hostAddress: null, maxGuests: 6 },
-  4: { title: 'Desert Retreat',      price: 225, hostAddress: null, maxGuests: 6 },
-  5: { title: 'Lake House',          price: 320, hostAddress: null, maxGuests: 10 },
-  6: { title: 'Historic Brownstone', price: 175, hostAddress: null, maxGuests: 4 },
+  1: { title: 'Oceanfront Villa',    price: 285, hostAddress: OFFICIAL_HOST_ADDRESS, maxGuests: 8 },
+  2: { title: 'Downtown Loft',       price: 145, hostAddress: OFFICIAL_HOST_ADDRESS, maxGuests: 4 },
+  3: { title: 'Mountain Cabin',      price: 195, hostAddress: OFFICIAL_HOST_ADDRESS, maxGuests: 6 },
+  4: { title: 'Desert Retreat',      price: 225, hostAddress: OFFICIAL_HOST_ADDRESS, maxGuests: 6 },
+  5: { title: 'Lake House',          price: 320, hostAddress: OFFICIAL_HOST_ADDRESS, maxGuests: 10 },
+  6: { title: 'Historic Brownstone', price: 175, hostAddress: OFFICIAL_HOST_ADDRESS, maxGuests: 4 },
 };
 
 export const JURISDICTION_TAX_RATES = {

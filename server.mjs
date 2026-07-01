@@ -2554,6 +2554,34 @@ fastify.post('/host/approve', async (request, reply) => {
   }
 });
 
+// POST /host/revoke — superadmin-only counterpart to /host/approve. Sets an
+// approved (or pending) host_profiles row back to 'revoked' so checkDbHost()
+// (and therefore isHost()) stops passing for that sui_address — used e.g. to
+// undo a test/demo account that was approved for testing but should never
+// have counted as a real host. Distinct status value (not 'rejected', which
+// this codebase doesn't otherwise use) so it's clear in the applications list
+// this was a deliberate after-the-fact revocation, not a rejected application.
+fastify.post('/host/revoke', async (request, reply) => {
+  const session = await getAuthedSession(request, reply);
+  if (!session) return;
+  if (!HOST_ADDRESSES.includes(session.email.toLowerCase()))
+    return reply.code(403).send({ error: 'Superadmin access required' });
+
+  const { suiAddress } = request.body;
+  if (!suiAddress) return reply.code(400).send({ error: 'suiAddress is required' });
+
+  try {
+    const result = await pool.query(
+      `UPDATE host_profiles SET status='revoked', updated_at=NOW() WHERE sui_address=$1 RETURNING id, name, email`,
+      [suiAddress]
+    );
+    if (result.rows.length === 0) return reply.code(404).send({ error: 'Host profile not found' });
+    return { success: true, message: `Host access revoked for ${result.rows[0].email}` };
+  } catch (err) {
+    return reply.code(500).send({ error: 'Failed to revoke host' });
+  }
+});
+
 fastify.get('/host/applications', async (request, reply) => {
   const session = await getAuthedSession(request, reply);
   if (!session) return;

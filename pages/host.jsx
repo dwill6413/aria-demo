@@ -5,6 +5,17 @@ import { useWalletBalance } from '../lib/useWalletBalance';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
+// Mirrors escrow.mjs's normalizeAddr — lets us compare a property's
+// hostAddress against the logged-in host's own Sui address regardless of
+// case or leading-zero padding differences between the two sources.
+const normalizeAddr = (a) => {
+  if (!a) return '';
+  let h = String(a).toLowerCase();
+  if (!h.startsWith('0x')) h = '0x' + h;
+  const body = h.slice(2).replace(/^0+/, '') || '0';
+  return '0x' + body;
+};
+
 const fmtDate = (d) => new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
 const fmtDay = (d) => {
@@ -169,7 +180,7 @@ export default function Host() {
         // Matching by id alone would overlay the wrong demo property's
         // location/beds/baths/tag/image onto the new listing.
         const fixed = p.source === 'catalog' ? PROPERTY_DISPLAY.find(f => f.id === p.id) : null;
-        if (fixed) return { ...fixed, title: p.title, price: p.price, source: 'catalog' };
+        if (fixed) return { ...fixed, title: p.title, price: p.price, source: 'catalog', hostAddress: p.hostAddress };
         return {
           id: p.id, title: p.title, price: p.price, source: 'db',
           location: p.location || 'Location not set',
@@ -181,6 +192,7 @@ export default function Host() {
           description: p.description || '',
           taxRate: p.taxRate ?? 0.08,
           taxJurisdiction: p.taxName || 'Unknown',
+          hostAddress: p.hostAddress,
         };
       });
       setProperties(merged);
@@ -433,6 +445,25 @@ export default function Host() {
     setApprovingId(null);
   };
 
+  const handleRevoke = async (suiAddress, name) => {
+    if (!confirm(`Revoke host access for ${name}? They will lose access to the Host Dashboard immediately.`)) return;
+    setApprovingId(suiAddress);
+    try {
+      const res = await authFetch(`${API}/host/revoke`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ suiAddress })
+      });
+      const data = await res.json();
+      if (data.success) {
+        await loadApplications();
+      } else {
+        alert(data.error || 'Failed to revoke host');
+      }
+    } catch { alert('Connection error'); }
+    setApprovingId(null);
+  };
+
   const loadTaxData = async () => {
     setTaxLoading(true);
     try {
@@ -564,7 +595,17 @@ export default function Host() {
   const avgRating         = reviews.length ? (reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length).toFixed(1) : 0;
   const pendingApps       = applications.filter(a => a.status === 'pending').length;
 
-  const bookingsByProperty = properties.map(p => ({
+  // Ownership filter (fix for both accounts showing as "owner of all
+  // properties"): `properties` above is the full public catalog returned by
+  // GET /properties (every fixed demo property plus every host's listings) —
+  // it was never filtered down to "properties this logged-in host actually
+  // owns." Every render below that represents "your listings" should use
+  // myProperties, not properties.
+  const myProperties = properties.filter(
+    (p) => p.hostAddress && user?.address && normalizeAddr(p.hostAddress) === normalizeAddr(user.address)
+  );
+
+  const bookingsByProperty = myProperties.map(p => ({
     ...p,
     bookings: activeBookings.filter(b => b.propertyId === p.id || b.propertyId === String(p.id)),
     revenue: activeBookings.filter(b => b.propertyId === p.id || b.propertyId === String(p.id))
@@ -690,7 +731,7 @@ export default function Host() {
             { label: 'GROSS REVENUE', value: `$${totalRevenue.toLocaleString()}`, color: '#00913f', sub: 'SuiUSD' },
             { label: 'ARIA FEES (5%)', value: `$${totalAriaFees.toLocaleString()}`, color: '#d23f3f', sub: 'vs 15% Airbnb' },
             { label: 'YOUR EARNINGS', value: `$${hostEarnings.toLocaleString()}`, color: '#1f6fd6', sub: 'net payout' },
-            { label: 'ACTIVE LISTINGS', value: properties.length, color: '#00913f', sub: 'properties' },
+            { label: 'ACTIVE LISTINGS', value: myProperties.length, color: '#00913f', sub: 'properties' },
             { label: 'TAXES COLLECTED', value: `$${totalTaxes.toLocaleString()}`, color: '#a66a00', sub: 'occupancy tax, varies by jurisdiction' },
             { label: 'DEPOSITS HELD', value: depositsHeld, color: '#1f6fd6', sub: 'in Sui escrow' },
             { label: 'MESSAGES', value: totalUnread, color: totalUnread > 0 ? '#d23f3f' : '#999', sub: totalUnread > 0 ? 'need attention' : 'all caught up' },
@@ -864,7 +905,7 @@ export default function Host() {
               </div>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '16px' }}>
-              {properties.map(p => (
+              {myProperties.map(p => (
                 <div key={p.id} style={{ background: '#fff', border: '1px solid #ebebeb', borderRadius: '12px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
                   <div style={{ height: '160px', overflow: 'hidden', position: 'relative' }}>
                     <img src={p.image} alt={p.title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
@@ -1000,7 +1041,7 @@ export default function Host() {
               <p style={{ color: '#717171', fontSize: '13px', margin: 0, lineHeight: '1.6' }}>Export your ARIA calendar to Airbnb/VRBO, and import their calendars here.</p>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              {properties.map(p => (
+              {myProperties.map(p => (
                 <div key={p.id} style={{ background: '#fff', border: '1px solid #ebebeb', borderRadius: '12px', padding: '20px', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
                     <img src={p.image} alt={p.title} style={{ width: '48px', height: '48px', objectFit: 'cover', borderRadius: '8px' }} />
@@ -1190,6 +1231,7 @@ export default function Host() {
                     { label: 'TOTAL', value: applications.length, color: '#717171' },
                     { label: 'PENDING', value: applications.filter(a => a.status === 'pending').length, color: '#a66a00' },
                     { label: 'APPROVED', value: applications.filter(a => a.status === 'approved').length, color: '#00913f' },
+                    { label: 'REVOKED', value: applications.filter(a => a.status === 'revoked').length, color: '#b3261e' },
                   ].map((s, i) => (
                     <div key={i} style={{ background: '#fff', border: '1px solid #ebebeb', borderRadius: '8px', padding: '12px 20px', textAlign: 'center', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
                       <div style={{ fontSize: '10px', color: '#999', marginBottom: '4px', fontWeight: '600' }}>{s.label}</div>
@@ -1198,19 +1240,24 @@ export default function Host() {
                   ))}
                 </div>
 
-                {applications.map((a, i) => (
-                  <div key={i} style={{ background: '#fff', border: `1px solid ${a.status === 'pending' ? '#ffe7a0' : '#c8ebd9'}`, borderRadius: '12px', padding: '20px', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+                {applications.map((a, i) => {
+                  const badgeColors = {
+                    pending:  { bg: '#fff8e1', border: '#ffe7a0', text: '#a66a00', label: '⏳ Pending' },
+                    approved: { bg: '#eafaf0', border: '#c8ebd9', text: '#00913f', label: '✅ Approved' },
+                    revoked:  { bg: '#fbeaea', border: '#f0c6c6', text: '#b3261e', label: '🚫 Revoked' },
+                  };
+                  const badge = badgeColors[a.status] || badgeColors.approved;
+                  return (
+                  <div key={i} style={{ background: '#fff', border: `1px solid ${badge.border}`, borderRadius: '12px', padding: '20px', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', flexWrap: 'wrap', gap: '12px' }}>
                       <div style={{ flex: 1, minWidth: '200px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
                           <div style={{ fontSize: '15px', fontWeight: '600', color: '#222' }}>{a.name}</div>
                           <span style={{
-                            background: a.status === 'pending' ? '#fff8e1' : '#eafaf0',
-                            border: `1px solid ${a.status === 'pending' ? '#ffe7a0' : '#c8ebd9'}`,
-                            color: a.status === 'pending' ? '#a66a00' : '#00913f',
+                            background: badge.bg, border: `1px solid ${badge.border}`, color: badge.text,
                             fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '10px'
                           }}>
-                            {a.status === 'pending' ? '⏳ Pending' : '✅ Approved'}
+                            {badge.label}
                           </span>
                         </div>
                         <div style={{ fontSize: '13px', color: '#717171', marginBottom: '4px' }}>{a.email}</div>
@@ -1221,15 +1268,22 @@ export default function Host() {
                         {a.approved_at && <div style={{ fontSize: '11px', color: '#00913f', marginTop: '2px' }}>Approved {fmtDateTime(a.approved_at)}</div>}
                       </div>
 
-                      {a.status === 'pending' && (
+                      {(a.status === 'pending' || a.status === 'revoked') && (
                         <button onClick={() => handleApprove(a.sui_address, a.name)} disabled={approvingId === a.sui_address}
                           style={{ background: approvingId === a.sui_address ? '#eee' : '#00913f', color: approvingId === a.sui_address ? '#999' : '#fff', border: 'none', borderRadius: '8px', padding: '10px 20px', fontSize: '13px', fontWeight: '700', cursor: approvingId === a.sui_address ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}>
-                          {approvingId === a.sui_address ? 'Approving...' : '✅ Approve Host'}
+                          {approvingId === a.sui_address ? 'Approving...' : (a.status === 'revoked' ? '✅ Re-approve Host' : '✅ Approve Host')}
+                        </button>
+                      )}
+                      {a.status === 'approved' && (
+                        <button onClick={() => handleRevoke(a.sui_address, a.name)} disabled={approvingId === a.sui_address}
+                          style={{ background: approvingId === a.sui_address ? '#eee' : '#fff', color: approvingId === a.sui_address ? '#999' : '#b3261e', border: `1px solid ${approvingId === a.sui_address ? '#eee' : '#f0c6c6'}`, borderRadius: '8px', padding: '10px 20px', fontSize: '13px', fontWeight: '700', cursor: approvingId === a.sui_address ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}>
+                          {approvingId === a.sui_address ? 'Revoking...' : '🚫 Revoke Host'}
                         </button>
                       )}
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
