@@ -184,25 +184,4 @@ aria-demo/
 
 ## Why ARIA Beats Airbnb
 
-| Feature | Airbnb / VRBO | ARIA |
-|---|---|---|
-| Platform fee | 12–15% | **5%** |
-| Host payout speed | 3–5 days | **< 1 second** |
-| Receipt storage | Centralized | **Walrus (decentralized, tamper-proof; ~53-day testnet retention today)** |
-| Damage deposit | Platform escrow | **Sui escrow (on-chain)** |
-| Login | Email/password | **zkLogin (Google → Sui wallet)** |
-| Double booking | Manual sync | **Automated iCal + receipt guard** |
-| AI agent | None | **Native Grok (guest + host)** |
-| Audit trail | None | **3 Walrus receipts per booking** |
-
----
-
-## Built By
-
-**Cecil Williams** · Sui Overflow 2026
-- Built in 4 days on Sui testnet
-- Full working demo with real zkLogin, real Walrus receipts, real DeepBook
-
----
-
-*Powered by ARIA — Built on Sui | The Airbnb Killer*
+| Feature | Airbnb / VRBO | A

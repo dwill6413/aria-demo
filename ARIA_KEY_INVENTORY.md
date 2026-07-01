@@ -102,37 +102,4 @@ load) in Railway environment variables.
 | **Does this close M3?** | **Yes.** Each user's derivation input is now frozen the first time they log in. Changing `ZKLOGIN_SALT` going forward can never again reshuffle an existing user's address — it only affects the seed value for a sub that has never logged in before. |
 | Legacy value (still used as the *seed* only) | `59495786400363606476793255475060161673` — `ZKLOGIN_SALT` (Railway) / `NEXT_PUBLIC_ZKLOGIN_SALT` (Vercel, now only a same-value fallback in `lib/zklogin.js` if the salt endpoint call fails). Kept in place specifically so every account that had already logged in before this rollout gets a `user_salts` row seeded with the exact value their existing address already depends on — nobody's address moved at cutover. **Still must never be edited** — editing it wouldn't move any already-created row, but it's no longer even doing anything useful once every real account has logged in at least once post-rollout, so there's no upside to touching it, only risk if some code path is ever added that re-reads it live. |
 | Why numeric (legacy detail) | The zkLogin prover requires exactly 16 bytes. `crypto.randomBytes(16).toString('hex')` produces 32 hex chars which the prover rejects as "must be 16 bytes." Use BigInt conversion: `node -e "const b = require('crypto').randomBytes(16); console.log(BigInt('0x' + b.toString('hex')).toString())"` |
-| **Incident that led to this fix (June 30 → July 1, 2026)** | Before this table existed, all users shared one `ZKLOGIN_SALT` value. Changing it on June 30 (moving off the `'0'` dev default) re-derived every existing user's address at once. Went unnoticed for a day: two test accounts' Sui addresses had silently swapped relative to what old screenshots/transactions showed, which briefly led to assigning the wrong account as "official" property owner in `catalog.mjs` and revoking host status by address instead of realizing email was the safer key. Resolved by re-confirming each account's address live from its wallet display, then building this per-user mechanism so it can't happen again. |
-| **Mainnet migration** | No special action needed now — per-user salts are already frozen per account. Just don't touch `ZKLOGIN_SALT`/`NEXT_PUBLIC_ZKLOGIN_SALT` for unrelated reasons, and keep the same Google OAuth client ID (`aud`) through the migration, since `aud` is also a derivation input and switching to a new OAuth client would still re-derive every address regardless of the per-user salt fix. |
-| Risk if `user_salts` row is ever edited/deleted | Deleting a row would cause that one user's next login to be treated as brand-new (re-seeded from the current `ZKLOGIN_SALT` env value) — same address ONLY if that env var hasn't changed since; otherwise a new address. Never manually edit or delete rows in this table outside of a deliberate, planned migration. |
-| Risk if a salt value leaks | Anyone with a user's salt + their Google `sub` can derive that one user's Sui address (public info anyway). A salt is not secret in the cryptographic sense — it just must stay consistent for that user, which per-user storage now guarantees independent of any env var. |
-
----
-
-## Not ARIA-controlled keys (for context, not in your vault)
-
-- **Guest wallets** — each guest signs `create_escrow` with their own zkLogin-derived wallet. ARIA never holds or sees their private key.
-- **Host payout addresses** — looked up per-property from `host_profiles.payout_sui_address`; each host's own wallet. ARIA doesn't generate or hold these.
-
----
-
-## Quick decision table
-
-| Question | Answer |
-|---|---|
-| "Which key does the backend use day-to-day?" | #2 (auto-release, signs the permissionless sweeps) and #4 (arbitrator, signs resolve_dispute + the cancel refunds) — both active in Railway. |
-| "Which key should never touch a server?" | #1 (deployer/UpgradeCap) and #3 (original arbitrator) — both cold-storage only. |
-| "Which key resolves a dispute on an old escrow?" | #3, if the escrow was created before the June 17 Railway update; #4 otherwise. |
-| "Which key has the most power if leaked?" | #1 — it can upgrade the contract. |
-
----
-
-*Created June 17, 2026 (P2). Last updated July 1, 2026: §8 rewritten — implemented true per-user zkLogin salt (`user_salts` table, `getOrCreateUserSalt`/`handleZkLoginSalt` in `auth.mjs`, `POST /auth/zklogin/salt`), closing M3 for real this time. The shared `ZKLOGIN_SALT`/`NEXT_PUBLIC_ZKLOGIN_SALT` value now only seeds new rows and is no longer read live on every login. (Earlier same-day: corrected an initial claim that the June 30 shared-salt update alone had closed M3 — it hadn't; documented the June 30→July 1 address-swap incident that motivated actually building this.) Prior June 30, 2026: added §7 `CHECKIN_KEY` — AES-256-GCM symmetric key for self check-in access instruction encryption (P4). Prior June 25, 2026: deployer key #1 signed the
-**v5** (Phase 2a BookingPass), **v6** (Phase 2c resale market), and **v7** (pre-mainnet
-u128 hardening) upgrades; UpgradeCap now at version 7. No keys rotated or generated for
-v5/v6/v7 — same deployer, auto-release, arbitrator, and treasury addresses as before. (Prior June 23, 2026: arbitrator key #4
-marked active, signs `resolve_dispute` + Phase 1h.5 `refund_payment`/`refund_deposit`;
-auto-release key #2 signs `finalize_claim` + `release_payment`; treasury addresses (#5)
-and `DEMO_HOST_ADDRESS` (#6) recorded.) Update whenever a key is rotated, retired, or
-generated — keep in sync with the Environment Variables sections of `ARIA_HANDOFF.md` /
-`ARIA_ROADMAP.md` and with `ARIA_PACKAGE_INVENTORY.md`.*
+| **Incident that led to this fix (June 30 → July 1, 2026)** | Before this table existed, all users shared one `ZKLOGIN_SALT` value. Changing it on June 30 (moving off the `'0'` dev default) re-derived every existing user's address at once. Went unnoticed for a day: two test accounts' Sui addresses had silently swapped relative to what old screenshots/transactions showed, which briefly led to assigning the wrong account as "official" property owner in `catalog.mjs` and revoking host status by address instead of realizing email was the safer key. Re

@@ -541,32 +541,4 @@ export default function Listing() {
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', marginTop: '8px' }}>
                         <span style={{ color: '#5c8a6d', fontSize: '11px', fontFamily: 'monospace', wordBreak: 'break-all' }}>{user.address}</span>
                         <button onClick={copyAddr} title="Copy address" style={{ background: 'none', border: 'none', cursor: 'pointer', color: addrCopied ? '#00913f' : '#5c8a6d', fontSize: '12px', padding: '0', flexShrink: 0 }}>
-                          {addrCopied ? '✓' : '⧉'}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Full-screen photo gallery */}
-      {galleryOpen && (
-        <div style={{ position: 'fixed', inset: 0, background: '#000', zIndex: 200, display: 'flex', flexDirection: 'column' }}>
-          <div style={{ padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ color: '#fff', fontSize: '13px' }}>{photoIndex + 1} / {photos.length}</span>
-            <button onClick={() => setGalleryOpen(false)} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', color: '#fff', fontSize: '20px', cursor: 'pointer', borderRadius: '50%', width: '36px', height: '36px' }}>×</button>
-          </div>
-          <div style={{ flex: 1, position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <img src={photos[photoIndex]} alt="" style={{ maxWidth: '90%', maxHeight: '80vh', objectFit: 'contain' }} />
-            {photoIndex > 0 && <button className="gallery-arrow" onClick={() => setPhotoIndex(i => i - 1)} style={{ left: '16px' }}>‹</button>}
-            {photoIndex < photos.length - 1 && <button className="gallery-arrow" onClick={() => setPhotoIndex(i => i + 1)} style={{ right: '16px' }}>›</button>}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
+                          {addrCopied 

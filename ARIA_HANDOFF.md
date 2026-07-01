@@ -1313,19 +1313,4 @@ Updated pre-mainnet checklist and Important Files table accordingly.*
 *Changes from v4.10: Marked P2 complete — auto-release cron job
 (`runAutoReleaseSweep()`, interval + 30s startup sweep), production host
 address lookup (`getPropertyHostAddress()` now reads `host_profiles.payout_sui_address`
-instead of defaulting to the auto-release key), and the five claim/dispute
-routes (`/booking/claim-damage`, `/booking/claim-damage/confirm`,
-`/booking/dispute-claim`, `/booking/dispute-claim/confirm`,
-`/booking/resolve-dispute`), backed by 9 new `bookings` columns and 5 new
-`validation.mjs` schemas. Added a `['claimed','disputed','forfeited']` guard
-to `/booking/release-deposit` so auto-release can't run out from under an
-active claim/dispute. Generated a new operational `ARIA_ARBITRATOR_KEY` /
-`arbitratorKeypair` scoped to `resolve_dispute` only, since the P1a arbitrator
-key was cold-storage/manual-signing-only and can't be loaded by the backend;
-documented that this new address supersedes the P1a address for new escrows
-while pre-existing escrows still need the original P1a key. Added 18 new unit
-tests to `escrow.test.mjs` (`isObjectMutated`, `verifyClaimDamageTransaction`,
-`verifyDisputeClaimTransaction`) — 33 tests total, all passing. Updated
-pre-mainnet checklist, P2 audit section, Important Files table, and
-Environment Variables accordingly. Remaining manual step: set
-`ARIA_ARBITRATOR_KEY` and the updated `ARIA_ARBITRATOR_ADDRESS` in Railway.*
+instead of defaulting to the auto-release key), and the fiv

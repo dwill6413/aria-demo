@@ -230,14 +230,4 @@ export const reviewSubmitSchema = z.object({
 });
 
 // Runs a zod schema against request.body and sends a 400 with a readable
-// message if it fails. Returns true if validation failed (caller should
-// `return` immediately after calling this), false if the body is valid.
-export function validateBody(schema, request, reply) {
-  const result = schema.safeParse(request.body);
-  if (!result.success) {
-    const message = result.error.issues.map(i => `${i.path.join('.') || 'body'}: ${i.message}`).join('; ');
-    reply.code(400).send({ error: `Invalid request: ${message}` });
-    return true;
-  }
-  return false;
-}
+// message if
