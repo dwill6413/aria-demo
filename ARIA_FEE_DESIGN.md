@@ -670,4 +670,13 @@ check-in date. Mainnet: set it to the actual check-in timestamp [+ optional grac
 > directly from `suiClient.core.getTransaction({ include: { transaction: true }})`
 > — no `rawTransaction`/`Transaction.from()` needed. The live envelope carries an
 > extra `$kind` discriminator (`{ $kind:'Pure', Pure:{ bytes } }`, commands keyed
-> `$kind`) alongside the `Pure`/`MoveCall`/
+> `$kind`) alongside the `Pure`/`MoveCall`/`SplitCoins` keys the decoder reads, so
+> `decodeCreateEscrowArgs` works unchanged. It decoded `booking_ref`, guest, host,
+> `typeArg`, and recovered the deposit amount (`66000`) lag-free from the
+> `SplitCoins` input, matching `depositToMist(66)`. **Caveat retired for the SUI
+> path.**
+>
+> One minor residual, to confirm when SuiUSD is wired: `coinWithBalance` for a
+> **non-SUI** owned coin may resolve to `MergeCoins` + `SplitCoins` rather than a
+> bare gas split; the `SplitCoins` amount is still a Pure input (low risk), but
+> re-run `check-escrow-decode.mjs` against the first real SuiUSD escrow to confirm.

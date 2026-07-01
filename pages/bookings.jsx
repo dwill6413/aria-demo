@@ -1103,4 +1103,64 @@ export default function Bookings() {
             <p style={{ color: '#999', fontSize: '11px', margin: '0 0 16px' }}>Minimum ${listModal.faceValue}. The host's price cap is enforced on-chain.</p>
             {resaleError && <p style={{ color: '#d23f3f', fontSize: '12px', margin: '0 0 12px' }}>{resaleError}</p>}
             <div style={{ display: 'flex', gap: '10px' }}>
-      
+              <button onClick={() => { setListModal(null); setResaleStatus('idle'); }}
+                disabled={['signing','submitting','confirming'].includes(resaleStatus)}
+                style={{ flex: 1, background: 'transparent', border: '1px solid #ddd', color: '#717171', borderRadius: '8px', padding: '11px', fontSize: '13px', cursor: 'pointer' }}>
+                Cancel
+              </button>
+              <button onClick={submitListResale}
+                disabled={['signing','submitting','confirming','done'].includes(resaleStatus)}
+                style={{ flex: 2, background: resaleStatus === 'done' ? '#eafaf0' : '#a66a00', color: resaleStatus === 'done' ? '#00913f' : '#fff', border: 'none', borderRadius: '8px', padding: '11px', fontSize: '13px', fontWeight: '700', cursor: 'pointer' }}>
+                {resaleStatus === 'signing' ? 'Sign in wallet…' : resaleStatus === 'submitting' ? 'Submitting…' : resaleStatus === 'confirming' ? 'Confirming…' : resaleStatus === 'done' ? '✓ Listed' : 'List for Resale'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Buyer resale marketplace */}
+      {marketOpen && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 100, padding: '24px', overflowY: 'auto' }}>
+          <div style={{ background: '#fff', border: '1px solid #ebebeb', borderRadius: '16px', width: '100%', maxWidth: '640px', padding: '32px', margin: 'auto', boxShadow: '0 8px 32px rgba(0,0,0,0.18)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+              <h3 style={{ margin: 0, fontSize: '20px', fontWeight: '700', color: '#222' }}>🏷️ Resale Market</h3>
+              <button onClick={() => setMarketOpen(false)} style={{ background: 'transparent', border: 'none', color: '#717171', fontSize: '22px', cursor: 'pointer', lineHeight: 1 }}>×</button>
+            </div>
+            <p style={{ color: '#717171', fontSize: '13px', margin: '0 0 20px' }}>Verified, capped resales. Buying requires identity verification — the host will know who's staying.</p>
+            {marketLoading ? (
+              <div style={{ color: '#717171', fontSize: '13px', padding: '30px 0', textAlign: 'center' }}>Loading listings…</div>
+            ) : market.length === 0 ? (
+              <div style={{ color: '#717171', fontSize: '13px', padding: '30px 0', textAlign: 'center' }}>No bookings are listed for resale right now.</div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                {market.map(item => (
+                  <div key={item.bookingRef} style={{ background: '#f7f7f7', border: '1px solid #ebebeb', borderRadius: '10px', padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: '700', fontSize: '15px', color: '#222' }}>{item.property}</div>
+                      <div style={{ color: '#717171', fontSize: '12px', margin: '4px 0' }}>{fmtDay(item.checkIn)} → {fmtDay(item.checkOut)} · {item.nights} night{item.nights > 1 ? 's' : ''}</div>
+                      <div style={{ fontSize: '12px', color: '#717171' }}>
+                        Face ${item.faceValue}{item.upcharge > 0 && <span style={{ color: '#a66a00' }}> · +${item.upcharge} markup</span>}
+                        {item.sellerFlips > 0 && <span style={{ color: '#d23f3f', marginLeft: '8px' }} title="Times this seller has resold without staying">⚠ {item.sellerFlips} prior flip{item.sellerFlips > 1 ? 's' : ''}</span>}
+                      </div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontWeight: '700', fontSize: '18px', color: '#00913f', marginBottom: '6px' }}>${item.askPrice}</div>
+                      {item.isOwnListing ? (
+                        <span style={{ color: '#717171', fontSize: '12px' }}>Your listing</span>
+                      ) : (
+                        <button onClick={() => buyListing(item)} disabled={resaleBusyRef === item.bookingRef}
+                          style={{ background: resaleBusyRef === item.bookingRef ? '#eee' : '#00913f', color: resaleBusyRef === item.bookingRef ? '#999' : '#fff', border: 'none', borderRadius: '8px', padding: '9px 18px', fontSize: '13px', fontWeight: '700', cursor: resaleBusyRef === item.bookingRef ? 'not-allowed' : 'pointer' }}>
+                          {resaleBusyRef === item.bookingRef ? 'Working…' : 'Buy'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

@@ -152,4 +152,80 @@ export async function handleZkLoginCallback(request, reply) {
     // embedded in the Google OAuth URL the browser was redirected to
     // (generated client-side in lib/zklogin.js: beginZkLogin).
     if (String(payload.nonce) !== String(nonce)) {
-      throw new E
+      throw new Error('Nonce mismatch');
+    }
+
+    // M3: per-user persisted salt (see getOrCreateUserSalt above), not the
+    // shared global env var directly. The frontend calls /auth/zklogin/salt
+    // (handleZkLoginSalt below) for this same sub just before this request —
+    // so this almost always just reads back the row that call already
+    // created, guaranteeing both sides derive the identical address.
+    const salt = await getOrCreateUserSalt(payload.sub);
+    const suiAddress = jwtToAddress(id_token, salt, true);
+
+    // Cryptographically strong, opaque session id (was Math.random()).
+    const sessionId = crypto.randomBytes(32).toString('base64url');
+
+    // Store only what the app actually reads. The raw id_token is NOT
+    // persisted server-side — the frontend retains it just long enough to
+    // fetch its ZK proof (see lib/zklogin.js: completeZkLogin), then drops it.
+    const sessionData = {
+      suiAddress,
+      email: payload.email,
+      name: payload.name,
+      picture: payload.picture,
+      createdAt: Date.now()
+    };
+
+    await saveSession(sessionId, sessionData);
+
+    reply.setCookie('aria_session', sessionId, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV !== 'development',
+      sameSite: process.env.NODE_ENV !== 'development' ? 'none' : 'lax',
+      maxAge: 86400,
+      path: '/'
+    });
+
+    // Cross-domain frontends can't read the httpOnly cookie directly, so we
+    // also return the session id in the body for the x-session-id header path.
+    return {
+      sid: sessionId,
+      address: suiAddress,
+      email: payload.email,
+      name: payload.name,
+      picture: payload.picture
+    };
+
+  } catch (err) {
+    console.error('zkLogin callback error:', err.message);
+    // Generic message to the client — no internal details leaked.
+    return reply.code(401).send({ error: 'Authentication failed' });
+  }
+}
+
+// ─── Per-user salt lookup (M3) ─────────────────────────────────────────────
+// Called by the OAuth callback page BEFORE completeZkLogin() so the browser
+// can request its ZK proof and compute its addressSeed using the SAME salt
+// handleZkLoginCallback will use moments later for this same sub — both call
+// getOrCreateUserSalt(), so they always agree on one value. This runs before
+// any ARIA session exists, so there's no session to authenticate the caller
+// with; verifying the id_token itself is what stands in for that. A salt
+// isn't secret in the cryptographic sense (see ARIA_KEY_INVENTORY.md §8 —
+// anyone with the salt AND a user's Google sub can derive their address,
+// which is public info anyway), but the sub it's keyed to should still only
+// ever be resolved from a token actually signed by Google for that account,
+// not an arbitrary client-supplied string.
+export async function handleZkLoginSalt(request, reply) {
+  const { id_token } = request.body || {};
+  if (!id_token) return reply.code(400).send({ error: 'Missing id_token' });
+
+  try {
+    const payload = await verifyGoogleIdToken(id_token);
+    const salt = await getOrCreateUserSalt(payload.sub);
+    return { salt };
+  } catch (err) {
+    console.error('zkLogin salt lookup error:', err.message);
+    return reply.code(401).send({ error: 'Authentication failed' });
+  }
+}

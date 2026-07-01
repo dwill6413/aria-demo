@@ -120,4 +120,29 @@ export async function getProperty(propertyId, logger = console) {
     };
   }
   try {
-    
+    const r = await pool.query('SELECT * FROM properties WHERE id = $1 AND active = true', [id]);
+    if (!r.rows.length) return null;
+    return normalizeDbRow(r.rows[0]);
+  } catch (err) {
+    logger?.warn?.({ err, propertyId }, 'catalog.getProperty: DB lookup failed');
+    return null;
+  }
+}
+
+// All bookable properties — the 6 fixed demo ones plus every active
+// host-created row. Used by GET /properties and the AI catalog prompt so
+// guests/the AI assistant can see (and book) imported listings, not just the
+// original demo set.
+export async function getAllProperties(logger = console) {
+  const fixed = Object.entries(PROPERTIES).map(([id, p]) => {
+    const j = JURISDICTION_TAX_RATES[Number(id)] || { rate: 0.08, name: 'Unknown', breakdown: '8% occupancy tax (default)' };
+    return { id: Number(id), title: p.title, price: p.price, hostAddress: p.hostAddress, maxGuests: p.maxGuests ?? 2, taxRate: j.rate, taxName: j.name, taxBreakdown: j.breakdown, active: true, source: 'catalog' };
+  });
+  try {
+    const r = await pool.query('SELECT * FROM properties WHERE active = true ORDER BY id');
+    return [...fixed, ...r.rows.map(normalizeDbRow)];
+  } catch (err) {
+    logger?.warn?.({ err }, 'catalog.getAllProperties: DB lookup failed, returning fixed catalog only');
+    return fixed;
+  }
+}

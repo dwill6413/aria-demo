@@ -437,4 +437,54 @@ export async function initDB() {
   // onto the row itself (no JURISDICTION_TAX_RATES-style lookup table for
   // dynamic listings) because the host self-declares their jurisdiction at
   // creation time and catalog.mjs's getProperty()/getAllProperties() read them
-  // straight off the
+  // straight off the row. tax_rate is clamped server-side to [0, 0.20] at write
+  // time (see server.mjs POST /host/properties) — same trust model terms.jsx
+  // already discloses: ARIA collects the declared tax but hosts are solely
+  // responsible for the rate being correct and for remitting it.
+  await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS tax_rate NUMERIC DEFAULT 0.08`);
+  await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS tax_jurisdiction TEXT DEFAULT 'Unknown'`);
+  await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS tax_breakdown TEXT DEFAULT '8% occupancy tax (default — host has not set a jurisdiction)'`);
+  await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS max_guests INTEGER DEFAULT 2`);
+  await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS source_url TEXT`);
+  await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS import_source TEXT DEFAULT 'manual'`);
+  await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS host_email TEXT`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_properties_host_address ON properties(host_address)`);
+
+  // Guard against id collisions with the 6 fixed catalog properties
+  // (catalog.mjs ids 1-6, code-only — not rows in this table). properties.id
+  // is a plain SERIAL, so the first-ever host-created listing got id=1, same
+  // as the Oceanfront Villa demo property. That collision corrupted more
+  // than display fields: bookings.property_id is also a bare, source-unaware
+  // INTEGER, so host.jsx's per-listing BOOKINGS/REVENUE cards (which filter
+  // bookings by propertyId === p.id) attributed the demo property's real
+  // booking/revenue onto the new listing's card. Bumping the sequence well
+  // past the fixed range stops any *future* collision; it does not fix rows
+  // already inserted at ids 1-6 (see ARIA_ROADMAP.md — needs a one-off data
+  // fix for any of those that already exist). Idempotent: setval only moves
+  // the counter forward, never back, so this is safe to run on every boot.
+  await pool.query(`SELECT setval('properties_id_seq', GREATEST(1000, (SELECT COALESCE(MAX(id), 0) FROM properties)))`);
+
+  // One-off fix for rows ALREADY inserted at ids 1-6 before the sequence bump
+  // above existed (e.g. a host's first listing landing on id=1, same as the
+  // Oceanfront Villa). catalog.mjs's getProperty()/getAllProperties() check
+  // the fixed catalog FIRST and unconditionally for ids 1-6, so a DB row stuck
+  // in that range is permanently unreachable: booking, editing, or viewing
+  // "that id" silently resolves to the fixed demo property instead, using ITS
+  // price/tax/title — this is why booking a colliding new listing silently
+  // booked (and charged for) the demo property instead. Re-id any survivor
+  // out of the collision range, on every boot (idempotent: a clean DB has no
+  // rows in 1-6, so this is a no-op there). Past bookings made against a
+  // since-relocated row keep the property_id they were created with (no FK —
+  // see comment above) and can't be retroactively reattributed, since they
+  // were recorded identically to a genuine demo-property booking at write time.
+  const { rows: colliding } = await pool.query('SELECT id, title FROM properties WHERE id <= 6');
+  for (const row of colliding) {
+    const { rows: [{ nextval }] } = await pool.query(`SELECT nextval('properties_id_seq') AS nextval`);
+    await pool.query('UPDATE properties SET id = $1 WHERE id = $2', [nextval, row.id]);
+    console.log(`Re-id'd colliding property "${row.title}" from id=${row.id} to id=${nextval} (was colliding with fixed catalog ids 1-6)`);
+  }
+
+  console.log('Database initialized');
+}
+
+export { pool };

@@ -1129,4 +1129,199 @@ These are NOT committed work — they're the idea bank to pull from next.
   `verified`/`settlement_ref`/`review_walrus_blob_id`. Frontend: "✓ Verified stay"
   badge + "on-chain proof" Walrus link on host review cards (`host.jsx`), and a
   `✓N` verified-review count on guest property cards (`index.jsx`). Optional stricter
-  gate `REQUIRE_STAY_COMPLETED` (checkout-passed; off by default
+  gate `REQUIRE_STAY_COMPLETED` (checkout-passed; off by default). Also fixed a latent
+  bug: `/reviews/all` returned raw snake_case rows so the host UI's `guestName`/`bookingRef`
+  were undefined — now mapped to camelCase. **First idea off the bank.**
+- ⭐ **Portable on-chain reputation** *(medium)* — a guest's/host's stay history,
+  review record, and dispute record as a Sui object the user OWNS and carries
+  across platforms. Walrus already stores the receipts; make reputation portable
+  and self-sovereign instead of trapped in a platform.
+- **Transparent dispute resolution** *(med-high)* — evolve the existing arbitrator
+  flow into a staked/community-juror system (Kleros-style) for damage disputes,
+  full record on-chain. Replaces the single trusted arbitrator with a credibly
+  neutral one.
+
+### Theme B — New money mechanics (reuse the 3-way payment escrow + DeepBook)
+- 🔴 **USDC → SuiUSD in-app swap (mainnet launch blocker)** — guests arrive with USDC
+  from CEXs and need SuiUSD to book. DeepBook USDC/SuiUSD pool swap via
+  `@mysten/deepbook-v3`, zkLogin-signed (same non-custodial pattern as send/escrow).
+  "Swap" modal in wallet UI alongside Send. Cannot test on testnet (no real stable coins).
+  Pre-mainnet gates: pool liquidity, gRPC compatibility, mainnet coin types confirmed.
+  Alternative: link out to a native Sui swap UI if one ships before launch.
+- ⭐ **N-way payout split** *(low — trivial extension of `BookingPaymentEscrow`)* —
+  generalize rental→host / fee→ARIA / tax→remittance to also auto-pay cleaner,
+  co-host, property manager at check-in. Cheapest big win for real hosts.
+- ⭐ **Booking-as-transferable-object** *(medium)* — a confirmed booking is a Sui
+  object; make it transferable → a legit, escrow-backed reservation resale/transfer
+  market. Airbnb bans this; ARIA can do it safely. Novel + flashy.
+- **Host cash-advance** *(high)* — borrow against confirmed future bookings
+  (receivables as collateral). DeFi × travel.
+
+### Theme C — Physical-world bridge (flashy, demo-winning) → BookingPass
+- 🟨 **BookingPass / check-in pass** — the unifying object behind check-in + resale
+  (Theme B) + smart-lock + reputation. Built in two phases:
+  - ✅ **Phase 1 — dynamic wallet-signed check-in pass — SHIPPED June 24, 2026.**
+    The guest's app signs a FRESH `ARIA-CHECKIN:<ref>:<ts>:<nonce>` personal message
+    with their zkLogin wallet (reusing `signPersonalMessageWithZkLogin`) and renders
+    a **rotating QR** on My Bookings (`pages/bookings.jsx`, `qrcode.react`, ~18s
+    refresh). A host-only **scanner** (`pages/scan.jsx`) posts the scanned payload to
+    `POST /checkin/verify`, which proves it's *fresh* (timestamp window — screenshots
+    go stale), *wallet-signed* (`verifyCheckinSignature` in `escrow.mjs` →
+    `verifyPersonalMessageSignature`), by the *booking's own guest*, for a *live,
+    on-chain-escrow-backed* booking the scanning host manages → ✅/⛔. **NEEDS an
+    in-browser smoke test** (server-side zkLogin signature verification, same risk
+    class as the Seal SessionKey path — may need a tweak for the gRPC client).
+    No contract upgrade. Camera QR scanning (vs paste) is a small follow-up.
+  - 🟩 **Phase 2a — owned `BookingPass` NFT — LIVE June 24, 2026 (v5 `0xd825ec2d…dc9b8`; flag on; mint verified in-browser — booking `ARIA-1-1782312873579-3d5f50`)** — mint an owned
+    pass to the guest in the booking PTB (`mint_booking_pass`, one extra `moveCall`,
+    no extra signature). **Soulbound by default: `public struct BookingPass has key`
+    with NO `store` ability** → the owner can't transfer it; only a function inside
+    the module can (so transfer stays off until resale guardrails exist, enforced by
+    the type system). Validity = guest owns pass + the booking's escrow is live →
+    **cancel deletes the escrow → pass auto-invalidates** (no void call needed; reuses
+    the automatic-revocation property). On-chain-verified check-in. Keep on-chain
+    metadata minimal (booking_ref + window, NOT property address/PII) so it doesn't
+    undo the Seal privacy posture.
+  - ⬜ **Phase 2b — smart-lock `pass_approve`** — a Seal-style gate so real **door
+    locks** open only for the stay window if the holder owns an active pass; cancel →
+    escrow gone → won't open. NFC + real lock integration is the hardware follow-up.
+  - ✅ **Phase 2c — guardrailed resale market — LIVE & VERIFIED June 24, 2026 (v6).**
+    Resale IS allowed but fenced so it's "humane cancellation + host-controlled
+    liquidity," not a scalper market. Shipped in v6 `0x897777aa…c901`; verified
+    end-to-end on booking `ARIA-1-1782390279195-4320e7` (buy digest
+    `E9gWpqWGKZh5hJw6kfnF6LfZfrj1son5HbctTVnzpcXg`). The five rails, as built:
+    1. **Host opt-in per listing** — transferability is a host setting (`properties`/
+       `property_resale_settings.transfer_allowed`), **off by default**; baked into the
+       booking's `ResalePolicy` at booking time. No policy = not resaleable.
+    2. **Price cap** — ask `P` must be in `[face, face·(1+max_premium_bps)]`, enforced
+       on-chain in `list_for_resale` and configured per listing (Rail 2).
+    3. **Upcharge split — ARIA 10% / host 45% / seller 45% (FINAL, supersedes the
+       earlier 50/50).** Face `F` = original paid; upcharge `U = P − F`. **Seller gets
+       `F + 0.45·U`, host gets `0.45·U`, ARIA gets `0.10·U`** — ARIA's fee is on the
+       upcharge ONLY (face-value resale is fee-free). Verified on-chain: $400 sale →
+       ARIA $0.30 / host $1.35 / seller $398.35.
+    4. **Mandatory Seal identity** on the buyer — `transfer/build` blocks a buyer with
+       no `guest_verifications` row; after the swap the host sees the buyer's identity
+       (since `seal_approve` gates on `escrow.guest`, now the buyer).
+    5. **Transfer window + one hop** — no transfer inside `resale_window_ms` of the
+       release time (48h mainnet default, baked per policy, env-tunable for testnet),
+       and `resale_count` capped at 1 (no speculative chains). Reputation signal: the
+       market surfaces a seller's prior flip count.
+    Mechanism (as built): two-step, non-custodial — `list_for_resale` (seller signs,
+    burns the pass, sets the ask) then `buy_resale` (buyer signs + funds; **both escrows'
+    `guest` reassigned to the buyer**, splits pay out, a fresh soulbound pass is minted).
+    Governance lives in a NEW shared `ResalePolicy` object (Sui upgrade rules forbid
+    adding fields to the existing escrows), so a transfer moves the WHOLE booking, not
+    just the key. See `ARIA_PHASE2C_PLAN.md` for the full build plan.
+
+### Theme D — AI agent depth (reuse the Grok agent)
+- **Host-ops autopilot** *(medium)* — dynamic pricing, auto-draft replies, listing
+  copy, calendar optimization.
+- **Agent-to-agent booking** *(high)* — a guest's AI agent negotiates/books with a
+  host's AI agent. Forward-looking; strong for an "AI + blockchain" track.
+
+### Suggested sequencing (POV, not committed)
+1. **Verifiable reviews + N-way split** — both low lift, both reuse existing
+   structures, both deliver real value fast.
+2. **Portable reputation** — the defensible, can't-be-copied-without-going-on-chain
+   moat; reframes the whole pitch.
+3. **Smart-lock check-in** — build when there's a demo/hackathon to win.
+4. **Booking transfer market**, **dispute jurors**, **agent-to-agent**, **cash-advance**
+   — bigger bets for after product-market signal.
+
+> Prerequisite for most of Theme A/B at scale: real **host onboarding** (the
+> `properties` table is still empty — see Tech Debt "Properties frontend-hardcoded /
+> host onboarding"), since a two-sided marketplace is what makes reputation,
+> splits, and transfers meaningful.
+
+---
+
+## 10. Resources
+
+| Resource | URL |
+|---|---|
+| Sui documentation | `https://docs.sui.io` |
+| Move book | `https://move-book.com` |
+| Seal documentation | `https://seal-docs.wal.app` |
+| Seal GitHub (examples) | `https://github.com/MystenLabs/seal` |
+| Walrus documentation | `https://docs.walrus.site` |
+| Sui testnet explorer | `https://suiexplorer.com/?network=testnet` |
+| Sui testnet faucet | `https://faucet.sui.io` |
+| Sui data stack overview (gRPC/GraphQL) | `https://blog.sui.io/graphql-archival-store-sui-data-stack/` |
+| Deployed escrow | `https://suiexplorer.com/object/0x538262ffc948c814e0de066d8a8ecd93a195a4b4f0643b3758d37962d4f7fdbe?network=testnet` |
+
+---
+
+*ARIA Roadmap v2.17 — June 18, 2026*
+*Changes from v2.16: (1) Contract upgraded to v3 (`0xec0d6bd4…644d8fa1`) adding
+permissionless `finalize_claim` (CLAIMED-deadlock fix); Railway `ESCROW_PACKAGE_ID`
+updated + redeployed clean. Phase 2a's `seal_approve` is therefore now the v4
+upgrade. (2) Logged a second independent code review (Phase 1L) — 8 findings
+fixed, see `ARIA_CODE_AUDIT.md` "Second Review" (hardened escrow object
+verification, frontend gRPC migration, atomic booking insert, unified deposit
+release, `DEMO_HOST_ADDRESS`); backend 39/39, Move 28/28. (3) Ops: addresses
+funded, old `ARIA_DEPLOYER_KEY` + `ANTHROPIC_API_KEY` removed from Railway,
+`@anthropic-ai/sdk` removed. Updated pre-mainnet gate, build order, tech-debt
+backlog, Section 8 env vars (added `DEMO_HOST_ADDRESS`), and the Phase 2 env note
+(no `SEAL_PACKAGE_ID`). Top remaining build item: fee collection/routing.*
+*ARIA Roadmap v2.16 — June 17, 2026*
+*Changes from v2.15: scoped Phase 2 (Seal/Walrus guest PII) against verified
+Seal SDK mechanics — researched actual `seal_approve*` requirements,
+SessionKey flow, key-server/threshold config, and identity-namespace
+anchoring (confirmed tied to a package's original ID forever, so a function
+added via upgrade works fine). Found the original placeholder architecture
+(separate `pii_access.move` with manual grant/revoke) was structurally wrong
+and replaced it with a simpler design: add `seal_approve()` directly to
+`escrow.move`, gated on the existing `BookingEscrow` object, so access
+revokes itself automatically when the object is deleted at finalization —
+eliminating the old plan's separate contract, `SEAL_PACKAGE_ID`, and
+`revoke_access`/Phase 2i entirely. Added a pre-mainnet gate item for Seal
+audit logging, per Seal's own docs flagging it isn't scoped for regulated
+PII without additional safeguards — decided to build the real architecture
+now since testnet carries no real guest data, and revisit before mainnet.*
+*ARIA Roadmap v2.15 — June 17, 2026*
+*Changes from v2.14: confirmed `ESCROW_PACKAGE_ID` updated in Railway and
+redeployed (deploy logs at 3:05 PM CDT show both keypairs loading correctly,
+server up clean). P3 is now fully deployed end-to-end — no manual steps
+remain. Updated P3 section, pre-mainnet gate, build order, and Environment
+Variables accordingly.*
+*ARIA Roadmap v2.14 — June 17, 2026*
+*Changes from v2.13: P3 upgrade published successfully on-chain — transaction
+`JCA8daJ9mSByY6x51ZhEc6Ubfrv1LEbf3nsVccEFtJZK`, new package
+`0x98e712692f22f308bb6d097d2d8a2743ed0c01058135d71436b4abcd34264f26` (v2).
+Marked P3 complete in the pre-mainnet gate and build order. One manual step
+remains: update `ESCROW_PACKAGE_ID` in Railway to the new package ID.*
+*ARIA Roadmap v2.13 — June 17, 2026*
+*Changes from v2.12: the first upgrade attempt failed —
+`sui client upgrade` rejected the package with "missing public declaration:
+public function 'status_resolved' is missing." Sui's package upgrade rules
+forbid removing a public function from an already-deployed package under any
+upgrade policy, including the default "compatible" one. Restored
+`status_resolved()` with the same signature, now returning a hardcoded `4`
+instead of referencing the removed `STATUS_RESOLVED` constant. Updated the P3
+section to reflect this; the constant removal still stands, the accessor does
+not. Re-run `sui move test` (still 25/25 passing) before retrying the upgrade.*
+*ARIA Roadmap v2.12 — June 17, 2026*
+*Changes from v2.11: P3 contract cleanup in `escrow.move` — removed dead
+`STATUS_RESOLVED` constant/accessor; added `MAX_EXPIRY_MS` (30-day) upper
+bound on `expiry_ms` with new `EExpiryTooFar` error code and `max_expiry_ms()`
+accessor; added 2 new Move unit tests (25 total in `escrow_tests.move`). Code
+complete; on-chain upgrade still pending — requires the operator to run
+`sui client upgrade` with the cold UpgradeCap key. Updated P3 section, build
+order Phase 1k, and pre-mainnet gate accordingly.*
+*Changes from v2.10: Marked P2 (auto-release cron job, production host address
+lookup, claim/dispute backend routes) and Phase 3 (5-day inspection window
+business logic) complete. Added `runAutoReleaseSweep()` to `server.mjs`;
+`getPropertyHostAddress()` to `bookings.mjs` with `catalog.mjs` gaining a
+per-property `hostAddress` field; `buildClaimDamageTransaction`,
+`buildDisputeClaimTransaction`, `isObjectMutated`, `verifyClaimDamageTransaction`,
+`verifyDisputeClaimTransaction` to `escrow.mjs`; 5 new routes
+(`/booking/claim-damage[/confirm]`, `/booking/dispute-claim[/confirm]`,
+`/booking/resolve-dispute`) and 5 new zod schemas to `validation.mjs`; 9 new
+`bookings` columns to `db.mjs`. `deposit_status` extended to
+`held|released|claimed|disputed|forfeited`. Generated and funded a new
+operational `ARIA_ARBITRATOR_KEY`/`ARIA_ARBITRATOR_ADDRESS` so the backend can
+actually sign `resolve_dispute` (the P1a address was cold-only); this
+supersedes the P1a address for new bookings — manual Railway step still
+pending. 18 new unit tests added to `escrow.test.mjs` (33 total, all passing).
+Updated pre-mainnet gate, build order, and tech debt backlog accordingly.*

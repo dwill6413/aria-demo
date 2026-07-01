@@ -1519,4 +1519,166 @@ export async function verifyBookingPaymentTransaction(digest, expected = {}) {
   if (expectedArbitrator && pay.arbitrator && !eq(pay.arbitrator, expectedArbitrator)) {
     return { ok: false, reason: 'Payment arbitrator does not match the configured arbitrator' };
   }
-  if (expectedSender && pay.guest 
+  if (expectedSender && pay.guest && !eq(pay.guest, expectedSender)) {
+    return { ok: false, reason: 'Payment guest does not match the booking guest' };
+  }
+  if (expectedRef && pay.bookingRef && pay.bookingRef !== expectedRef) {
+    return { ok: false, reason: 'Payment booking_ref does not match this booking' };
+  }
+  if (pay.typeArg && normalizeAddr(pay.typeArg.split('::')[0]) !== normalizeAddr(COIN_TYPE().split('::')[0])
+      && pay.typeArg !== COIN_TYPE()) {
+    return { ok: false, reason: `Payment coin type is not ${COIN_TYPE()}` };
+  }
+
+  // Leg amounts.
+  if (subtotal != null && String(pay.hostAmount) !== dollarsToUnits(subtotal).toString()) {
+    return { ok: false, reason: 'Payment rental leg is not the authoritative subtotal' };
+  }
+  if (ariaFee != null && String(pay.ariaAmount) !== dollarsToUnits(ariaFee).toString()) {
+    return { ok: false, reason: 'Payment ARIA-fee leg is not the authoritative fee' };
+  }
+  if (taxes != null && String(pay.taxAmount) !== dollarsToUnits(taxes).toString()) {
+    return { ok: false, reason: 'Payment tax leg is not the authoritative tax' };
+  }
+  if (releaseMs != null && pay.releaseMs != null && String(pay.releaseMs) !== String(releaseMs)) {
+    return { ok: false, reason: 'Payment release time does not match this booking check-in' };
+  }
+
+  // The same tx must also create the matching DEPOSIT escrow (closes the
+  // deposit-path amount gap lag-free too). If the deposit decode isn't yet
+  // available, retry rather than accept a half-verified booking.
+  if (!dep || dep.amountMist == null) {
+    return { ok: false, retryable: true, paymentEscrowId, depositEscrowId, reason: 'Deposit escrow not yet verifiable on-chain — please retry in a moment.' };
+  }
+  if (depositAmount != null && String(dep.amountMist) !== depositToMist(depositAmount).toString()) {
+    return { ok: false, reason: 'Deposit escrow is not funded with the expected deposit amount' };
+  }
+  if (expectedHost && dep.host && !eq(dep.host, expectedHost)) {
+    return { ok: false, reason: 'Deposit escrow host does not match the authoritative host' };
+  }
+  if (expectedRef && dep.bookingRef && dep.bookingRef !== expectedRef) {
+    return { ok: false, reason: 'Deposit escrow booking_ref does not match this booking' };
+  }
+
+  return { ok: true, paymentEscrowId, depositEscrowId, bookingPassId, resalePolicyId, sender: actualSender };
+}
+
+// Permissionless release at check-in — signed by the zero-privilege auto-release
+// key (same trust profile as autoReleaseEscrow; release_payment has no sender
+// check). Splits the held payment to host / ARIA / tax. Returns false on any
+// failure so the check-in sweep can simply retry.
+export async function releasePaymentEscrow(paymentEscrowObjectId) {
+  if (!autoReleaseKeypair || !paymentEscrowObjectId || !process.env.ESCROW_PACKAGE_ID) return false;
+  try {
+    const tx = new Transaction();
+    tx.setSender(autoReleaseKeypair.toSuiAddress());
+    tx.moveCall({
+      target: `${process.env.ESCROW_PACKAGE_ID}::${process.env.ESCROW_MODULE_NAME || 'escrow'}::release_payment`,
+      typeArguments: [COIN_TYPE()],
+      arguments: [tx.object(paymentEscrowObjectId), tx.object('0x6')],
+    });
+    const result = await autoReleaseKeypair.signAndExecuteTransaction({
+      transaction: tx, client: suiClient, include: { effects: true },
+    });
+    if (result?.$kind === 'FailedTransaction') {
+      console.warn('releasePayment failed on-chain:', result.FailedTransaction?.status?.error?.message);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn('releasePaymentEscrow failed:', err.message);
+    return false;
+  }
+}
+
+// Arbitrator-gated full refund of the payment to the guest, before check-in
+// only (the contract asserts now < release_time_ms). Signed by the arbitrator
+// key — same key/scope as resolveDisputeEscrow. Used by /booking/cancel.
+export async function refundPaymentEscrow(paymentEscrowObjectId) {
+  if (!arbitratorKeypair || !paymentEscrowObjectId || !process.env.ESCROW_PACKAGE_ID) return false;
+  try {
+    const tx = new Transaction();
+    tx.setSender(arbitratorKeypair.toSuiAddress());
+    tx.moveCall({
+      target: `${process.env.ESCROW_PACKAGE_ID}::${process.env.ESCROW_MODULE_NAME || 'escrow'}::refund_payment`,
+      typeArguments: [COIN_TYPE()],
+      arguments: [tx.object(paymentEscrowObjectId), tx.object('0x6')],
+    });
+    const result = await arbitratorKeypair.signAndExecuteTransaction({
+      transaction: tx, client: suiClient, include: { effects: true },
+    });
+    if (result?.$kind === 'FailedTransaction') {
+      console.warn('refundPayment failed on-chain:', result.FailedTransaction?.status?.error?.message);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn('refundPaymentEscrow failed:', err.message);
+    return false;
+  }
+}
+
+// Arbitrator-gated early refund of the security DEPOSIT to the guest on cancel,
+// instead of waiting for auto_release at expiry. Signed by the arbitrator key
+// (refund_deposit asserts sender == escrow.arbitrator). Used by /booking/cancel
+// so a cancelling guest gets deposit + payment back together.
+export async function refundDepositEscrow(depositEscrowObjectId) {
+  if (!arbitratorKeypair || !depositEscrowObjectId || !process.env.ESCROW_PACKAGE_ID) return false;
+  try {
+    const tx = new Transaction();
+    tx.setSender(arbitratorKeypair.toSuiAddress());
+    tx.moveCall({
+      target: `${process.env.ESCROW_PACKAGE_ID}::${process.env.ESCROW_MODULE_NAME || 'escrow'}::refund_deposit`,
+      typeArguments: [COIN_TYPE()],
+      arguments: [tx.object(depositEscrowObjectId)],
+    });
+    const result = await arbitratorKeypair.signAndExecuteTransaction({
+      transaction: tx, client: suiClient, include: { effects: true },
+    });
+    if (result?.$kind === 'FailedTransaction') {
+      console.warn('refundDeposit failed on-chain:', result.FailedTransaction?.status?.error?.message);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn('refundDepositEscrow failed:', err.message);
+    return false;
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// BookingPass (Phase 1) — dynamic, wallet-signed check-in presentation
+// ════════════════════════════════════════════════════════════════════════════
+//
+// The guest's app signs a FRESH `ARIA-CHECKIN:<ref>:<ts>:<nonce>` personal
+// message with their zkLogin wallet each time it renders the QR; a scanner posts
+// that signed payload to /checkin/verify. We recover the signer from the
+// signature and confirm it controls the booking's wallet — so a stale screenshot
+// (old ts) or a different wallet fails. The pass on-chain (the live escrow) is
+// the source of truth; this signature is the proof-of-control in the moment.
+//
+// NEEDS AN IN-BROWSER SMOKE TEST: verifying a zkLogin personal-message signature
+// server-side uses the SDK verifier with a client (to fetch epoch + JWK). This
+// is the same class of thing as the Seal SessionKey path — it may need tweaking
+// for the gRPC client (or a JSON-RPC client just for verification). Build the
+// flow, then exercise it once live and adjust.
+export function checkinMessageBytes(bookingRef, ts, nonce) {
+  return new TextEncoder().encode(`ARIA-CHECKIN:${bookingRef}:${ts}:${nonce}`);
+}
+
+export async function verifyCheckinSignature({ bookingRef, ts, nonce, address, signature }) {
+  if (!bookingRef || !ts || !nonce || !address || !signature) {
+    return { ok: false, reason: 'Incomplete check-in payload' };
+  }
+  try {
+    const message = checkinMessageBytes(bookingRef, ts, nonce);
+    const publicKey = await verifyPersonalMessageSignature(message, signature, { client: suiClient });
+    const signer = publicKey.toSuiAddress();
+    if (normalizeAddr(signer) !== normalizeAddr(address)) {
+      return { ok: false, reason: 'Signature does not match the presented wallet address' };
+    }
+    return { ok: true, signer };
+  } catch (err) {
+    return { ok: false, reason: `Invalid check-in signature: ${err.message}` };
+  }
+}
