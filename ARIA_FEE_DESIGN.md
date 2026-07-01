@@ -7,6 +7,15 @@
 future phase (§10), not built now — mirrors the P0b precedent of shipping the
 SuiUSD path first.
 
+> **v2.3 correction (July 1, 2026):** the fee rate actually shipped and
+> currently enforced everywhere in code (`server.mjs`, `escrow.mjs`, the host
+> dashboard) is **5%**, not the 3% this spec was originally designed and
+> written against. `README.md` had drifted out of sync with this change (still
+> said 3% in several places) until caught by an external review and corrected
+> the same day. The "3%" figures in §1/§2 below are left as-is since they
+> describe the original decision/bug context accurately for their time — read
+> **5%** wherever this doc says 3% for anything describing current behavior.
+>
 > **v2.2 correction (June 30, 2026):** ARIA does **not** hold a separate
 > tax-remittance wallet. The tax leg routes to the **same address as the
 > rental subtotal — the host**. At check-in, ARIA receives only its fee

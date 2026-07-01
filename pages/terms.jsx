@@ -87,7 +87,7 @@ export default function Terms() {
         </Section>
 
         <Section title="5. Occupancy Tax">
-          <P>ARIA collects an 8% occupancy tax on all bookings on behalf of hosts. This tax is displayed transparently in the booking breakdown. Hosts are solely responsible for remitting these taxes to the appropriate local tax authority. ARIA provides remittance tracking tools but does not remit taxes on behalf of hosts and makes no representation regarding tax obligations in any jurisdiction.</P>
+          <P>ARIA collects an occupancy tax on all bookings on behalf of hosts, at a rate that varies by property jurisdiction. This tax is displayed transparently in the booking breakdown before you confirm. Hosts are solely responsible for remitting these taxes to the appropriate local tax authority. ARIA provides remittance tracking tools but does not remit taxes on behalf of hosts and makes no representation regarding tax obligations in any jurisdiction.</P>
         </Section>
 
         <Section title="6. Platform Fees">
@@ -137,7 +137,7 @@ export default function Terms() {
         </Section>
 
         <Section title="12. Privacy and Data">
-          <P>ARIA collects minimal personal data necessary to operate the platform (name, email, Sui wallet address). Booking receipts are stored permanently on the Walrus decentralized storage network. By using ARIA, you consent to this storage. Sensitive host compliance data (tax ID, permits) is stored securely and never exposed in API responses or logs.</P>
+          <P>ARIA collects minimal personal data necessary to operate the platform (name, email, Sui wallet address). Booking receipts are stored on the Walrus decentralized storage network, where they are tamper-proof and independently verifiable by anyone with the blob ID. On Walrus testnet, storage is currently provisioned for a limited retention period (~53 days per blob); permanent, long-term retention is a planned mainnet migration item and is not yet live. By using ARIA, you consent to this storage arrangement. Sensitive host compliance data (tax ID, permits) is stored securely and never exposed in API responses or logs.</P>
         </Section>
 
         <Section title="13. Beta Platform Disclaimer">

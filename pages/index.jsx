@@ -17,7 +17,7 @@ const WHY_ARIA = [
   { icon: '⚡', title: 'Instant Settlement', desc: 'Hosts receive payouts in seconds, not days. No 3–5 day bank holds. No Airbnb holding your money.' },
   { icon: '🔒', title: 'On-Chain Escrow', desc: 'Security deposits are held by smart contract — not by ARIA. Released automatically when you approve.' },
   { icon: '✅', title: 'You Approve Everything', desc: 'Cancellations, deposit releases, and payouts all require your action. We never act on your behalf.' },
-  { icon: '📋', title: 'Permanent Audit Trail', desc: 'Every booking and payment is stored immutably on Walrus. Your receipts exist forever, independently of ARIA.' },
+  { icon: '📋', title: 'Tamper-Proof Audit Trail', desc: 'Every booking and payment is stored immutably on Walrus, independently of ARIA and verifiable by anyone with the blob ID. (Testnet retention today is ~53 days per receipt; permanent storage arrives at mainnet.)' },
   { icon: '💸', title: '5% vs 15%', desc: 'Airbnb takes up to 15%. ARIA takes 5% — only on your stay cost, never on your deposit.' },
 ];
 

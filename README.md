@@ -9,9 +9,11 @@
 
 ARIA is a full-stack vacation rental platform built natively on Sui blockchain. It replaces every centralized chokepoint in the $100B+ vacation rental industry with Sui primitives — instant settlement, tamper-proof receipts, on-chain escrow, and zero-friction onboarding.
 
-**Airbnb charges 15%. ARIA charges 3%.**
+**Airbnb charges 15%. ARIA charges 5%.**
 **Airbnb takes 3–5 days to pay hosts. ARIA settles in under 1 second.**
-**Airbnb stores receipts on centralized servers. ARIA stores them on Walrus — permanently, verifiably, immutably.**
+**Airbnb stores receipts on centralized servers. ARIA stores them on Walrus — decentralized, tamper-proof, and independently verifiable.**
+
+*Current testnet retention is ~53 days per Walrus blob (paid-epoch storage); long-term/permanent retention is a mainnet migration item, not yet live — see `walrus.mjs`.*
 
 ---
 
@@ -42,17 +44,17 @@ ARIA is a full-stack vacation rental platform built natively on Sui blockchain. 
 - 🔐 **zkLogin** — Sign in with Google, Sui wallet created automatically
 - 🪪 **Identity Verification** (`/profile`) — Encrypt KYC-style PII in-browser with Seal, stored on Walrus; only your booking's host can decrypt it. Optional booking gate (`REQUIRE_GUEST_VERIFICATION`)
 - 🏠 **Property Browse** — 6 properties with 5-photo galleries, live ratings, and pricing
-- 📅 **Date Selection** — Live cost breakdown with subtotal, ARIA fee (3%), and occupancy tax
+- 📅 **Date Selection** — Live cost breakdown with subtotal, ARIA fee (5%), and occupancy tax
 - ⚡ **One-signature Booking** — A single wallet signature funds **two** on-chain escrows (payment + refundable deposit) atomically; pre-sign panel shows exactly where each leg goes
 - 💸 **Fee follows refund** — Cancel before check-in for a full refund of rental + fee + tax + deposit; at check-in the payment splits to host / ARIA / tax remittance
-- 🧾 **Walrus Receipt** — Permanent on-chain receipt with blob ID in confirmation email
+- 🧾 **Walrus Receipt** — Tamper-proof, independently verifiable receipt with blob ID in confirmation email (currently ~53-day testnet retention)
 - 💬 **Secure Messaging** — Per-booking chat with read receipts and unread badges
 - ⭐ **Reviews** — 1–5 star reviews displayed live on property cards
 - 🤖 **AI Agent** — Book, cancel, message hosts, and manage reservations via natural language
 
 ### Host Experience
 - 📊 **Dashboard** — 9-stat overview: revenue, fees, taxes, net earnings, deposits, messages, ratings
-- 💰 **Revenue Summary** — Gross → ARIA fee (3%) → taxes (8%) → net earnings, per-property breakdown
+- 💰 **Revenue Summary** — Gross → ARIA fee (5%) → taxes (varies by jurisdiction) → net earnings, per-property breakdown
 - 📅 **iCal Sync** — Two-way sync with Airbnb and VRBO to prevent double bookings
 - 🔒 **Deposit Management** — Release damage deposits with one click, stored on Walrus
 - 🪪 **View Guest Identity** — Decrypt a booking guest's verified identity in-browser via Seal (only for your own active bookings; logged in `pii_access_log`)
@@ -61,7 +63,7 @@ ARIA is a full-stack vacation rental platform built natively on Sui blockchain. 
 - 🏡 **AI Host Agent** — Revenue summaries, inbox scanning, deposit release via natural language
 
 ### On-Chain Audit Trail
-Every booking lifecycle event generates a permanent Walrus receipt:
+Every booking lifecycle event generates a tamper-proof Walrus receipt (currently ~53-day testnet retention — see the note under "What is ARIA?"):
 - `walrusBlobId` — Booking confirmed
 - `cancellationWalrusBlobId` — Booking cancelled
 - `depositReleaseWalrusBlobId` — Deposit released
@@ -180,9 +182,9 @@ aria-demo/
 
 | Feature | Airbnb / VRBO | ARIA |
 |---|---|---|
-| Platform fee | 12–15% | **3%** |
+| Platform fee | 12–15% | **5%** |
 | Host payout speed | 3–5 days | **< 1 second** |
-| Receipt storage | Centralized | **Walrus (permanent)** |
+| Receipt storage | Centralized | **Walrus (decentralized, tamper-proof; ~53-day testnet retention today)** |
 | Damage deposit | Platform escrow | **Sui escrow (on-chain)** |
 | Login | Email/password | **zkLogin (Google → Sui wallet)** |
 | Double booking | Manual sync | **Automated iCal + receipt guard** |

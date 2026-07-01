@@ -497,7 +497,7 @@ export default function Listing() {
                       )}
                       {booking.walrusBlobId && (
                         <div style={{ marginTop: '10px', background: '#fff', border: '1px solid #d5ecdf', borderRadius: '6px', padding: '10px' }}>
-                          <div style={{ color: '#999', fontSize: '10px', marginBottom: '4px' }}>RECEIPT STORED PERMANENTLY ON WALRUS</div>
+                          <div style={{ color: '#999', fontSize: '10px', marginBottom: '4px' }}>RECEIPT STORED ON WALRUS (TAMPER-PROOF · ~53-DAY TESTNET RETENTION)</div>
                           <a href={`https://aggregator.walrus-testnet.walrus.space/v1/blobs/${booking.walrusBlobId}`} target="_blank" rel="noreferrer" style={{ color: '#00913f', fontFamily: 'monospace', fontSize: '10px', wordBreak: 'break-all' }}>{booking.walrusBlobId}</a>
                         </div>
                       )}
