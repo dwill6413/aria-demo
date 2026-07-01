@@ -188,9 +188,33 @@ async function canClaimAsHost(session, booking) {
 // R1: single source of the session-lookup boilerplate that was copy-pasted into
 // ~28 routes. Returns the session, or sends the 401 and returns null (caller
 // does `if (!session) return;`).
+//
+// CSRF hardening (July 2026 security review): the aria_session cookie is
+// sameSite:'none' in production (required since the Vercel frontend and
+// Railway API are different origins), which means browsers attach it
+// automatically to cross-site requests — including ones a malicious page
+// forges via an auto-submitting form or a "simple" (non-preflighted) fetch.
+// CORS alone doesn't stop this: it only blocks the attacker's JS from
+// *reading* our response, not the browser from *sending* the request and
+// triggering whatever side effect it causes.
+//
+// The fix: for any state-changing request (anything but GET/HEAD), require
+// the explicit x-session-id header rather than trusting the ambient cookie.
+// A cross-site page cannot attach a custom header without the browser first
+// sending a CORS preflight, and our CORS config only allows FRONTEND_URL —
+// so a forged request from any other origin is rejected before it reaches
+// the handler. Every legitimate mutating call in this app already goes
+// through authFetch() (lib/authFetch.js), which always sets this header, so
+// this closes the hole with no change needed on the frontend.
 async function getAuthedSession(request, reply) {
-  const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
-  if (!sessionId) { reply.code(401).send({ error: 'Not authenticated' }); return null; }
+  const isMutating = !['GET', 'HEAD', 'OPTIONS'].includes(request.method);
+  const headerSid = request.headers['x-session-id'];
+  const cookieSid = request.cookies.aria_session;
+  const sessionId = isMutating ? headerSid : (cookieSid || headerSid);
+  if (!sessionId) {
+    reply.code(401).send({ error: isMutating ? 'Missing session header — please refresh and try again.' : 'Not authenticated' });
+    return null;
+  }
   const session = await getSession(sessionId);
   if (!session) { reply.code(401).send({ error: 'Session expired' }); return null; }
   return session;

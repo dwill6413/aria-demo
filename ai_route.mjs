@@ -616,8 +616,14 @@ async function executeTool(toolName, toolInput, session, isHost) {
 export async function registerAIRoute(fastify) {
   fastify.post('/api/ai/chat', async (request, reply) => {
 
-    const sessionId = request.cookies.aria_session || request.headers['x-session-id'];
-    if (!sessionId) return reply.code(401).send({ error: 'Not authenticated' });
+    // CSRF hardening (July 2026): this is a POST route that can trigger real
+    // side effects (booking, cancelling, sending SUI, releasing deposits) via
+    // AI tool calls, so it needs the same protection as server.mjs's
+    // getAuthedSession — require the explicit x-session-id header rather than
+    // the ambient, cross-site-sendable cookie. See server.mjs for the full
+    // rationale. authFetch() (used by pages/ai.jsx) always sends this header.
+    const sessionId = request.headers['x-session-id'];
+    if (!sessionId) return reply.code(401).send({ error: 'Missing session header — please refresh and try again.' });
     const session = await getSession(sessionId);
     if (!session) return reply.code(401).send({ error: 'Session expired' });
 
