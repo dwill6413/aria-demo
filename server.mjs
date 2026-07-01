@@ -265,6 +265,13 @@ fastify.get('/properties', async () => {
     // count stepper in the booking modal needs the cap for every property,
     // not just imported listings.
     maxGuests: p.maxGuests,
+    // hostAddress: surfaced so pages/host.jsx can filter "my listings" down
+    // to properties the logged-in host actually owns, instead of showing
+    // every property on the platform to every approved host. Sui addresses
+    // are pseudonymous by design (already shown in booking receipts and the
+    // wallet send UI), so exposing this on the public catalog isn't a new
+    // disclosure.
+    hostAddress: p.hostAddress,
     ...(p.source === 'db' ? {
       location: p.location, beds: p.beds, baths: p.baths,
       tag: p.tag, images: p.images, description: p.description,
