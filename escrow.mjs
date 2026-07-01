@@ -17,7 +17,7 @@ import { SuiGrpcClient } from '@mysten/sui/grpc';
 import { Transaction, coinWithBalance } from '@mysten/sui/transactions';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
-import { toBase64, fromBase64 } from '@mysten/sui/utils';
+import { toBase64, fromBase64, normalizeStructTag, SUI_TYPE_ARG } from '@mysten/sui/utils';
 import { bcs } from '@mysten/sui/bcs';
 import { verifyPersonalMessageSignature } from '@mysten/sui/verify';
 
@@ -1130,8 +1130,13 @@ export async function verifySendTransaction(digest, expectedSender, expectedReci
   if (expectedSender && actualSender && normalizeAddr(actualSender) !== normalizeAddr(expectedSender)) {
     return { ok: false, reason: 'Transaction sender does not match the signed-in wallet' };
   }
+  // The gRPC core client returns coinType in canonical/zero-padded form
+  // (e.g. 0x0000...0002::sui::SUI), not the short literal '0x2::sui::SUI'
+  // used elsewhere as a Move call typeArgument — normalize both sides before
+  // comparing, or this credit lookup silently never matches.
   const credit = (txn?.balanceChanges || []).find(
-    (c) => c.coinType === '0x2::sui::SUI' && normalizeAddr(c.address) === normalizeAddr(expectedRecipient)
+    (c) => normalizeStructTag(c.coinType) === normalizeStructTag(SUI_TYPE_ARG)
+      && normalizeAddr(c.address) === normalizeAddr(expectedRecipient)
   );
   if (!credit || BigInt(credit.amount) !== BigInt(amountMist)) {
     return { ok: false, reason: 'On-chain transfer does not match the reported recipient and amount' };
