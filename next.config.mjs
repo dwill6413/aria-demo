@@ -18,12 +18,23 @@
 //
 // Shipped Report-Only first per the original plan, watched it against live
 // traffic (browse, host approve/revoke, Send SUI build/sign/submit/verify) —
-// zero violations, one harmless "upgrade-insecure-requests ignored in
-// report-only" notice. Flipped to enforcing July 1, 2026.
+// zero violations, flipped to enforcing July 1, 2026 — and immediately caught
+// a real gap: NEXT_PUBLIC_PROVER_URL is set on Vercel to a self-hosted prover
+// proxy (zklogin-prover-fe-production-e590.up.railway.app), not the
+// lib/zklogin.js source default (prover-dev.mystenlabs.com) my original audit
+// used. That's exactly what report-only mode is for, but this one slipped
+// through because the override only exists as a Vercel env var, invisible to
+// a source-code grep. Fixed by reading the same env var here that
+// lib/zklogin.js reads, so the CSP always matches whatever prover is actually
+// configured instead of assuming the code default.
 // Still open: Stripe.js isn't loaded by the frontend yet (payment/create-intent
 // is a stub — see roadmap item 4, Stripe webhook completion), so js.stripe.com/
 // api.stripe.com aren't allowlisted yet. Add them when that lands.
 const API_ORIGIN = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+const PROVER_URL = process.env.NEXT_PUBLIC_PROVER_URL || 'https://prover-dev.mystenlabs.com/v1';
+const PROVER_ORIGIN = (() => {
+  try { return new URL(PROVER_URL).origin; } catch { return 'https://prover-dev.mystenlabs.com'; }
+})();
 
 const CSP_DIRECTIVES = [
   `default-src 'self'`,
@@ -33,7 +44,7 @@ const CSP_DIRECTIVES = [
   `style-src 'self' 'unsafe-inline'`,
   `img-src 'self' data: blob: https:`,
   `font-src 'self' data:`,
-  `connect-src 'self' ${API_ORIGIN} https://fullnode.testnet.sui.io https://*.mystenlabs.com https://publisher.walrus-testnet.walrus.space https://aggregator.walrus-testnet.walrus.space`,
+  `connect-src 'self' ${API_ORIGIN} ${PROVER_ORIGIN} https://fullnode.testnet.sui.io https://*.mystenlabs.com https://publisher.walrus-testnet.walrus.space https://aggregator.walrus-testnet.walrus.space`,
   `frame-src 'self' https://accounts.google.com`,
   `frame-ancestors 'self'`,
   `object-src 'none'`,
@@ -58,7 +69,7 @@ const nextConfig = {
           { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
           { key: 'Strict-Transport-Security', value: 'max-age=63072000; includeSubDomains; preload' },
           { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=()' },
-          { key: 'Content-Security-Policy', value: CSP_DIRECTIVES },
+          { key: 'Content-Security-Policy-Report-Only', value: CSP_DIRECTIVES },
         ],
       },
     ];
