@@ -31,7 +31,16 @@
 // of falling back to the auto-release key placeholder, and so a second
 // (test) account approved as a host via /host/apply never appears to own
 // them (see pages/host.jsx's refreshProperties ownership filter).
-const OFFICIAL_HOST_ADDRESS = '0x528819eb5fac69c3c480f2f3fc85a2843ed93a54d8f8467e269964a16f949659';
+// Confirmed directly from each account's live wallet display on July 1, 2026
+// (not re-derived from old screenshots/transactions — the zkLogin salt has
+// changed since this app was first built, per ARIA_ROADMAP.md's "Deliberately
+// Deferred" section, which re-derives every Google account's Sui address and
+// silently orphans old ones). cwilliams36092@gmail.com (official) currently
+// resolves to 0xbdb2e801... — NOT 0x528819eb..., which is the TEST account
+// (ariasuidemo@gmail.com) as of the same check. If addresses look wrong again
+// after any future salt change, re-verify from each account's live wallet
+// display rather than trusting a prior value here or in git history.
+const OFFICIAL_HOST_ADDRESS = '0xbdb2e801f9bccc29edc587c1651984c10a82c1a63c88fc406ca231bea6757fdf';
 
 export const PROPERTIES = {
   1: { title: 'Oceanfront Villa',    price: 285, hostAddress: OFFICIAL_HOST_ADDRESS, maxGuests: 8 },
