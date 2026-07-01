@@ -944,7 +944,7 @@ Railway runs **Node 22** (`nixpacks.toml`: `nodejs_22`). Required by
 
 ## Deliberately Deferred
 
-1. **zkLogin salt `'0'`** — changing orphans existing addresses. Migration required.
+1. **zkLogin salt (`ZKLOGIN_SALT`/`NEXT_PUBLIC_ZKLOGIN_SALT`)** — a single value shared by every user, not per-user. Changing it re-derives EVERY user's Sui address at once and orphans whatever was keyed to the old address. This already happened June 30, 2026 (moved off the `'0'` dev default to a random value) and caused real confusion July 1, 2026 when two test accounts' addresses had silently swapped. **Never change this again without a full migration — including at mainnet migration.** Address derivation doesn't depend on which Sui network you're on, so the same salt (and same Google OAuth client ID) carries addresses over from testnet to mainnet unchanged; only actually changing the salt, or issuing a new Google OAuth client ID for `aud`, would reshuffle addresses. True per-user secret salt + migration is still the real fix and remains undone — see `ARIA_ROADMAP.md`'s M3 and `ARIA_KEY_INVENTORY.md` §8 for details.
 2. **DB TLS unverified** — Railway cert issue. Supply CA cert before mainnet.
 3. **Session token in URL** — cross-domain dependency. One-time code exchange deferred.
 

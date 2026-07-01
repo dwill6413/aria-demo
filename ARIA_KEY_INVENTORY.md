@@ -95,14 +95,17 @@ load) in Railway environment variables.
 
 | | |
 |---|---|
-| Type | **Numeric string** — 16-byte random value expressed as a decimal integer. NOT a Sui keypair. |
+| Type | **Numeric string** — 16-byte random value expressed as a decimal integer. NOT a Sui keypair. **Global/shared across all users — NOT per-user.** |
 | Value | `59495786400363606476793255475060161673` |
-| Status | **Active — set in Railway + Vercel (June 30, 2026).** |
+| Status | **Active — set in Railway + Vercel (June 30, 2026). Treat as frozen — see incident below.** |
 | Purpose | Deriving each user's Sui address from their Google `sub` via `jwtToAddress(id_token, salt)`. Both frontend and backend must use the same value or login breaks. |
 | Why numeric | The zkLogin prover requires exactly 16 bytes. `crypto.randomBytes(16).toString('hex')` produces 32 hex chars which the prover rejects as "must be 16 bytes." Use BigInt conversion: `node -e "const b = require('crypto').randomBytes(16); console.log(BigInt('0x' + b.toString('hex')).toString())"` |
 | Railway var | `ZKLOGIN_SALT` (backend — `auth.mjs`) |
 | Vercel var | `NEXT_PUBLIC_ZKLOGIN_SALT` (frontend — `lib/zklogin.js`) |
-| Risk if changed | All existing user addresses are re-derived — every user gets a new Sui address and loses access to any funds in their old address. Rotate only with a migration plan. |
+| **Does this close M3?** | **No.** M3 (`ARIA_ROADMAP.md`) calls for a *per-user* secret salt. This is one value shared by every user — better than the old `'0'` default, but the same single-point-of-failure risk remains: anyone with this value + a user's Google `sub` can derive their address, and changing it once re-derives every account. Do not mark M3 done because of this entry. |
+| **Incident, June 30 → July 1, 2026** | Setting this value (moving off `'0'`) re-derived every existing user's address. Went unnoticed for a day: two test accounts' Sui addresses had silently swapped relative to what old screenshots/transactions showed, which briefly led to assigning the wrong account as "official" property owner in `catalog.mjs` and revoking host status by address instead of realizing email was the safer key. Resolved by re-confirming each account's address live from its wallet display rather than trusting historical values. Any future salt change will reproduce this exact failure mode for whoever is using the app at that moment. |
+| **Mainnet migration** | **Do not change this value as part of moving to mainnet.** zkLogin address derivation (`hash(iss, aud, sub, salt)`) doesn't depend on which Sui network you point at — RPC endpoint/network config is separate from address derivation. Keep this salt AND the same Google OAuth client ID (`aud`) across the migration and every user's mainnet address will match their testnet address. Changing either one is equivalent to a fresh salt rotation and will re-derive every address, same as the June 30 incident. |
+| Risk if changed | All existing user addresses are re-derived — every user gets a new Sui address and loses access to any funds/records tied to their old one. Only ever change with a full migration plan; never as an incidental config cleanup. |
 | Risk if leaked | Anyone with the salt + a user's Google `sub` can derive that user's Sui address (public info anyway). Salt is not a secret in the cryptographic sense — it just must be consistent. |
 
 ---
@@ -125,7 +128,7 @@ load) in Railway environment variables.
 
 ---
 
-*Created June 17, 2026 (P2). Last updated June 30, 2026: added §8 `ZKLOGIN_SALT` (numeric 16-byte value, set in Railway + Vercel; closes M3); added §7 `CHECKIN_KEY` — AES-256-GCM symmetric key for self check-in access instruction encryption (P4). Prior June 25, 2026: deployer key #1 signed the
+*Created June 17, 2026 (P2). Last updated July 1, 2026: corrected §8 `ZKLOGIN_SALT` — the June 30 change does NOT close M3 (still one shared salt, not per-user); documented the June 30→July 1 address-swap incident it caused and added explicit guidance not to change this value at mainnet migration. Prior June 30, 2026: added §8 `ZKLOGIN_SALT` (numeric 16-byte value, set in Railway + Vercel); added §7 `CHECKIN_KEY` — AES-256-GCM symmetric key for self check-in access instruction encryption (P4). Prior June 25, 2026: deployer key #1 signed the
 **v5** (Phase 2a BookingPass), **v6** (Phase 2c resale market), and **v7** (pre-mainnet
 u128 hardening) upgrades; UpgradeCap now at version 7. No keys rotated or generated for
 v5/v6/v7 — same deployer, auto-release, arbitrator, and treasury addresses as before. (Prior June 23, 2026: arbitrator key #4

@@ -789,7 +789,7 @@ evaluated and acted on. Scorecard/rationale: see the evaluation response.
 |---|---|
 | **`refund_deposit` contract fn (v4)** | **✅ Done, live** — shipped in `7b09e73` alongside the Phase 1h.5 payment escrow, confirmed on `origin/main`. Arbitrator-signed, pre-check-in instant refund; `bookings.mjs` calls `refundDepositEscrow()` from `/booking/cancel` so a cancelling guest gets deposit + payment back together instead of waiting for `auto_release` at expiry. Move-tested (`test_refund_deposit_to_guest`, `test_refund_deposit_non_arbitrator_fails`); no dedicated JS unit test found by name in `escrow.test.mjs` — worth confirming coverage there. |
 | **R6** — scope `/bookings/all` to host's properties | Multi-tenant isolation; only matters once host-owned listings ship. |
-| **M3** — per-user zkLogin salt (+ migration) | salt `'0'` lets anyone derive a user's Sui address from their Google `sub`. Re-derives addresses → migration required. |
+| **M3** — per-user zkLogin salt (+ migration) | **Still open — not closed by the June 30, 2026 salt update.** That change moved `ZKLOGIN_SALT`/`NEXT_PUBLIC_ZKLOGIN_SALT` off the `'0'` dev default to a real random 16-byte value (see `ARIA_KEY_INVENTORY.md` §8) — better than a known constant, but it's still ONE salt shared by every user, not a per-user secret salt. Anyone with the current salt + a user's Google `sub` can still derive their address, and changing this single value ever again re-derives every account at once. Confirmed live July 1, 2026: this exact scenario happened — a salt change reshuffled which Sui address two test accounts resolved to, breaking address-keyed data (`host_profiles.sui_address`, `catalog.mjs` hardcoded host addresses) that assumed the old mapping. **Do not change `ZKLOGIN_SALT`/`NEXT_PUBLIC_ZKLOGIN_SALT` again — including during mainnet migration — without a full migration plan.** True per-user salt (each user gets their own persisted secret, e.g. via a salt-server or DB-backed lookup keyed by `sub`) is the actual fix and remains undone. |
 | **M4** — DB TLS CA cert | `rejectUnauthorized:false` is a MITM risk; supply the Railway CA cert. |
 | **M6** — Stripe webhook / payment capture | Card path creates an intent but never confirms capture; bookings can be `confirmed` without paid card. |
 | **R10** — externalize rate-limit + single cron | In-process now; hard prerequisite before a 2nd Railway instance. |
@@ -972,9 +972,33 @@ June 24); two were already tracked.
 
 ## 6. Deliberately Deferred
 
-### zkLogin salt = `'0'`
-Changing re-derives every user's Sui address, orphaning existing data.
-Follow-up: per-user secret salt with migration.
+### zkLogin salt (shared, global — `ZKLOGIN_SALT` / `NEXT_PUBLIC_ZKLOGIN_SALT`)
+Changing this value re-derives EVERY user's Sui address simultaneously,
+orphaning existing data — this already happened once (June 30, 2026, moving
+off the `'0'` dev default to a random value) and confused which of two test
+accounts owned which address for a full day before it was caught (July 1,
+2026). Anything keyed by Sui address recorded before the change (`properties`
+rows, `host_profiles.sui_address`, hardcoded addresses in `catalog.mjs`,
+on-chain escrow objects) still points at the OLD, now-wrong address for that
+account — there is no way to fix already-created records short of a manual
+per-record correction; going forward everything derives consistently as long
+as the salt doesn't move again.
+
+**Do not change `ZKLOGIN_SALT` / `NEXT_PUBLIC_ZKLOGIN_SALT` for ANY reason
+without a full migration plan — this explicitly includes mainnet migration.**
+zkLogin address derivation (`hash(iss, aud, sub, salt)`) does not depend on
+which Sui network you point at — the same salt (and same Google OAuth client
+ID / `aud`) yields the SAME address on testnet and mainnet. So moving to
+mainnet should mean changing `SUI_NETWORK`, RPC URLs, and republishing the
+Move package — not touching the salt. The only things that would force a
+salt-equivalent address reshuffle at mainnet migration are (a) actually
+changing the salt value, or (b) issuing a NEW Google OAuth client ID for
+production instead of reusing the current one, since `aud` is also a
+derivation input — avoid both unless a clean address reset is intentional.
+
+Follow-up (still open, not resolved by the June 30 change): true per-user
+secret salt (each user's own persisted salt, not one shared value) + a
+migration plan for existing accounts.
 
 ### DB TLS (`ssl: { rejectUnauthorized: false }`)
 Railway cert doesn't validate against default CA.
