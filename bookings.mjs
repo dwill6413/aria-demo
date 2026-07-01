@@ -495,9 +495,15 @@ export async function createBooking({ propertyId, checkIn, checkOut, guests, ses
     await client.query('BEGIN');
     await client.query('SELECT pg_advisory_xact_lock($1)', [Number(propertyId)]);
 
+    // 'failed' excluded too (July 1, 2026 fix): a card booking whose Stripe
+    // Checkout Session creation errored is set payment_status='failed'
+    // (routes/payments.mjs) and nothing ever transitions it afterwards — no
+    // sweep targets 'failed' — so without this exclusion those rows blocked
+    // their dates forever. Both terminal "this booking will never happen"
+    // states free the dates.
     const conflict = await client.query(
       `SELECT booking_ref FROM bookings
-       WHERE property_id = $1 AND payment_status != 'cancelled'
+       WHERE property_id = $1 AND payment_status NOT IN ('cancelled', 'failed')
        AND check_in < $3 AND check_out > $2`,
       [propertyId, checkInStr, checkOutStr]
     );
@@ -732,7 +738,8 @@ export async function createPendingCardBooking({ propertyId, checkIn, checkOut, 
   // Same atomic conflict-check-and-insert pattern as createBooking (Findings
   // #3 and #6) — a pending card booking holds the dates exactly like a
   // pending SuiUSD one does, so the same per-property advisory lock and
-  // payment_status != 'cancelled' overlap check apply unchanged.
+  // NOT IN ('cancelled','failed') overlap check apply unchanged (see the
+  // matching comment in createBooking for why 'failed' frees the dates too).
   let client;
   try {
     client = await pool.connect();
@@ -741,7 +748,7 @@ export async function createPendingCardBooking({ propertyId, checkIn, checkOut, 
 
     const conflict = await client.query(
       `SELECT booking_ref FROM bookings
-       WHERE property_id = $1 AND payment_status != 'cancelled'
+       WHERE property_id = $1 AND payment_status NOT IN ('cancelled', 'failed')
        AND check_in < $3 AND check_out > $2`,
       [propertyId, checkInStr, checkOutStr]
     );

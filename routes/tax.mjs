@@ -25,7 +25,7 @@ fastify.get('/tax/summary', async (request, reply) => {
             tr.id AS remittance_id, tr.remitted_at, tr.remitted_by, tr.jurisdiction, tr.notes
           FROM bookings b
           LEFT JOIN tax_remittances tr ON b.booking_ref = tr.booking_ref
-          WHERE b.payment_status != 'cancelled' AND b.property_id = ANY($1)
+          WHERE b.payment_status NOT IN ('cancelled', 'failed') AND b.property_id = ANY($1)
           ORDER BY b.created_at DESC
         `, [[...ownedIds]])
       : await pool.query(`
@@ -35,7 +35,7 @@ fastify.get('/tax/summary', async (request, reply) => {
         tr.id AS remittance_id, tr.remitted_at, tr.remitted_by, tr.jurisdiction, tr.notes
       FROM bookings b
       LEFT JOIN tax_remittances tr ON b.booking_ref = tr.booking_ref
-      WHERE b.payment_status != 'cancelled'
+      WHERE b.payment_status NOT IN ('cancelled', 'failed')
       ORDER BY b.created_at DESC
     `);
     const rows = result.rows;
@@ -77,7 +77,9 @@ fastify.post('/tax/remit', async (request, reply) => {
   if (!bookingRef || typeof bookingRef !== 'string' || !bookingRef.startsWith('ARIA-'))
     return reply.code(400).send({ error: 'A valid bookingRef is required' });
   try {
-    const bkResult = await pool.query('SELECT * FROM bookings WHERE booking_ref = $1 AND payment_status != $2', [bookingRef, 'cancelled']);
+    // 'failed' excluded alongside 'cancelled' (July 1, 2026): a failed card
+    // charge collected no tax, so it must not be remittable or counted above.
+    const bkResult = await pool.query(`SELECT * FROM bookings WHERE booking_ref = $1 AND payment_status NOT IN ('cancelled', 'failed')`, [bookingRef]);
     if (bkResult.rows.length === 0) return reply.code(404).send({ error: 'Booking not found or is cancelled' });
     const booking = bkResult.rows[0];
     if (!(await canManageProperty(session, booking.property_id)))
