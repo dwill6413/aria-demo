@@ -26,7 +26,10 @@
 // through because the override only exists as a Vercel env var, invisible to
 // a source-code grep. Fixed by reading the same env var here that
 // lib/zklogin.js reads, so the CSP always matches whatever prover is actually
-// configured instead of assuming the code default.
+// configured instead of assuming the code default. Re-verified Report-Only
+// with a full pass afterward — fresh login, revoke/approve host, Send SUI,
+// browse both host and guest views, booking + cancel + check-in — zero
+// violations. Flipped back to enforcing July 1, 2026.
 // Still open: Stripe.js isn't loaded by the frontend yet (payment/create-intent
 // is a stub — see roadmap item 4, Stripe webhook completion), so js.stripe.com/
 // api.stripe.com aren't allowlisted yet. Add them when that lands.
@@ -69,7 +72,7 @@ const nextConfig = {
           { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
           { key: 'Strict-Transport-Security', value: 'max-age=63072000; includeSubDomains; preload' },
           { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=()' },
-          { key: 'Content-Security-Policy-Report-Only', value: CSP_DIRECTIVES },
+          { key: 'Content-Security-Policy', value: CSP_DIRECTIVES },
         ],
       },
     ];
