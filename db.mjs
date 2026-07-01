@@ -91,6 +91,20 @@ export async function initDB() {
       notes TEXT,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
+    -- M3 (per-user zkLogin salt): each Google account's sub claim maps to its
+    -- own persisted salt, instead of every user sharing one ZKLOGIN_SALT env
+    -- var. Once a row exists, that user's Sui address derivation never moves
+    -- again regardless of what the global env var does later. See
+    -- getOrCreateUserSalt() in auth.mjs — new rows are seeded with the
+    -- CURRENT global salt value (not a fresh random one) so existing users'
+    -- addresses are preserved at rollout; only a value change to an
+    -- already-frozen row would move an address, and nothing in the app does
+    -- that after creation.
+    CREATE TABLE IF NOT EXISTS user_salts (
+      sub TEXT PRIMARY KEY,
+      salt TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY,
       data JSONB NOT NULL,

@@ -19,12 +19,30 @@ export default function Callback() {
 
     (async () => {
       try {
+        // M3: fetch this user's own persisted salt BEFORE completing zkLogin,
+        // so the addressSeed computed below and the Sui address the backend
+        // derives moments later (in /auth/zklogin/callback) both come from
+        // the same per-user value instead of a shared global constant. Falls
+        // back to completeZkLogin's own default (FALLBACK_SALT) if this call
+        // fails for any reason — see lib/zklogin.js's FALLBACK_SALT comment
+        // for why that stays safe rather than silently deriving a mismatched
+        // address.
+        let salt;
+        try {
+          const saltRes = await fetch(`${API}/auth/zklogin/salt`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id_token }),
+          });
+          if (saltRes.ok) ({ salt } = await saltRes.json());
+        } catch {}
+
         // Fetches and caches the ZK proof for this login using the ephemeral
         // key generated client-side in handleLogin (lib/zklogin.js:
         // beginZkLogin). This is the step that makes it possible for the
         // guest to later sign transactions (e.g. P0b escrow creation) as
         // their own zkLogin address — nothing server-side holds this material.
-        const { nonce } = await completeZkLogin(id_token);
+        const { nonce } = await completeZkLogin(id_token, salt);
 
         const res = await fetch(`${API}/auth/zklogin/callback`, {
           method: 'POST',

@@ -44,6 +44,33 @@ async function purgeExpiredSessions() {
 // Run cleanup every hour
 setInterval(purgeExpiredSessions, 60 * 60 * 1000);
 
+// ─── Per-user zkLogin salt (M3) ────────────────────────────────────────────
+// Replaces the single shared ZKLOGIN_SALT env var as the actual derivation
+// input: each Google account's `sub` claim gets its own persisted salt in
+// user_salts, looked up/created here. Once a row exists it never changes, so
+// changing the ZKLOGIN_SALT env var again can no longer reshuffle anyone's
+// address — it only ever seeds a row that doesn't exist yet. See db.mjs's
+// user_salts comment and ARIA_KEY_INVENTORY.md §8 for the incident that made
+// this necessary (June 30 → July 1, 2026: changing the old shared salt
+// silently swapped which Sui address two accounts resolved to).
+export async function getOrCreateUserSalt(sub) {
+  const existing = await pool.query('SELECT salt FROM user_salts WHERE sub = $1', [sub]);
+  if (existing.rows.length > 0) return existing.rows[0].salt;
+
+  // First time we've ever seen this sub. Seed with the CURRENT global salt
+  // value — not a fresh random one — so an existing user's address is
+  // preserved at rollout (their historical address was already derived from
+  // this value). ON CONFLICT DO NOTHING + re-SELECT handles the race where
+  // two logins for the same brand-new sub land at the same instant.
+  const seedSalt = process.env.ZKLOGIN_SALT || '0';
+  await pool.query(
+    `INSERT INTO user_salts (sub, salt) VALUES ($1, $2) ON CONFLICT (sub) DO NOTHING`,
+    [sub, seedSalt]
+  );
+  const result = await pool.query('SELECT salt FROM user_salts WHERE sub = $1', [sub]);
+  return result.rows[0].salt;
+}
+
 // ─── Google ID-token verification (no external dependency) ────────────────────
 // Verifies the RS256 signature against Google's published JWKS and validates
 // the standard claims. Without this, a forged token could mint any session.
@@ -128,9 +155,12 @@ export async function handleZkLoginCallback(request, reply) {
       throw new Error('Nonce mismatch');
     }
 
-    // Must match NEXT_PUBLIC_ZKLOGIN_SALT in lib/zklogin.js (Vercel).
-    // Set ZKLOGIN_SALT in Railway env vars. Defaults to '0' for local dev only.
-    const salt = process.env.ZKLOGIN_SALT || '0';
+    // M3: per-user persisted salt (see getOrCreateUserSalt above), not the
+    // shared global env var directly. The frontend calls /auth/zklogin/salt
+    // (handleZkLoginSalt below) for this same sub just before this request —
+    // so this almost always just reads back the row that call already
+    // created, guaranteeing both sides derive the identical address.
+    const salt = await getOrCreateUserSalt(payload.sub);
     const suiAddress = jwtToAddress(id_token, salt, true);
 
     // Cryptographically strong, opaque session id (was Math.random()).
@@ -170,6 +200,32 @@ export async function handleZkLoginCallback(request, reply) {
   } catch (err) {
     console.error('zkLogin callback error:', err.message);
     // Generic message to the client — no internal details leaked.
+    return reply.code(401).send({ error: 'Authentication failed' });
+  }
+}
+
+// ─── Per-user salt lookup (M3) ─────────────────────────────────────────────
+// Called by the OAuth callback page BEFORE completeZkLogin() so the browser
+// can request its ZK proof and compute its addressSeed using the SAME salt
+// handleZkLoginCallback will use moments later for this same sub — both call
+// getOrCreateUserSalt(), so they always agree on one value. This runs before
+// any ARIA session exists, so there's no session to authenticate the caller
+// with; verifying the id_token itself is what stands in for that. A salt
+// isn't secret in the cryptographic sense (see ARIA_KEY_INVENTORY.md §8 —
+// anyone with the salt AND a user's Google sub can derive their address,
+// which is public info anyway), but the sub it's keyed to should still only
+// ever be resolved from a token actually signed by Google for that account,
+// not an arbitrary client-supplied string.
+export async function handleZkLoginSalt(request, reply) {
+  const { id_token } = request.body || {};
+  if (!id_token) return reply.code(400).send({ error: 'Missing id_token' });
+
+  try {
+    const payload = await verifyGoogleIdToken(id_token);
+    const salt = await getOrCreateUserSalt(payload.sub);
+    return { salt };
+  } catch (err) {
+    console.error('zkLogin salt lookup error:', err.message);
     return reply.code(401).send({ error: 'Authentication failed' });
   }
 }

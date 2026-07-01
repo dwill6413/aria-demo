@@ -11,7 +11,7 @@ import { getSuiUSDLiquidity, calculateHostPayout } from './deepbook.mjs';
 import { generateICal, saveExternalCalendar, checkAvailability, assertPublicHttpsUrl } from './ical.mjs';
 import { Resend } from 'resend';
 import { registerAIRoute } from './ai_route.mjs';
-import { handleZkLoginCallback, getSession, deleteSession } from './auth.mjs';
+import { handleZkLoginCallback, handleZkLoginSalt, getSession, deleteSession } from './auth.mjs';
 import { initDB, pool } from './db.mjs';
 import { getProperty, getAllProperties } from './catalog.mjs';
 import { extractListingFields } from './listing_import.mjs';
@@ -287,6 +287,15 @@ fastify.get('/properties', async () => {
 // the GET query+state pattern used when the backend minted the state blob.
 fastify.post('/auth/zklogin/callback', async (request, reply) => {
   return handleZkLoginCallback(request, reply);
+});
+
+// M3: per-user zkLogin salt lookup. Called by the callback page BEFORE
+// /auth/zklogin/callback so the browser can compute its addressSeed with the
+// same salt the backend is about to use — see handleZkLoginSalt in auth.mjs.
+fastify.post('/auth/zklogin/salt', {
+  config: { rateLimit: { max: 30, timeWindow: '10 minutes', errorResponseBuilder: () => ({ error: 'Too many attempts.' }) } }
+}, async (request, reply) => {
+  return handleZkLoginSalt(request, reply);
 });
 
 fastify.get('/auth/me', async (request, reply) => {
