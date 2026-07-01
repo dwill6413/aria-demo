@@ -16,11 +16,10 @@
 //     (@mysten/seal), not hardcoded here — covered by the mystenlabs.com
 //     wildcard since Mysten hosts the testnet key servers there
 //
-// Shipping in Report-Only mode first per the original plan below: this lets
-// us watch the browser console / a report endpoint for violations against
-// real traffic before it can ever block the live booking/Seal flow. Flip
-// Content-Security-Policy-Report-Only to Content-Security-Policy once a
-// production session has run clean for a few days.
+// Shipped Report-Only first per the original plan, watched it against live
+// traffic (browse, host approve/revoke, Send SUI build/sign/submit/verify) —
+// zero violations, one harmless "upgrade-insecure-requests ignored in
+// report-only" notice. Flipped to enforcing July 1, 2026.
 // Still open: Stripe.js isn't loaded by the frontend yet (payment/create-intent
 // is a stub — see roadmap item 4, Stripe webhook completion), so js.stripe.com/
 // api.stripe.com aren't allowlisted yet. Add them when that lands.
@@ -59,7 +58,7 @@ const nextConfig = {
           { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
           { key: 'Strict-Transport-Security', value: 'max-age=63072000; includeSubDomains; preload' },
           { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=()' },
-          { key: 'Content-Security-Policy-Report-Only', value: CSP_DIRECTIVES },
+          { key: 'Content-Security-Policy', value: CSP_DIRECTIVES },
         ],
       },
     ];
