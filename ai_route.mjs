@@ -59,6 +59,44 @@ async function resolveIsHost(session) {
   } catch { return false; }
 }
 
+// R6: bulk ownership check, mirrors server.mjs's getOwnedPropertyIds. Every
+// HOST_ONLY_TOOLS handler below used to query platform-wide the moment
+// resolveIsHost() passed — any approved host (including a second test/demo
+// account) could ask the AI for every guest's bookings, revenue, messages,
+// and reviews across every OTHER host's properties too. Returns `null` for
+// superadmins (no scoping needed) or the Set of property ids this session's
+// Sui address actually owns.
+async function getOwnedPropertyIds(session) {
+  if (HOST_ADDRESSES.includes((session?.email || '').toLowerCase())) return null;
+  if (!session?.suiAddress) return new Set();
+  try {
+    const all = await getAllProperties();
+    const mine = all.filter(
+      (p) => p.hostAddress && normalizeAddr(p.hostAddress) === normalizeAddr(session.suiAddress)
+    );
+    return new Set(mine.map((p) => Number(p.id)));
+  } catch { return new Set(); }
+}
+
+// R6: per-booking version, for tools that already have a specific booking row
+// in hand (get_messages, send_message, release_deposit) rather than needing
+// the full owned-ids set. Checks the booking's own on-chain host_sui_address
+// first (the authoritative signer baked in at booking time), then falls back
+// to the property's current hostAddress — same shape as release_deposit's
+// original inline check below, now shared so get_messages/send_message can't
+// drift from it. A host who doesn't manage this property gets the same
+// "Not your booking" treatment a guest gets for someone else's booking —
+// previously they could read or post into ANY guest's message thread.
+async function canHostAccessBooking(session, booking) {
+  if (HOST_ADDRESSES.includes((session?.email || '').toLowerCase())) return true;
+  if (!booking || !session?.suiAddress) return false;
+  if (booking.host_sui_address && normalizeAddr(booking.host_sui_address) === normalizeAddr(session.suiAddress)) {
+    return true;
+  }
+  const prop = await getProperty(booking.property_id);
+  return !!(prop?.hostAddress && normalizeAddr(prop.hostAddress) === normalizeAddr(session.suiAddress));
+}
+
 // ─── Tool definitions ─────────────────────────────────────────────────────────
 
 const GUEST_TOOLS = [
@@ -137,7 +175,7 @@ const HOST_TOOLS = [
     type: 'function',
     function: {
       name: 'get_all_bookings',
-      description: 'Get ALL bookings across all properties on the platform.',
+      description: 'Get all bookings across the properties YOU manage (not other hosts\' properties).',
       parameters: { type: 'object', properties: {}, required: [] }
     }
   },
@@ -153,7 +191,7 @@ const HOST_TOOLS = [
     type: 'function',
     function: {
       name: 'get_all_messages',
-      description: 'Scan all bookings for recent guest messages.',
+      description: 'Scan bookings on properties you manage for recent guest messages.',
       parameters: { type: 'object', properties: {}, required: [] }
     }
   },
@@ -204,7 +242,7 @@ const HOST_TOOLS = [
     type: 'function',
     function: {
       name: 'get_reviews',
-      description: 'Get all guest reviews across all properties.',
+      description: 'Get guest reviews for the properties you manage.',
       parameters: { type: 'object', properties: {}, required: [] }
     }
   },
@@ -401,15 +439,27 @@ async function executeTool(toolName, toolInput, session, isHost) {
       return JSON.stringify(result.error ? { error: result.error } : result);
     }
 
-    // ── Host: get all bookings from Postgres ──────────────────────────────────
+    // Host: get all bookings from Postgres — scoped to the host's own
+    // properties (R6); superadmins still see the whole platform.
     if (toolName === 'get_all_bookings') {
-      const result = await pool.query('SELECT * FROM bookings ORDER BY created_at DESC');
+      const ownedIds = await getOwnedPropertyIds(session);
+      if (ownedIds && ownedIds.size === 0) return JSON.stringify([]);
+      const result = ownedIds
+        ? await pool.query('SELECT * FROM bookings WHERE property_id = ANY($1) ORDER BY created_at DESC', [[...ownedIds]])
+        : await pool.query('SELECT * FROM bookings ORDER BY created_at DESC');
       return JSON.stringify(result.rows);
     }
 
-    // ── Host: revenue summary from Postgres ───────────────────────────────────
+    // Host: revenue summary from Postgres — scoped to the host's own
+    // properties (R6); superadmins still see platform-wide revenue.
     if (toolName === 'get_revenue_summary') {
-      const result = await pool.query(`SELECT * FROM bookings WHERE payment_status != 'cancelled'`);
+      const ownedIds = await getOwnedPropertyIds(session);
+      if (ownedIds && ownedIds.size === 0) {
+        return JSON.stringify({ totalBookings: 0, totalGross: 0, totalFees: 0, totalTaxes: 0, totalNet: 0, totalDepositsHeld: 0, byProperty: {} });
+      }
+      const result = ownedIds
+        ? await pool.query(`SELECT * FROM bookings WHERE payment_status != 'cancelled' AND property_id = ANY($1)`, [[...ownedIds]])
+        : await pool.query(`SELECT * FROM bookings WHERE payment_status != 'cancelled'`);
       const bookings = result.rows;
       const revPropIds = [...new Set(bookings.map(b => Number(b.property_id)))];
       const revPropEntries = await Promise.all(revPropIds.map(id => getProperty(id)));
@@ -438,12 +488,16 @@ async function executeTool(toolName, toolInput, session, isHost) {
       return JSON.stringify({ totalBookings: bookings.length, totalGross, totalFees, totalTaxes, totalNet, totalDepositsHeld: totalDeposits, byProperty });
     }
 
-    // ── Get messages for a booking (guest must own it; host may read any) ──────
+    // Get messages for a booking (guest must own it; host must manage the
+    // property it's for — R6: a host used to be able to read ANY booking's
+    // thread here, not just their own properties').
     if (toolName === 'get_messages') {
-      if (!isHost) {
-        const bk = await pool.query('SELECT wallet_address FROM bookings WHERE booking_ref = $1', [toolInput.bookingRef]);
-        if (bk.rows.length === 0) return JSON.stringify({ error: 'Booking not found' });
-        if (bk.rows[0].wallet_address !== session.suiAddress) return JSON.stringify({ error: 'Not your booking' });
+      const bk = await pool.query('SELECT wallet_address, host_sui_address, property_id FROM bookings WHERE booking_ref = $1', [toolInput.bookingRef]);
+      if (bk.rows.length === 0) return JSON.stringify({ error: 'Booking not found' });
+      const booking = bk.rows[0];
+      const isGuestsOwn = booking.wallet_address === session.suiAddress;
+      if (!isGuestsOwn && !(isHost && await canHostAccessBooking(session, booking))) {
+        return JSON.stringify({ error: 'Not your booking' });
       }
       const result = await pool.query(
         'SELECT * FROM messages WHERE booking_ref = $1 ORDER BY created_at ASC',
@@ -452,9 +506,20 @@ async function executeTool(toolName, toolInput, session, isHost) {
       return JSON.stringify(result.rows);
     }
 
-    // ── Host: scan all message threads (single query — no N+1) ────────────────
+    // Host: scan all message threads (single query — no N+1) — scoped to the
+    // host's own properties (R6); superadmins still see every thread.
     if (toolName === 'get_all_messages') {
-      const rows = await pool.query(`
+      const ownedIds = await getOwnedPropertyIds(session);
+      if (ownedIds && ownedIds.size === 0) return JSON.stringify('No messages found.');
+      const rows = ownedIds
+        ? await pool.query(`
+            SELECT m.*, b.property_title, b.guest_name
+            FROM messages m
+            JOIN bookings b ON b.booking_ref = m.booking_ref
+            WHERE b.property_id = ANY($1)
+            ORDER BY b.created_at DESC, m.created_at ASC
+          `, [[...ownedIds]])
+        : await pool.query(`
         SELECT m.*, b.property_title, b.guest_name
         FROM messages m
         JOIN bookings b ON b.booking_ref = m.booking_ref
@@ -478,12 +543,16 @@ async function executeTool(toolName, toolInput, session, isHost) {
       return JSON.stringify(threads.length > 0 ? threads : 'No messages found.');
     }
 
-    // ── Send message (guest must own the booking; host may message any) ───────
+    // Send message (guest must own the booking; host must manage the property
+    // it's for — R6: same fix as get_messages above, a host could previously
+    // message into any guest's thread regardless of which property it was for).
     if (toolName === 'send_message') {
-      if (!isHost) {
-        const bk = await pool.query('SELECT wallet_address FROM bookings WHERE booking_ref = $1', [toolInput.bookingRef]);
-        if (bk.rows.length === 0) return JSON.stringify({ error: 'Booking not found' });
-        if (bk.rows[0].wallet_address !== session.suiAddress) return JSON.stringify({ error: 'Not your booking' });
+      const bk = await pool.query('SELECT wallet_address, host_sui_address, property_id FROM bookings WHERE booking_ref = $1', [toolInput.bookingRef]);
+      if (bk.rows.length === 0) return JSON.stringify({ error: 'Booking not found' });
+      const booking = bk.rows[0];
+      const isGuestsOwn = booking.wallet_address === session.suiAddress;
+      if (!isGuestsOwn && !(isHost && await canHostAccessBooking(session, booking))) {
+        return JSON.stringify({ error: 'Not your booking' });
       }
       await pool.query(
         'INSERT INTO messages (booking_ref, from_name, from_email, message) VALUES ($1,$2,$3,$4)',
@@ -504,22 +573,11 @@ async function executeTool(toolName, toolInput, session, isHost) {
       const booking = result.rows[0];
 
       // Superadmins may release any; a regular approved host only their own
-      // property. Checks the booking's own on-chain host_sui_address first
-      // (the authoritative signer for this booking), then falls back to
-      // getProperty()'s hostAddress, which resolves BOTH the fixed catalog's
-      // PROPERTIES[id].hostAddress and a host-imported row's host_address —
-      // previously this only checked the `properties` table, so a host
-      // configured for one of the 6 fixed catalog properties could never
-      // release deposits via the AI assistant (mirrors the server.mjs
+      // property — see canHostAccessBooking above (shared with get_messages/
+      // send_message; was inlined here originally, mirrors the server.mjs
       // canManageProperty fix — same root-cause bug, same fix shape).
-      if (!HOST_ADDRESSES.includes((session.email || '').toLowerCase())) {
-        const bookingHostMatch = booking.host_sui_address && normalizeAddr(booking.host_sui_address) === normalizeAddr(session.suiAddress);
-        let owns = bookingHostMatch;
-        if (!owns) {
-          const prop = await getProperty(booking.property_id);
-          owns = !!(prop?.hostAddress && normalizeAddr(prop.hostAddress) === normalizeAddr(session.suiAddress));
-        }
-        if (!owns) return JSON.stringify({ error: 'You do not manage this property' });
+      if (!(await canHostAccessBooking(session, booking))) {
+        return JSON.stringify({ error: 'You do not manage this property' });
       }
 
       const release = await releaseDepositForBooking(booking);
@@ -536,8 +594,14 @@ async function executeTool(toolName, toolInput, session, isHost) {
     }
 
     // ── Host: get all reviews from Postgres ───────────────────────────────────
+    // Scoped to the host's own properties (R6); superadmins still see every
+    // review platform-wide.
     if (toolName === 'get_reviews') {
-      const result = await pool.query('SELECT * FROM reviews ORDER BY created_at DESC');
+      const ownedIds = await getOwnedPropertyIds(session);
+      if (ownedIds && ownedIds.size === 0) return JSON.stringify([]);
+      const result = ownedIds
+        ? await pool.query('SELECT * FROM reviews WHERE property_id = ANY($1) ORDER BY created_at DESC', [[...ownedIds]])
+        : await pool.query('SELECT * FROM reviews ORDER BY created_at DESC');
       return JSON.stringify(result.rows);
     }
 

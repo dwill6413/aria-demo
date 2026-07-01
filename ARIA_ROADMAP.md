@@ -788,7 +788,7 @@ evaluated and acted on. Scorecard/rationale: see the evaluation response.
 | Rec | Why deferred / what's needed |
 |---|---|
 | **`refund_deposit` contract fn (v4)** | **✅ Done, live** — shipped in `7b09e73` alongside the Phase 1h.5 payment escrow, confirmed on `origin/main`. Arbitrator-signed, pre-check-in instant refund; `bookings.mjs` calls `refundDepositEscrow()` from `/booking/cancel` so a cancelling guest gets deposit + payment back together instead of waiting for `auto_release` at expiry. Move-tested (`test_refund_deposit_to_guest`, `test_refund_deposit_non_arbitrator_fails`); no dedicated JS unit test found by name in `escrow.test.mjs` — worth confirming coverage there. |
-| **R6** — scope `/bookings/all` to host's properties | Multi-tenant isolation; only matters once host-owned listings ship. |
+| **R6** — scope `/bookings/all` to host's properties | **✅ Done, July 1, 2026.** Confirmed genuinely live (not just theoretical) via an independent external review that flagged it as the top risk. Fixed in `server.mjs` (`getOwnedPropertyIds()`, used by `/bookings/all`, `/reviews/all`, `/tax/summary`) and mirrored in `ai_route.mjs` (`getOwnedPropertyIds()`/`canHostAccessBooking()`, used by `get_all_bookings`, `get_revenue_summary`, `get_all_messages`, `get_reviews`, `get_messages`, `send_message`). Superadmins (`HOST_ADDRESSES`) still see everything; a regular approved host now only sees data for properties whose `hostAddress` matches their own Sui address. The AI's `get_messages`/`send_message` had an even looser bug beyond the read-scoping issue — "host may access ANY booking's thread" with no property check at all — also closed via the same `canHostAccessBooking()` helper. |
 | **M3** — per-user zkLogin salt (+ migration) | **✅ Done and verified live, July 1, 2026.** Real incident forced the issue: a June 30 change to the old single shared `ZKLOGIN_SALT` reshuffled which Sui address two test accounts resolved to, breaking address-keyed data (`host_profiles.sui_address`, `catalog.mjs` hardcoded host addresses) that assumed the old mapping — confirmed live July 1. Fix: new `user_salts` table (one row per Google `sub`), `getOrCreateUserSalt()`/`handleZkLoginSalt()` in `auth.mjs`, `POST /auth/zklogin/salt`, and the OAuth callback page/`lib/zklogin.js` now fetch each user's own salt at login instead of reading a shared constant. Existing users were migrated transparently — their first post-rollout login seeds their row with the prior shared value, so no address moved. **Verified post-deploy:** both `cwilliams36092@gmail.com` (`0xbdb2e801...`) and `ariasuidemo@gmail.com` (`0x528819eb...`) logged in after the rollout and each still shows the exact same address it had before — the migration held. `ZKLOGIN_SALT`/`NEXT_PUBLIC_ZKLOGIN_SALT` now only matter as that one-time seed value; changing them can no longer reshuffle anyone already migrated. Still true regardless: don't change either at mainnet migration (see `ARIA_KEY_INVENTORY.md` §8) — no code depends on you changing it, so there's no upside, only risk for any not-yet-migrated `sub`. |
 | **M4** — DB TLS CA cert | `rejectUnauthorized:false` is a MITM risk; supply the Railway CA cert. |
 | **M6** — Stripe webhook / payment capture | Card path creates an intent but never confirms capture; bookings can be `confirmed` without paid card. |
@@ -860,7 +860,7 @@ genuinely new/verified ones were acted on or added to the backlog.
 
 **Already tracked (no new action — see above):** payment collection/routing = Fee
 collection (Phase 1h.5); host-data isolation across `/bookings/all`, `/tax/summary`,
-`/reviews/all`, and AI host tools = **R6** + AI host-tool scoping; DB TLS = **M4**;
+`/reviews/all`, and AI host tools = **R6** (done July 1, 2026, see above); DB TLS = **M4**;
 zkLogin salt = **M3**; Stripe finality = **M6**; single-process sweeps/rate-limits =
 **R10**; numbered migrations = **R8**; integration tests + CI = **R11**; iCal cache =
 the iCal-amplification §5c row; UpgradeCap burn + Move audit = pre-mainnet gate.
@@ -891,8 +891,8 @@ already tracked.
 | **Cross-tenant booking cancellation (High)** | `cancelBooking()` skipped the ownership check whenever `isHost` was true → any approved host could cancel **any** booking platform-wide. Now `cancelBooking` self-authorizes via new `hostManagesBooking(session, booking)` in `bookings.mjs` (superadmin `HOST_ADDRESSES`, OR the booking's escrow `host_sui_address`, OR a `properties.host_address` match — mirrors `canClaimAsHost`). The unsafe `isHost` param was removed from `cancelBooking` and from both call sites (`/booking/cancel`, AI `cancel_booking`). Demo super-host (in `HOST_ADDRESSES`) is unaffected; regular hosts are now correctly scoped. |
 | **AI release wrote a non-existent column (Medium)** | `ai_route.mjs` wrote `bookings.deposit_release_walrus_blob_id`, but `db.mjs` never created it → a clean DB would throw "column does not exist" on an AI-path deposit release. Added the idempotent `ALTER TABLE … ADD COLUMN IF NOT EXISTS deposit_release_walrus_blob_id TEXT` in `initDB()`. |
 
-**Already tracked (no new action):** host data platform-wide = **R6** + AI host-tool
-scoping (§5d); session model (localStorage/`x-session-id`/`SameSite=None`) = CSRF +
+**Already tracked (no new action):** host data platform-wide = **R6** (done July 1,
+2026, see §5c above); session model (localStorage/`x-session-id`/`SameSite=None`) = CSRF +
 XSS hardening (§5d); process-local rate-limit/sweeps = **R10**; public `/availability`
 iCal amplification = §5c/§5d iCal item; package-manager/lockfile drift = §5d.
 

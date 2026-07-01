@@ -149,6 +149,27 @@ async function canManageProperty(session, propertyId) {
   } catch { return false; }
 }
 
+// R6: bulk version of canManageProperty — the set of property ids this
+// session actually owns, or `null` to mean "superadmin, no scoping needed."
+// Used to scope host-facing READ routes (/bookings/all, /tax/summary,
+// /reviews/all) so an approved host only ever sees data for properties they
+// manage, not every guest on the platform. Previously these routes gated on
+// isHost() alone — any approved host, including a second test/demo account,
+// could read every other host's bookings, taxes, and reviews. Mirrors
+// canManageProperty's per-property check but computes it once across the
+// whole catalog instead of one id at a time.
+async function getOwnedPropertyIds(session) {
+  if (HOST_ADDRESSES.includes((session?.email || '').toLowerCase())) return null;
+  if (!session?.suiAddress) return new Set();
+  try {
+    const all = await getAllProperties(fastify.log);
+    const mine = all.filter(
+      (p) => p.hostAddress && normalizeAddr(p.hostAddress) === normalizeAddr(session.suiAddress)
+    );
+    return new Set(mine.map((p) => Number(p.id)));
+  } catch { return new Set(); }
+}
+
 // P2 / Phase 1j: claim_damage asserts on-chain that the signer IS escrow.host
 // — not just "manages the property" in the loose canManageProperty sense —
 // so the booking's own host_sui_address (the address actually baked into its
@@ -2046,17 +2067,25 @@ fastify.get('/bookings/history', async (request, reply) => {
   } catch (err) { fastify.log.error({ err }, '/bookings/history query failed'); return { bookings: [] }; }
 });
 
-// Bookings All — HOST ONLY
+// Bookings All — HOST ONLY, scoped to the requesting host's own properties
+// (R6) — superadmins (HOST_ADDRESSES) still see everything.
 fastify.get('/bookings/all', async (request, reply) => {
   const session = await getAuthedSession(request, reply);
   if (!session) return;
   if (!(await isHost(session))) return reply.code(403).send({ error: 'Host access required' });
+  const ownedIds = await getOwnedPropertyIds(session);
+  if (ownedIds && ownedIds.size === 0) return { bookings: [] };
   try {
     // Bounded (Codex review): cap the host bookings feed so one request can't
     // pull the whole table into memory. Proper offset/cursor pagination is a
     // follow-up (see roadmap tech debt). Tunable via BOOKINGS_ALL_LIMIT.
     const allLimit = Number(process.env.BOOKINGS_ALL_LIMIT || 500);
-    const result = await pool.query('SELECT * FROM bookings ORDER BY created_at DESC LIMIT $1', [allLimit]);
+    const result = ownedIds
+      ? await pool.query(
+          'SELECT * FROM bookings WHERE property_id = ANY($1) ORDER BY created_at DESC LIMIT $2',
+          [[...ownedIds], allLimit]
+        )
+      : await pool.query('SELECT * FROM bookings ORDER BY created_at DESC LIMIT $1', [allLimit]);
     const allPropIds = [...new Set(result.rows.map(b => Number(b.property_id)))];
     const allPropEntries = await Promise.all(allPropIds.map(id => getProperty(id, fastify.log)));
     const allPropById = new Map(allPropIds.map((id, i) => [id, allPropEntries[i]]));
@@ -2342,12 +2371,18 @@ fastify.post('/checkin/verify', {
   };
 });
 
+// Scoped to the requesting host's own properties (R6) — superadmins still see
+// every review.
 fastify.get('/reviews/all', async (request, reply) => {
   const session = await getAuthedSession(request, reply);
   if (!session) return;
   if (!(await isHost(session))) return reply.code(403).send({ error: 'Host access required' });
+  const ownedIds = await getOwnedPropertyIds(session);
+  if (ownedIds && ownedIds.size === 0) return { reviews: [] };
   try {
-    const result = await pool.query('SELECT * FROM reviews ORDER BY created_at DESC');
+    const result = ownedIds
+      ? await pool.query('SELECT * FROM reviews WHERE property_id = ANY($1) ORDER BY created_at DESC', [[...ownedIds]])
+      : await pool.query('SELECT * FROM reviews ORDER BY created_at DESC');
     // Map to the camelCase shape host.jsx renders (the raw snake_case rows left
     // guestName/timestamp/bookingRef/propertyId undefined in the UI), and surface
     // the verified-review proof fields.
@@ -2361,12 +2396,29 @@ fastify.get('/reviews/all', async (request, reply) => {
 
 // ─── Tax Routes — HOST ONLY ───────────────────────────────────────────────────
 
+// Scoped to the requesting host's own properties (R6) — superadmins still see
+// tax data platform-wide.
 fastify.get('/tax/summary', async (request, reply) => {
   const session = await getAuthedSession(request, reply);
   if (!session) return;
   if (!(await isHost(session))) return reply.code(403).send({ error: 'Host access required' });
+  const ownedIds = await getOwnedPropertyIds(session);
+  if (ownedIds && ownedIds.size === 0) {
+    return { bookings: [], summary: { totalCollected: 0, totalRemitted: 0, totalOutstanding: 0, bookingCount: 0, remittedCount: 0, pendingCount: 0 } };
+  }
   try {
-    const result = await pool.query(`
+    const result = ownedIds
+      ? await pool.query(`
+          SELECT b.booking_ref, b.property_id, b.property_title, b.guest_name, b.guest_email,
+            b.check_in, b.check_out, b.nights, b.subtotal, b.taxes, b.total_amount,
+            b.payment_status, b.created_at,
+            tr.id AS remittance_id, tr.remitted_at, tr.remitted_by, tr.jurisdiction, tr.notes
+          FROM bookings b
+          LEFT JOIN tax_remittances tr ON b.booking_ref = tr.booking_ref
+          WHERE b.payment_status != 'cancelled' AND b.property_id = ANY($1)
+          ORDER BY b.created_at DESC
+        `, [[...ownedIds]])
+      : await pool.query(`
       SELECT b.booking_ref, b.property_id, b.property_title, b.guest_name, b.guest_email,
         b.check_in, b.check_out, b.nights, b.subtotal, b.taxes, b.total_amount,
         b.payment_status, b.created_at,
