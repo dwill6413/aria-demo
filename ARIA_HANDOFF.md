@@ -1,11 +1,57 @@
 # ARIA — Technical Handoff Document
-**Version:** 4.32 | **Updated:** July 1, 2026
+**Version:** 4.33 | **Updated:** July 1, 2026
 
-> **NEXT SESSION — START HERE:** Item (5) of the standing prioritized list —
-> split `server.mjs` (3,092 lines) into `routes/*.mjs` Fastify plugins + add
-> tests. Items (1)-(4) (host tenant isolation, fee/ToS accuracy, session/CSRF/
-> CSP hardening, Stripe webhook completion incl. the M6b Seal-parity follow-up
-> below) are all done and verified live. No open blockers before starting (5).
+> **NEXT SESSION — START HERE:** The tests half of item (5). The `server.mjs`
+> route-module split (R1) is done and live (see the July 1 entry below) —
+> route-level tests are now unblocked. Agreed approach: scope tests separately
+> from the split, highest-risk routes first — escrow confirm/rebuild,
+> payments/Stripe-webhook, cancel/dispute — NOT all 63 routes at once. Items
+> (1)-(4) of the standing list are done and verified live. No open blockers.
+
+> **July 1, 2026 (R1 — server.mjs route-module split, DEPLOYED & LIVE-VERIFIED):**
+> `server.mjs` (3,092 lines) split into: **13 `routes/*.mjs` Fastify plugins**
+> (core, auth, identity, payments, bookings, resale, wallet, checkin, host,
+> misc, messages, reviews, tax — each a default-export `async function
+> xxxRoutes(fastify)`, registered in original definition order),
+> **`authz.mjs`** (the 9 shared auth/RBAC helpers — `getAuthedSession`,
+> `isHost`, `canManageProperty`, `getOwnedPropertyIds`, `canClaimAsHost`,
+> `canAccessBookingThread`, `checkDbHost`, `isSafeImageUrl`, plus
+> `HOST_ADDRESSES` — only edits vs. original: `export` keywords and
+> `fastify.log` → a logger injected via `setAuthzLogger(fastify.log)` at boot),
+> **`services.mjs`** (Stripe/Resend singletons; calls `dotenvConfig()` at
+> import since the constructors read env at module scope), and **`sweeps.mjs`**
+> (all 4 keeper sweeps + re-entrancy guards + timers, wrapped in
+> `startSweeps(fastify)`, called after route registration so boot ordering
+> matches the old file). `server.mjs` is now ~97 lines of bootstrap.
+> **Method:** route bodies extracted VERBATIM by line-range script from a
+> checksummed backup, never retyped; every extracted segment byte-verified
+> against the original; route inventory diffed pre/post — **63 routes,
+> identical**; eslint `no-undef` over all new files. That lint caught the one
+> real cross-domain dependency: `BPS_DENOM` (resale const block) is also used
+> by `/host/property/:id/resale-settings` — now a module-scope export of
+> `routes/resale.mjs`, imported by `routes/host.mjs`. (The env-derived resale
+> consts deliberately stayed INSIDE the plugin function so they're read at
+> registration time, after `dotenvConfig()`.) **Verified:** 79/79
+> `escrow.test.mjs` locally; Railway deploy booted clean (DB initialized,
+> keypairs loaded, sweeps started); live `/health` + `/properties` (catalog +
+> DB rows) confirmed on the new code. **⚠️ File-truncation mystery LIKELY
+> SOLVED this session:** two freshly-edited route files appeared
+> tail-truncated mid-statement (same signature as June 29), and later BOTH
+> handoff/roadmap docs appeared truncated in the sandbox — but reading the
+> SAME docs through the Windows-side file tools showed them complete and
+> intact. Diagnosis: **the assistant sandbox's Linux mount serves a stale,
+> short read view of recently-written large files** — the on-disk Windows
+> files are fine. This also cleanly explains the M6b git incident (git ran in
+> the sandbox, read the stale view, committed/pushed the truncation) and casts
+> the June 29 "cloud-sync/OneDrive" hypothesis in a new light — those repairs
+> may have been fixing files that were never actually broken on disk. **New
+> operating rule: before "repairing" any suspected truncation, confirm it via
+> a Windows-side read; never trust sandbox reads of freshly-edited large
+> files, and (standing rule) never run git from the sandbox.** **Still open from the R1 item:** inline
+> HTML email strings → `templates/` dir. Committed and pushed to `origin/main`
+> from the user's terminal (per the M6b lesson: no git from assistant
+> sandboxes). Files: `server.mjs`, `authz.mjs`, `services.mjs`, `sweeps.mjs`,
+> `routes/*.mjs` (13 new).
 
 > **July 1, 2026 (M6b — Stripe/Seal identity parity, LIVE-VERIFIED):**
 > Closed a real gap in M6 (Stripe Checkout): a card-paid booking never
