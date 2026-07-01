@@ -1,7 +1,61 @@
 # ARIA — Technical Handoff Document
-**Version:** 4.31 | **Updated:** June 30, 2026
+**Version:** 4.32 | **Updated:** July 1, 2026
 
-> **June 30, 2026 (LATEST — wallet balance display, zkLogin send, and self check-in with encrypted access instructions):**
+> **NEXT SESSION — START HERE:** Item (5) of the standing prioritized list —
+> split `server.mjs` (3,092 lines) into `routes/*.mjs` Fastify plugins + add
+> tests. Items (1)-(4) (host tenant isolation, fee/ToS accuracy, session/CSRF/
+> CSP hardening, Stripe webhook completion incl. the M6b Seal-parity follow-up
+> below) are all done and verified live. No open blockers before starting (5).
+
+> **July 1, 2026 (M6b — Stripe/Seal identity parity, LIVE-VERIFIED):**
+> Closed a real gap in M6 (Stripe Checkout): a card-paid booking never
+> produces a guest-signed escrow (no guest wallet transaction happens
+> anywhere in that flow), so host.jsx's "View Guest Identity" — gated
+> on-chain by `seal_approve`, which requires a real `&BookingEscrow<T>` —
+> had nothing to check against for Stripe guests, even though the guest-side
+> Walrus/Seal upload already worked identically regardless of payment
+> method. Rejected an off-chain DB-based authorization fallback (would mean
+> ARIA's backend, not Seal's key servers, deciding PII access — real
+> custody, not a shortcut). Shipped `createIdentityAttestationEscrow()`
+> (`escrow.mjs`): the existing zero-privilege auto-release key calls the
+> **same, unmodified** `create_escrow` entry function, funded with a trivial
+> amount, for Stripe bookings only — no Move contract changes. Object id
+> stored in a new, dedicated `identity_attestation_object_id` column
+> (`db.mjs`), never `escrow_object_id`, so none of the real deposit/claim/
+> dispute/resale/sweep logic can see or touch it. `GET
+> /host/guest-identity/:bookingRef` (`server.mjs`) now accepts either column.
+> **Two real bugs found and fixed live during testing** (full incident
+> write-up in `ARIA_ROADMAP.md` M6b): (1) first deploy set the attestation
+> object's expiry ~1 year out to keep it away from `auto_release`, but the
+> contract hard-caps `expiry_ms` at exactly 30 days (`MAX_EXPIRY_MS`) and
+> aborted with `EExpiryTooFar` — fixed at 29 days. (2) `autoReleaseKeypair
+> .signAndExecuteTransaction()` (the `@mysten/sui` keypair convenience
+> wrapper) silently hardcodes its own `include` and drops whatever the
+> caller passes, so the object-id extraction fell through to an unreliable
+> "last Created entry" heuristic and returned the WRONG object once — fixed
+> by bypassing the wrapper (manual build/sign/`suiClient.core
+> .executeTransaction`) and reading `escrow_id` straight off the contract's
+> own `EscrowCreated` event instead. **Confirmed live:** fresh Stripe
+> booking → webhook → attestation object created → host successfully
+> decrypted the guest's full PII via Seal in-browser. Also fixed a smaller
+> bug found while wiring this: `createPendingCardBooking()`'s INSERT omitted
+> `deposit_status`, silently taking the table default `'held'` instead of
+> `NULL`. **Known limitation, not yet closed:** unlike a SuiUSD booking,
+> Stripe-booking identity access isn't indefinite — past ~29 days the
+> attestation object becomes a permissionless `auto_release` target for
+> anyone; add a renewal sweep or lazy-create fallback before mainnet.
+> **Separate deploy-tooling incident, same session:** a `git commit` run
+> from the assistant's own sandbox shell turned out to land in this real
+> repo (the sandbox path is a live mount, not an isolated copy) and pushed a
+> corrupted/truncated snapshot of 18 files, crash-looping Railway for a few
+> minutes. Fixed by committing the real working-tree contents from
+> PowerShell after clearing a stale `.git/HEAD.lock`. No app data or
+> on-chain state affected. **Lesson: git operations on this repo must only
+> ever run from the user's own terminal, never from an assistant sandbox.**
+> Files touched: `db.mjs`, `escrow.mjs`, `bookings.mjs`, `server.mjs`,
+> `ARIA_ROADMAP.md`. Committed and pushed to `origin/main`.
+
+> **June 30, 2026 (wallet balance display, zkLogin send, and self check-in with encrypted access instructions):**
 > Three features shipped and verified end-to-end in-browser this session. No Move contract changes.
 >
 > **1. Wallet balance display (P3 — wallet UX).** Added `lib/useWalletBalance.js` hook
