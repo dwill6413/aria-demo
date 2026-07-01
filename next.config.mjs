@@ -15,6 +15,15 @@
 //   - Seal's key-server URLs are resolved dynamically from on-chain data
 //     (@mysten/seal), not hardcoded here — covered by the mystenlabs.com
 //     wildcard since Mysten hosts the testnet key servers there
+//   - checkout.stripe.com (M6) is deliberately NOT listed here: the card-
+//     payment path uses hosted Stripe Checkout via a full top-level browser
+//     redirect (window.location.href = session.url in pages/listing/[id].jsx),
+//     not an embedded iframe or fetch/XHR call. Top-level navigations aren't
+//     governed by connect-src, script-src, or frame-src — only an <iframe>
+//     embed would need frame-src, which hosted Checkout doesn't use. This is
+//     also why choosing Checkout over embedded Stripe Elements avoided a
+//     second round of the exact CSP allowlist-guessing that broke the
+//     zkLogin prover below.
 //
 // Shipped Report-Only first per the original plan, watched it against live
 // traffic (browse, host approve/revoke, Send SUI build/sign/submit/verify) —

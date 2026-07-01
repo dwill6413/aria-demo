@@ -19,6 +19,7 @@ import { calculateHostPayout } from './deepbook.mjs';
 import {
   buildEscrowTransaction, autoReleaseKeypair, autoReleaseEscrow,
   buildBookingPaymentTransaction, refundPaymentEscrow, refundDepositEscrow,
+  createIdentityAttestationEscrow,
 } from './escrow.mjs';
 import { Resend } from 'resend';
 import { pushToWalrus } from './walrus.mjs';
@@ -340,10 +341,23 @@ export async function cancelBooking({ bookingRef, session, logger = console }) {
   };
 }
 
-function buildConfirmationEmailHtml({ propertyTitle, bookingRef, checkIn, checkOut, nights, subtotal, ariaFee, taxes, taxPct, jurisdictionName, bookingTotal, depositAmount, walrusBlobId, guestName }) {
+// M6: added paymentMethod (default 'SuiUSD', the pre-existing behavior) so
+// this template can also serve the Stripe card-payment path — which has no
+// deposit/escrow at all (see createPendingCardBooking) — without lying about
+// either. Also fixed "PERMANENT ON-CHAIN RECORD" to match the accurate
+// "tamper-proof, independently verifiable" language used elsewhere in the app
+// (Walrus testnet retention is ~53 days, not permanent — see README/ToS).
+function buildConfirmationEmailHtml({ propertyTitle, bookingRef, checkIn, checkOut, nights, subtotal, ariaFee, taxes, taxPct, jurisdictionName, bookingTotal, depositAmount, walrusBlobId, guestName, paymentMethod = 'SuiUSD' }) {
+  const currencyLabel = paymentMethod === 'stripe' ? 'USD' : 'SuiUSD';
   const walrusHtml = walrusBlobId
-    ? `<div style="background:#111;border:1px solid #222;border-radius:8px;padding:16px;margin-bottom:20px"><p style="margin:0 0 8px;font-size:12px;color:#555">WALRUS RECEIPT — PERMANENT ON-CHAIN RECORD</p><p style="margin:0;font-size:11px;color:#00ff44;word-break:break-all;font-family:monospace">${walrusBlobId}</p></div>`
+    ? `<div style="background:#111;border:1px solid #222;border-radius:8px;padding:16px;margin-bottom:20px"><p style="margin:0 0 8px;font-size:12px;color:#555">WALRUS RECEIPT — TAMPER-PROOF, INDEPENDENTLY VERIFIABLE</p><p style="margin:0;font-size:11px;color:#00ff44;word-break:break-all;font-family:monospace">${walrusBlobId}</p></div>`
     : '';
+  const depositHtml = depositAmount
+    ? `<tr><td style="color:#4a9eff;padding:6px 0">🔒 Refundable Security Deposit</td><td style="text-align:right;color:#4a9eff">$${depositAmount} ${currencyLabel}</td></tr>`
+    : '';
+  const depositNoteHtml = depositAmount
+    ? `<p style="color:#555;font-size:12px;margin:12px 0 0;line-height:1.6">The $${depositAmount} deposit is locked into a Sui escrow contract once you sign the escrow transaction, and is returned after checkout. ARIA's 5% fee applies to your stay cost only — never to your deposit.</p>`
+    : `<p style="color:#555;font-size:12px;margin:12px 0 0;line-height:1.6">Paid by card via Stripe. ARIA's 5% fee applies to your stay cost only. Card payments don't currently include a refundable security deposit — that's available when you pay with SuiUSD.</p>`;
   return `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px">
     <h1 style="color:#00ff44;font-size:24px;margin:0 0 8px">✅ Booking Confirmed</h1>
     <p style="color:#888;margin:0 0 24px">Your ARIA booking receipt — ${escapeHtml(guestName)}</p>
@@ -357,14 +371,33 @@ function buildConfirmationEmailHtml({ propertyTitle, bookingRef, checkIn, checkO
         <tr><td style="color:#888;padding:6px 0">Subtotal</td><td style="text-align:right">$${subtotal}</td></tr>
         <tr><td style="color:#888;padding:6px 0">ARIA Fee (5% of subtotal only)</td><td style="text-align:right;color:#00ff44">$${ariaFee}</td></tr>
         <tr><td style="color:#888;padding:6px 0">Taxes (${taxPct}% — ${jurisdictionName})</td><td style="text-align:right">$${taxes}</td></tr>
-        <tr style="border-top:1px solid #333"><td style="padding:8px 0;font-weight:700">Booking Total</td><td style="text-align:right;font-weight:700;color:#00ff44">$${bookingTotal} SuiUSD</td></tr>
-        <tr><td style="color:#4a9eff;padding:6px 0">🔒 Refundable Security Deposit</td><td style="text-align:right;color:#4a9eff">$${depositAmount} SuiUSD</td></tr>
+        <tr style="border-top:1px solid #333"><td style="padding:8px 0;font-weight:700">Booking Total</td><td style="text-align:right;font-weight:700;color:#00ff44">$${bookingTotal} ${currencyLabel}</td></tr>
+        ${depositHtml}
       </table>
-      <p style="color:#555;font-size:12px;margin:12px 0 0;line-height:1.6">The $${depositAmount} deposit is locked into a Sui escrow contract once you sign the escrow transaction, and is returned after checkout. ARIA's 5% fee applies to your stay cost only — never to your deposit.</p>
+      ${depositNoteHtml}
     </div>
     ${walrusHtml}
     <p style="color:#555;font-size:12px;text-align:center;margin:0">Powered by ARIA — Built on Sui | The Airbnb killer</p>
   </div>`;
+}
+
+// Server-authoritative pricing math (Finding #1) — factored out so it exists
+// in exactly one place. Previously duplicated inline in both createBooking
+// below and server.mjs's /payment/create-intent stub, which is exactly the
+// kind of drift that caused the 3%-vs-5% fee inconsistency fixed elsewhere
+// this session. Both the SuiUSD path (createBooking) and the Stripe card
+// path (createPendingCardBooking) call this for the shared subtotal/fee/tax
+// math; only createBooking additionally applies the deposit calc, since a
+// card-paid booking doesn't charge one (see createPendingCardBooking below).
+export function computeBookingPricing(prop, nights) {
+  const jurisdiction  = { rate: prop.taxRate, name: prop.taxName, breakdown: prop.taxBreakdown };
+  const subtotal      = prop.price * nights;
+  const ariaFee       = Math.round(subtotal * 0.05);
+  const taxes         = Math.round(subtotal * jurisdiction.rate);
+  const bookingTotal  = subtotal + ariaFee + taxes;
+  const depositAmount = Math.round(bookingTotal * 0.20);
+  const chargeAmount  = bookingTotal + depositAmount;
+  return { jurisdiction, subtotal, ariaFee, taxes, bookingTotal, depositAmount, chargeAmount };
 }
 
 // createBooking — the one and only place booking-creation logic lives.
@@ -434,15 +467,9 @@ export async function createBooking({ propertyId, checkIn, checkOut, guests, ses
     return { error: `This property sleeps up to ${prop.maxGuests ?? 2} guests` };
   }
 
-  const jurisdiction  = { rate: prop.taxRate, name: prop.taxName, breakdown: prop.taxBreakdown };
   const propertyTitle = prop.title;
   const pricePerNight = prop.price;
-  const subtotal       = pricePerNight * nights;
-  const ariaFee        = Math.round(subtotal * 0.05);
-  const taxes          = Math.round(subtotal * jurisdiction.rate);
-  const bookingTotal   = subtotal + ariaFee + taxes;
-  const depositAmount  = Math.round(bookingTotal * 0.20);
-  const chargeAmount   = bookingTotal + depositAmount;
+  const { jurisdiction, subtotal, ariaFee, taxes, bookingTotal, depositAmount, chargeAmount } = computeBookingPricing(prop, nights);
   const hostPayout     = calculateHostPayout(subtotal);
   const taxPct         = (jurisdiction.rate * 100).toFixed(2);
   // Phase 3c (Finding #12): timestamp-only refs could collide under concurrent
@@ -636,4 +663,231 @@ export async function createBooking({ propertyId, checkIn, checkOut, guests, ses
     // verifies both escrows. False = deposit-only legacy build.
     paymentEscrowBuilt
   };
+}
+
+// ─── Stripe Checkout card-payment path (M6, July 2026) ─────────────────────
+// A fallback to the SuiUSD escrow flow above for guests who'd rather pay by
+// card. Uses Stripe's hosted Checkout (not embedded Elements) deliberately:
+// card data never touches ARIA's code, there's no PCI scope on us, and it's
+// a single redirect instead of the escrow flow's build/sign/submit/verify
+// dance. Trade-off, stated plainly: this path has no refundable security
+// deposit, no check-in pass, no resale — those are all Sui-escrow-native
+// concepts (see releaseDepositForBooking, hostManagesBooking's escrow checks)
+// that a one-time card charge has no equivalent for yet. deposit_amount and
+// deposit_status are left NULL for these bookings specifically so none of
+// that UI (gated on depositStatus === 'pending'/'held') lights up by mistake.
+//
+// createPendingCardBooking holds the dates (same idea as the SuiUSD path
+// holding them via deposit_status='pending') and returns pricing for the
+// caller (server.mjs) to build a Stripe Checkout Session against. Nothing is
+// "confirmed" here — only confirmCardBooking (driven by a verified Stripe
+// webhook) does that.
+export async function createPendingCardBooking({ propertyId, checkIn, checkOut, guests, session, logger = console }) {
+  if (!propertyId || !checkIn || !checkOut) {
+    return { error: 'propertyId, checkIn, and checkOut are required' };
+  }
+  const prop = await getProperty(propertyId, logger);
+  if (!prop) return { error: 'Unknown propertyId' };
+  if (isNaN(new Date(checkIn)) || isNaN(new Date(checkOut))) {
+    return { error: 'checkIn and checkOut must be valid dates (YYYY-MM-DD)' };
+  }
+  if (new Date(checkOut) <= new Date(checkIn)) {
+    return { error: 'checkOut must be after checkIn' };
+  }
+
+  if (process.env.REQUIRE_GUEST_VERIFICATION === 'true') {
+    try {
+      const v = await pool.query('SELECT 1 FROM guest_verifications WHERE sui_address = $1', [session.suiAddress]);
+      if (!v.rows.length) {
+        return { error: 'Complete identity verification first', status: 400, needsVerification: true };
+      }
+    } catch (err) {
+      logger?.error?.({ err }, 'createPendingCardBooking: guest verification check failed');
+      return { error: 'Could not verify your identity status. Please try again.', status: 503 };
+    }
+  }
+
+  const checkInStr  = new Date(checkIn).toISOString().split('T')[0];
+  const checkOutStr = new Date(checkOut).toISOString().split('T')[0];
+  const nights = Math.round((new Date(checkOutStr) - new Date(checkInStr)) / (1000 * 60 * 60 * 24));
+  if (!nights || nights < 1 || nights > 90) {
+    return { error: 'Stay length must be between 1 and 90 nights' };
+  }
+
+  const guestCount = guests == null || guests === '' ? 1 : Number(guests);
+  if (!Number.isInteger(guestCount) || guestCount < 1) {
+    return { error: 'Number of guests must be a positive whole number' };
+  }
+  if (guestCount > (prop.maxGuests ?? 2)) {
+    return { error: `This property sleeps up to ${prop.maxGuests ?? 2} guests` };
+  }
+
+  const propertyTitle = prop.title;
+  const pricePerNight = prop.price;
+  // Stay cost only (subtotal + fee + tax) — no deposit added to the card
+  // charge; see the module comment above for why.
+  const { jurisdiction, subtotal, ariaFee, taxes, bookingTotal } = computeBookingPricing(prop, nights);
+  const bookingRef = `ARIA-${propertyId}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+
+  // Same atomic conflict-check-and-insert pattern as createBooking (Findings
+  // #3 and #6) — a pending card booking holds the dates exactly like a
+  // pending SuiUSD one does, so the same per-property advisory lock and
+  // payment_status != 'cancelled' overlap check apply unchanged.
+  let client;
+  try {
+    client = await pool.connect();
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock($1)', [Number(propertyId)]);
+
+    const conflict = await client.query(
+      `SELECT booking_ref FROM bookings
+       WHERE property_id = $1 AND payment_status != 'cancelled'
+       AND check_in < $3 AND check_out > $2`,
+      [propertyId, checkInStr, checkOutStr]
+    );
+    if (conflict.rows.length > 0) {
+      await client.query('ROLLBACK');
+      return { error: 'Property not available for selected dates', conflicts: conflict.rows };
+    }
+
+    // deposit_status is set explicitly to NULL rather than omitted — the
+    // table's column DEFAULT is 'held' (correct for a real SuiUSD escrow
+    // booking, wrong here), and an omitted column takes that default instead
+    // of NULL. Leaving this implicit previously meant every Stripe booking's
+    // deposit_status silently read 'held' despite there being no deposit and
+    // no escrow — self-identified and fixed alongside the identity-
+    // attestation work since both touch this same INSERT.
+    await client.query(
+      `INSERT INTO bookings (booking_ref, property_id, property_title, wallet_address, guest_name, guest_email,
+        check_in, check_out, nights, price_per_night, subtotal, aria_fee, taxes, total_amount,
+        payment_status, payment_method, original_wallet_address, guests, deposit_status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'pending','stripe',$4,$15,NULL)`,
+      [bookingRef, propertyId, propertyTitle, session.suiAddress, session.name, session.email,
+       checkInStr, checkOutStr, nights, pricePerNight, subtotal, ariaFee, taxes, bookingTotal, guestCount]
+    );
+    await client.query('COMMIT');
+  } catch (err) {
+    if (client) { try { await client.query('ROLLBACK'); } catch {} }
+    logger?.error?.({ err, bookingRef }, 'DB pending card booking save failed');
+    return { error: 'Could not start your payment. Please try again.', status: 503 };
+  } finally {
+    if (client) client.release();
+  }
+
+  return {
+    bookingRef, propertyTitle, checkInStr, checkOutStr, nights,
+    subtotal, ariaFee, taxes, bookingTotal,
+    jurisdictionName: jurisdiction.name
+  };
+}
+
+// Called by server.mjs's POST /webhooks/stripe once Stripe's signature is
+// verified and the event is checkout.session.completed — this is the ONLY
+// thing that flips a card-paid booking to 'confirmed' (M6's actual fix: the
+// old code let the frontend fake this state without any real confirmation).
+// Idempotent by construction: the UPDATE's WHERE clause only matches a
+// still-'pending' row, so a duplicate webhook delivery (Stripe retries
+// anything that doesn't get back a 2xx) just matches zero rows and no-ops.
+export async function confirmCardBooking({ stripeCheckoutSessionId, stripePaymentIntentId, logger = console }) {
+  let updated;
+  try {
+    updated = await pool.query(
+      `UPDATE bookings SET payment_status = 'confirmed', stripe_payment_intent_id = $1
+       WHERE stripe_checkout_session_id = $2 AND payment_status = 'pending'
+       RETURNING *`,
+      [stripePaymentIntentId, stripeCheckoutSessionId]
+    );
+  } catch (err) {
+    logger?.error?.({ err, stripeCheckoutSessionId }, 'confirmCardBooking: UPDATE failed');
+    return { error: 'db_error' };
+  }
+  if (updated.rows.length === 0) {
+    logger?.info?.({ stripeCheckoutSessionId }, 'confirmCardBooking: no pending row matched (likely a duplicate webhook delivery, or the session was already expired/cancelled)');
+    return { alreadyProcessed: true };
+  }
+
+  const b = updated.rows[0];
+  const prop = await getProperty(b.property_id, logger).catch(() => null);
+  const jurisdictionName = prop?.taxName || 'Occupancy Tax';
+  const taxPct = prop ? (prop.taxRate * 100).toFixed(2) : '';
+
+  // M6 follow-up (Seal/Stripe parity): give this Stripe booking the same
+  // host-side "View Guest Identity" capability a SuiUSD booking gets for
+  // free from its guest-signed escrow_object_id. Best-effort and non-
+  // blocking — a failure here must never fail booking confirmation itself
+  // (the guest is already charged and the stay is real); it only means this
+  // host won't be able to decrypt this guest's identity later, which
+  // /host/guest-identity already surfaces as a clear error rather than
+  // silently granting access some other way.
+  try {
+    const hostAddr = await getPropertyHostAddress(b.property_id, logger);
+    if (hostAddr) {
+      const attestationId = await createIdentityAttestationEscrow(b.booking_ref, b.wallet_address, hostAddr, logger);
+      if (attestationId) {
+        await pool.query('UPDATE bookings SET identity_attestation_object_id = $1 WHERE booking_ref = $2', [attestationId, b.booking_ref]);
+      } else {
+        logger?.warn?.({ bookingRef: b.booking_ref }, 'confirmCardBooking: identity attestation escrow could not be created — host identity access unavailable for this booking');
+      }
+    }
+  } catch (err) {
+    logger?.warn?.({ err, bookingRef: b.booking_ref }, 'confirmCardBooking: identity attestation step failed');
+  }
+
+  const receipt = {
+    bookingRef: b.booking_ref, app: 'ARIA Demo', network: 'stripe:test',
+    timestamp: new Date().toISOString(), property: b.property_title, propertyId: b.property_id,
+    checkIn: b.check_in, checkOut: b.check_out, nights: b.nights, guests: b.guests,
+    breakdown: {
+      pricePerNight: `$${b.price_per_night}`, nights: b.nights,
+      subtotal: `$${b.subtotal}`,
+      ariaFee: `$${b.aria_fee} (5% of subtotal)`,
+      taxes: `$${b.taxes} (${jurisdictionName})`,
+      bookingTotal: `$${b.total_amount} USD`
+    },
+    walletAddress: b.wallet_address, guestName: b.guest_name, guestEmail: b.guest_email,
+    paymentMethod: 'stripe', paymentStatus: 'confirmed',
+    stripeCheckoutSessionId, stripePaymentIntentId,
+    jurisdiction: jurisdictionName
+  };
+  const walrusBlobId = await pushToWalrus(receipt, logger);
+  if (walrusBlobId) {
+    try { await pool.query('UPDATE bookings SET walrus_blob_id = $1 WHERE booking_ref = $2', [walrusBlobId, b.booking_ref]); }
+    catch (err) { logger?.warn?.({ err }, 'confirmCardBooking: Walrus blob id update failed'); }
+  }
+
+  if (b.guest_email) {
+    try {
+      await resend.emails.send({
+        from: 'ARIA <onboarding@resend.dev>', to: b.guest_email,
+        subject: `Booking Confirmed — ${b.property_title} | Ref: ${b.booking_ref}`,
+        html: buildConfirmationEmailHtml({
+          propertyTitle: b.property_title, bookingRef: b.booking_ref, checkIn: b.check_in, checkOut: b.check_out, nights: b.nights,
+          subtotal: b.subtotal, ariaFee: b.aria_fee, taxes: b.taxes, taxPct, jurisdictionName,
+          bookingTotal: b.total_amount, depositAmount: null, walrusBlobId, guestName: b.guest_name,
+          paymentMethod: 'stripe'
+        })
+      });
+    } catch (err) { logger?.warn?.({ err }, 'confirmCardBooking: confirmation email failed'); }
+  }
+
+  return { success: true, bookingRef: b.booking_ref, walrusBlobId };
+}
+
+// Called by server.mjs's POST /webhooks/stripe on checkout.session.expired
+// (guest never completed the card form, or closed the tab) — releases the
+// held dates back to the calendar, mirroring the existing abandoned-booking
+// sweep's behavior for the SuiUSD path. Also the target of a fallback sweep
+// (server.mjs) for the rare case where this webhook itself never arrives.
+export async function cancelPendingCardBooking({ stripeCheckoutSessionId, logger = console }) {
+  try {
+    const result = await pool.query(
+      `UPDATE bookings SET payment_status = 'cancelled', cancelled_at = NOW()
+       WHERE stripe_checkout_session_id = $1 AND payment_status = 'pending'`,
+      [stripeCheckoutSessionId]
+    );
+    return { released: result.rowCount > 0 };
+  } catch (err) {
+    logger?.error?.({ err, stripeCheckoutSessionId }, 'cancelPendingCardBooking: UPDATE failed');
+    return { error: 'db_error' };
+  }
 }

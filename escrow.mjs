@@ -284,6 +284,92 @@ export async function buildEscrowTransaction(bookingRef, guestAddr, hostAddr, de
   }
 }
 
+// M6 follow-up (Seal/Stripe parity, July 2026): host.jsx's "View Guest
+// Identity" is gated on-chain by escrow.move's seal_approve, which requires a
+// REAL &BookingEscrow<T> object to check id==escrow.guest and
+// sender==escrow.host against. Stripe-paid bookings never produce one — there
+// is no guest wallet signature anywhere in the card-payment path, so
+// buildEscrowTransaction above (guest-signed) doesn't apply. The only
+// alternative that doesn't compromise ARIA's non-custodial PII architecture
+// (Seal's key servers, not ARIA's backend, decide access — see the "does this
+// mean Aria custodies PII" discussion in ARIA_ROADMAP.md) is to have ARIA's
+// own zero-privilege auto-release key create a normal escrow object for these
+// bookings using the SAME create_escrow entry function, funded with a trivial
+// amount. This is UNLIKE every other autoReleaseKeypair call in this file —
+// those all act on an existing shared object; this one creates a brand-new
+// one and has to read its id back out of the execution result.
+//
+// Isolation, by construction:
+//   - amount is symbolic (depositToMist's floor-at-1) — meaningless here,
+//     since seal_approve never inspects amount, status, or expiry, only
+//     guest/host addresses.
+//   - expiry_ms is set ~1 year out so this object is never a realistic
+//     auto_release candidate — moot anyway since auto_release is only ever
+//     invoked by this codebase against escrow_object_id / payment_escrow_
+//     object_id (see guardedAutoReleaseSweep in server.mjs), and this id is
+//     deliberately never written to either column — only to the dedicated
+//     identity_attestation_object_id (db.mjs).
+//   - callers MUST treat a null return as "no identity access for this
+//     booking" and must never fall back to an off-chain authorization path.
+export async function createIdentityAttestationEscrow(bookingRef, guestAddr, hostAddr, logger = console) {
+  if (!autoReleaseKeypair || !bookingRef || !guestAddr || !hostAddr || !process.env.ESCROW_PACKAGE_ID) return null;
+  const sender = autoReleaseKeypair.toSuiAddress();
+  const mod = process.env.ESCROW_MODULE_NAME || 'escrow';
+  try {
+    const arbitrator = process.env.ARIA_ARBITRATOR_ADDRESS || hostAddr;
+    const expiryMs = BigInt(Date.now()) + 365n * 24n * 60n * 60n * 1000n; // ~1 year — see isolation notes above
+    const attestationMist = depositToMist(1); // trivial, symbolic testnet amount
+
+    const tx = new Transaction();
+    tx.setSender(sender);
+    const coin = coinWithBalance({ balance: attestationMist });
+
+    tx.moveCall({
+      target: `${process.env.ESCROW_PACKAGE_ID}::${mod}::create_escrow`,
+      typeArguments: [COIN_TYPE()],
+      arguments: [
+        tx.pure.string(bookingRef),
+        tx.pure.address(guestAddr),
+        tx.pure.address(hostAddr),
+        tx.pure.address(arbitrator),
+        tx.pure.u64(expiryMs),
+        coin,
+        tx.object('0x6'), // Clock
+      ],
+    });
+
+    const result = await autoReleaseKeypair.signAndExecuteTransaction({
+      transaction: tx,
+      client: suiClient,
+      include: { effects: true, objectTypes: true },
+    });
+
+    // Same discriminated-union shape as every other client.core call in this
+    // file — see the long comment above verifyEscrowTransaction's unwrap.
+    if (result?.$kind !== 'Transaction') {
+      logger?.warn?.({ bookingRef, err: result?.FailedTransaction?.status?.error?.message }, 'createIdentityAttestationEscrow failed on-chain');
+      return null;
+    }
+    const txn = result.Transaction;
+
+    const isOurEscrowType = (t) => typeof t === 'string' && new RegExp(`::${mod}::BookingEscrow<`).test(t);
+    const objectTypes = txn?.objectTypes || {};
+    let escrowId = null;
+    for (const [oid, t] of Object.entries(objectTypes)) {
+      if (isOurEscrowType(t)) { escrowId = oid; break; }
+    }
+    if (!escrowId) escrowId = extractCreatedObjectId(txn?.effects?.changedObjects);
+    if (!escrowId) {
+      logger?.warn?.({ bookingRef }, 'createIdentityAttestationEscrow: no created object found in transaction effects');
+      return null;
+    }
+    return escrowId;
+  } catch (err) {
+    logger?.warn?.({ bookingRef, err: err.message }, 'createIdentityAttestationEscrow threw');
+    return null;
+  }
+}
+
 // ── Lag-free PTB-argument decoding ──────────────────────────────────────────
 // The strict object-content check below depends on getObjects, which on public
 // testnet fullnodes can fail to serve a just-created object for >1 min. These

@@ -192,6 +192,38 @@ export async function initDB() {
   // mint_booking_pass). Stores the object id so the UI can link to it.
   await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS booking_pass_object_id TEXT`);
 
+  // M6 (Stripe Checkout, July 2026): the card-payment fallback path. A
+  // stripe-paid booking is inserted with payment_status='pending' (holding
+  // the dates, same idea as the SuiUSD path's deposit_status='pending' window)
+  // and only flips to 'confirmed' when POST /webhooks/stripe verifies a
+  // checkout.session.completed event — never on the frontend's say-so. These
+  // columns let the webhook find the right row and record what Stripe says
+  // actually happened. Deliberately no deposit for this path (deposit_amount/
+  // deposit_status stay NULL, which the existing CHECK constraint below
+  // already allows since NULL always satisfies a CHECK) — a refundable
+  // security deposit is a Sui-escrow-native concept (release, check-in pass,
+  // resale all key off it) that a card charge has no equivalent for yet.
+  await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS stripe_checkout_session_id TEXT`);
+  await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS stripe_payment_intent_id TEXT`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_bookings_stripe_session ON bookings(stripe_checkout_session_id) WHERE stripe_checkout_session_id IS NOT NULL`);
+
+  // M6 follow-up (Seal/Stripe parity, July 2026): Stripe bookings have no
+  // guest-signed escrow_object_id (no guest wallet signature ever happens in
+  // the card flow), so host.jsx's "View Guest Identity" — gated on-chain by
+  // escrow.move's seal_approve, which requires a REAL &BookingEscrow<T>
+  // object — had no object to check against for card guests. Rather than
+  // building any off-chain authorization fallback (which would mean ARIA's
+  // backend deciding PII access instead of Seal's key servers dry-running
+  // on-chain state — genuine custody, rejected), ARIA's own auto-release key
+  // now creates a normal BookingEscrow<T> object for these bookings via the
+  // EXISTING create_escrow entry function, funded with a trivial testnet
+  // amount, with guest/host set to the booking's real addresses. Its ONLY
+  // purpose is satisfying seal_approve's on-chain check — it is NOT a payment
+  // or deposit escrow and must never be read by autoReleaseEscrow, the
+  // deposit sweep, refund logic, resale, or the check-in-pass flow, which is
+  // why it lives in its own dedicated column, never escrow_object_id.
+  await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS identity_attestation_object_id TEXT`);
+
   // ── Phase 2: guest PII verification (Walrus + Seal) ───────────────────────
   // Holds only a POINTER to the guest's Seal-encrypted PII blob on Walrus — no
   // PII columns ever live in Postgres. The blob is encrypted client-side under
@@ -250,10 +282,17 @@ export async function initDB() {
   // so existing rows aren't re-checked (no startup failure); enforced on new
   // writes. Idempotent via pg_constraint lookup.
   await pool.query(`DO $$ BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='chk_bookings_payment_status') THEN
-      ALTER TABLE bookings ADD CONSTRAINT chk_bookings_payment_status
-        CHECK (payment_status IN ('confirmed','cancelled')) NOT VALID;
+    -- M6: widened to add 'pending' (a Stripe Checkout Session awaiting the
+    -- webhook) and 'failed' (Stripe reported the charge itself failed, as
+    -- opposed to 'cancelled' which covers guest/host cancellation and
+    -- Checkout Session expiry). Drop-and-recreate since Postgres has no
+    -- ALTER CONSTRAINT for CHECK clauses; NOT VALID again so this is a no-op
+    -- against existing rows on every boot.
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='chk_bookings_payment_status') THEN
+      ALTER TABLE bookings DROP CONSTRAINT chk_bookings_payment_status;
     END IF;
+    ALTER TABLE bookings ADD CONSTRAINT chk_bookings_payment_status
+      CHECK (payment_status IN ('pending','confirmed','cancelled','failed')) NOT VALID;
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='chk_bookings_deposit_status') THEN
       ALTER TABLE bookings ADD CONSTRAINT chk_bookings_deposit_status
         CHECK (deposit_status IN ('pending','held','released','claimed','disputed','forfeited')) NOT VALID;

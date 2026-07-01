@@ -728,7 +728,7 @@ export default function Host() {
         <div className="hs-stats-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '16px', marginBottom: '32px' }}>
           {[
             { label: 'TOTAL BOOKINGS', value: activeBookings.length, color: '#00913f', sub: `${cancelledBookings.length} cancelled` },
-            { label: 'GROSS REVENUE', value: `$${totalRevenue.toLocaleString()}`, color: '#00913f', sub: 'SuiUSD' },
+            { label: 'GROSS REVENUE', value: `$${totalRevenue.toLocaleString()}`, color: '#00913f', sub: 'SuiUSD + card' },
             { label: 'ARIA FEES (5%)', value: `$${totalAriaFees.toLocaleString()}`, color: '#d23f3f', sub: 'vs 15% Airbnb' },
             { label: 'YOUR EARNINGS', value: `$${hostEarnings.toLocaleString()}`, color: '#1f6fd6', sub: 'net payout' },
             { label: 'ACTIVE LISTINGS', value: myProperties.length, color: '#00913f', sub: 'properties' },

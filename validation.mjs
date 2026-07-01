@@ -25,9 +25,16 @@ export const bookingCreateSchema = z.object({
   guests: z.union([z.string(), z.number()]).optional()
 });
 
+// M6: was { propertyId, nights } — the old stub never even recorded WHICH
+// dates were being booked. Now mirrors bookingCreateSchema's shape since
+// /payment/create-intent creates a real held booking row (see
+// createPendingCardBooking), and nights is derived from the dates
+// server-side rather than trusted from the client, same as the SuiUSD path.
 export const paymentCreateIntentSchema = z.object({
   propertyId: propertyIdField,
-  nights: z.union([z.string(), z.number()])
+  checkIn: z.string().min(1, 'checkIn is required'),
+  checkOut: z.string().min(1, 'checkOut is required'),
+  guests: z.union([z.string(), z.number()]).optional()
 });
 
 export const hostApplySchema = z.object({

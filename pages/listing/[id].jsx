@@ -176,13 +176,50 @@ export default function Listing() {
     }
   };
 
+  // M6: was a stub — created a Stripe PaymentIntent but never loaded Stripe.js
+  // or actually confirmed a charge, then faked a local "booking" object. Now
+  // redirects to hosted Stripe Checkout: the backend creates a real held
+  // booking (payment_status='pending') plus a Checkout Session for the exact
+  // server-computed total, and this just navigates the browser there. No card
+  // data ever touches ARIA's code. POST /webhooks/stripe (signature-verified,
+  // server-side) is the only thing that confirms the booking once Stripe
+  // reports the charge succeeded — see server.mjs.
   const handleCardPayment = async () => {
     if (!checkIn || !checkOut) { alert('Please select check-in and check-out dates'); return; }
     setBookingLoading(true);
-    const res = await authFetch(`${API}/payment/create-intent`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ propertyId: property.id, nights }) });
-    const data = await res.json();
-    if (data.clientSecret) { setBooking({ bookingRef: 'STRIPE-' + Date.now(), stripeIntent: true }); }
-    setBookingLoading(false);
+    try {
+      const res = await authFetch(`${API}/payment/create-intent`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          propertyId: property.id,
+          checkIn: checkIn.toISOString().split('T')[0],
+          checkOut: checkOut.toISOString().split('T')[0],
+          guests
+        })
+      });
+      const data = await res.json();
+      if (data.error === 'Property not available for selected dates') {
+        alert('Sorry — those dates are already booked. Please select different dates.');
+        setBookingLoading(false);
+        return;
+      }
+      if (!res.ok && data.needsVerification) {
+        alert('Complete identity verification first. Redirecting to your profile.');
+        setBookingLoading(false);
+        router.push('/profile');
+        return;
+      }
+      if (!res.ok || !data.url) {
+        alert(data.error || 'Could not start card payment. Please try again.');
+        setBookingLoading(false);
+        return;
+      }
+      window.location.href = data.url; // full-page redirect to Stripe Checkout
+    } catch (err) {
+      console.error('Card payment failed:', err);
+      alert('Could not start card payment. Please try again.');
+      setBookingLoading(false);
+    }
   };
 
   if (authLoading || propLoading) {

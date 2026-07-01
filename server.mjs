@@ -30,7 +30,7 @@ import {
   dollarsToUnits,
   buildSendTransaction, verifySendTransaction
 } from './escrow.mjs';
-import { createBooking, releaseDepositForBooking, cancelBooking, hostManagesBooking, getPropertyHostAddress, getResaleSettings } from './bookings.mjs';
+import { createBooking, releaseDepositForBooking, cancelBooking, hostManagesBooking, getPropertyHostAddress, getResaleSettings, createPendingCardBooking, confirmCardBooking, cancelPendingCardBooking } from './bookings.mjs';
 import { pushToWalrus, pushImageToWalrus } from './walrus.mjs';
 import { escapeHtml } from './emails.mjs';
 import {
@@ -441,7 +441,18 @@ fastify.get('/host/guest-identity/:bookingRef', async (request, reply) => {
   if (!booking) return reply.code(404).send({ error: 'Booking not found' });
   if (!(await hostManagesBooking(session, booking)))
     return reply.code(403).send({ error: 'You do not manage this booking' });
-  if (!booking.escrow_object_id)
+  // M6 follow-up (Seal/Stripe parity): a Stripe-paid booking never gets a
+  // guest-signed escrow_object_id (no guest wallet transaction happens in the
+  // card-payment path at all), so it falls back to
+  // identity_attestation_object_id — a real BookingEscrow<T> object ARIA's
+  // backend creates specifically to satisfy seal_approve's on-chain check
+  // (see createIdentityAttestationEscrow in escrow.mjs and its call site in
+  // bookings.mjs's confirmCardBooking). Either column is a real, on-chain
+  // BookingEscrow<T> object with this booking's actual guest/host addresses —
+  // seal_approve itself can't tell which path produced it, and doesn't need
+  // to. SuiUSD bookings keep using escrow_object_id unchanged.
+  const sealEscrowObjectId = booking.escrow_object_id || booking.identity_attestation_object_id;
+  if (!sealEscrowObjectId)
     return reply.code(409).send({ error: 'No active escrow for this booking — identity access requires a live booking' });
 
   let gv;
@@ -464,7 +475,7 @@ fastify.get('/host/guest-identity/:bookingRef', async (request, reply) => {
 
   return {
     blobId: gv.rows[0].walrus_blob_id,
-    escrowObjectId: booking.escrow_object_id,
+    escrowObjectId: sealEscrowObjectId,
     guestAddress: booking.wallet_address,
   };
 });
@@ -482,35 +493,146 @@ fastify.get('/auth/logout', async (request, reply) => {
   return { success: true };
 });
 
-// Stripe
-fastify.post('/payment/create-intent', async (request, reply) => {
+// Stripe Checkout (M6, July 2026) — card-payment fallback to the SuiUSD
+// escrow flow. The old version created a PaymentIntent and handed back its
+// clientSecret, but the frontend never actually loaded Stripe.js or called
+// confirmCardPayment — it just faked a success state locally, so a booking
+// could show as paid with no card ever having been charged. Fixed by
+// switching to hosted Stripe Checkout (guest is redirected to Stripe's own
+// page — no card data ever touches ARIA) and only trusting a real,
+// signature-verified webhook event (POST /webhooks/stripe below) to mark the
+// booking paid. This also fixes a second bug: the old route only took
+// {propertyId, nights} and never recorded which dates were being booked.
+fastify.post('/payment/create-intent', {
+  config: {
+    rateLimit: {
+      max: 5,
+      timeWindow: '15 minutes',
+      errorResponseBuilder: () => ({ error: 'Too many payment attempts. Please wait 15 minutes and try again.' })
+    }
+  }
+}, async (request, reply) => {
   const session = await getAuthedSession(request, reply);
   if (!session) return;
   if (validateBody(paymentCreateIntentSchema, request, reply)) return;
 
-  const { propertyId } = request.body;
-  const nights = Number(request.body.nights);
-  const prop = await getProperty(propertyId);
-  if (!prop) return reply.code(400).send({ error: 'Unknown propertyId' });
-  if (!nights || nights < 1 || nights > 90)
-    return reply.code(400).send({ error: 'nights must be between 1 and 90' });
+  const { propertyId, checkIn, checkOut, guests } = request.body;
+  const result = await createPendingCardBooking({ propertyId, checkIn, checkOut, guests, session, logger: fastify.log });
+  if (result.error) {
+    return reply.code(result.status || 400).send({
+      error: result.error,
+      ...(result.needsVerification ? { needsVerification: true } : {}),
+      ...(result.conflicts ? { conflicts: result.conflicts } : {})
+    });
+  }
 
-  // Server-authoritative charge total — mirrors /booking/create's math.
-  // Never trust a client-sent `amount` for a real Stripe charge (Finding #1).
-  const jurisdiction  = { rate: prop.taxRate, name: prop.taxName };
-  const subtotal      = prop.price * nights;
-  const ariaFee       = Math.round(subtotal * 0.05);
-  const taxes         = Math.round(subtotal * jurisdiction.rate);
-  const bookingTotal  = subtotal + ariaFee + taxes;
-  const depositAmount = Math.round(bookingTotal * 0.20);
-  const chargeAmount  = bookingTotal + depositAmount;
+  const { bookingRef, propertyTitle, nights, bookingTotal } = result;
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+  // Must match lib/pricing.js's getCardTotal exactly — that's what the guest
+  // saw on the "Pay with Card" button before clicking. Stripe's own
+  // processing cost (~2.9% + $0.30) is passed through rather than absorbed,
+  // same policy the pre-existing (but previously unwired) pricing.js formula
+  // already encoded; toFixed(2) first so both sides round identically.
+  const cardTotalDollars = Number((bookingTotal * 1.029 + 0.30).toFixed(2));
 
-  const paymentIntent = await stripe.paymentIntents.create({
-    amount: chargeAmount * 100,
-    currency: 'usd',
-    metadata: { property: prop.title, propertyId: String(propertyId), walletAddress: session.suiAddress, email: session.email }
+  let checkoutSession;
+  try {
+    checkoutSession = await stripe.checkout.sessions.create({
+      mode: 'payment',
+      payment_method_types: ['card'],
+      customer_email: session.email || undefined,
+      line_items: [{
+        price_data: {
+          currency: 'usd',
+          product_data: { name: `${propertyTitle} — ${nights} night${nights > 1 ? 's' : ''}` },
+          unit_amount: Math.round(cardTotalDollars * 100),
+        },
+        quantity: 1,
+      }],
+      metadata: { bookingRef, propertyId: String(propertyId), walletAddress: session.suiAddress },
+      success_url: `${frontendUrl}/bookings?stripe=success&ref=${encodeURIComponent(bookingRef)}`,
+      cancel_url: `${frontendUrl}/listing/${propertyId}?stripe=cancelled`,
+      // 30 min: enough time to fill out a card form, short enough that a
+      // guest who abandons it doesn't hold these dates for long. The
+      // abandoned-card-booking sweep below is the fallback if this session's
+      // own checkout.session.expired webhook is somehow missed.
+      expires_at: Math.floor(Date.now() / 1000) + 30 * 60,
+    });
+  } catch (err) {
+    fastify.log.error({ err, bookingRef }, 'Stripe Checkout Session creation failed');
+    // Release the dates we just held — no point leaving a pending booking with no way to pay it.
+    try {
+      await pool.query(`UPDATE bookings SET payment_status='failed', cancelled_at=NOW() WHERE booking_ref=$1 AND payment_status='pending'`, [bookingRef]);
+    } catch (cleanupErr) { fastify.log.warn({ cleanupErr, bookingRef }, 'Failed to release booking after Stripe session error'); }
+    return reply.code(502).send({ error: 'Could not start the card payment. Please try again.' });
+  }
+
+  try {
+    await pool.query(`UPDATE bookings SET stripe_checkout_session_id=$1 WHERE booking_ref=$2`, [checkoutSession.id, bookingRef]);
+  } catch (err) { fastify.log.warn({ err, bookingRef }, 'Failed to persist stripe_checkout_session_id'); }
+
+  return { url: checkoutSession.url, bookingRef };
+});
+
+// POST /webhooks/stripe (M6) — the only thing that can move a card-paid
+// booking to 'confirmed' or release its held dates on expiry. Registered as
+// its own encapsulated plugin so the raw-buffer content-type parser below
+// applies ONLY to this route; every other route in the app keeps Fastify's
+// normal JSON parsing untouched (Fastify plugin registration is encapsulated
+// by default — a content-type parser added on the child `instance` here
+// doesn't leak to the parent `fastify` app). Signature verification
+// (stripe.webhooks.constructEvent) needs the exact raw bytes Stripe signed;
+// a body Fastify already JSON-parsed and re-serialized would not match.
+await fastify.register(async function stripeWebhookPlugin(instance) {
+  instance.addContentTypeParser('application/json', { parseAs: 'buffer' }, (req, body, done) => {
+    done(null, body);
   });
-  return { clientSecret: paymentIntent.client_secret, chargeAmount };
+
+  instance.post('/webhooks/stripe', async (request, reply) => {
+    const sig = request.headers['stripe-signature'];
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+    if (!webhookSecret) {
+      fastify.log.error('STRIPE_WEBHOOK_SECRET is not set — refusing all Stripe webhook events');
+      return reply.code(500).send({ error: 'Webhook not configured' });
+    }
+
+    let event;
+    try {
+      event = stripe.webhooks.constructEvent(request.body, sig, webhookSecret);
+    } catch (err) {
+      fastify.log.warn({ err: err.message }, 'Stripe webhook signature verification failed');
+      return reply.code(400).send({ error: 'Invalid signature' });
+    }
+
+    try {
+      switch (event.type) {
+        case 'checkout.session.completed': {
+          const cs = event.data.object;
+          // Not expanded at session-create time, so this is a plain string id.
+          const paymentIntentId = typeof cs.payment_intent === 'string' ? cs.payment_intent : (cs.payment_intent?.id || null);
+          const result = await confirmCardBooking({ stripeCheckoutSessionId: cs.id, stripePaymentIntentId: paymentIntentId, logger: fastify.log });
+          if (result.error) fastify.log.error({ result, sessionId: cs.id }, 'confirmCardBooking failed for a verified webhook event');
+          break;
+        }
+        case 'checkout.session.expired': {
+          const cs = event.data.object;
+          await cancelPendingCardBooking({ stripeCheckoutSessionId: cs.id, logger: fastify.log });
+          break;
+        }
+        default:
+          // Stripe sends many event types we don't act on — ack and move on
+          // rather than treating "unrecognized" as an error.
+          fastify.log.info({ type: event.type }, 'Unhandled Stripe webhook event type');
+      }
+    } catch (err) {
+      fastify.log.error({ err, type: event.type }, 'Stripe webhook handler crashed');
+      // 500 (not 200) so Stripe retries — confirmCardBooking/cancelPendingCardBooking
+      // are idempotent, so a retry is safe.
+      return reply.code(500).send({ error: 'Webhook handler error' });
+    }
+
+    return reply.code(200).send({ received: true });
+  });
 });
 
 // Booking Create
@@ -2051,11 +2173,17 @@ fastify.get('/bookings/history', async (request, reply) => {
     return { bookings: result.rows.map(b => {
       const chargeAmount = (b.total_amount || 0) + (b.deposit_amount || 0);
       const jur = histPropById.get(Number(b.property_id)) || { taxRate: 0.08, taxName: 'Occupancy Tax' };
+      // M6: paymentMethod was never returned here, so the frontend's
+      // `b.paymentMethod || 'SuiUSD'` fallback always fired — every booking
+      // displayed as SuiUSD regardless of the actual payment_method column.
+      // Currency label follows the same field so a card-paid booking's
+      // breakdown says USD instead of the wrong (and non-existent) "SuiUSD".
+      const currencyLabel = b.payment_method === 'stripe' ? 'USD' : 'SuiUSD';
       return {
         bookingRef: b.booking_ref, property: b.property_title, propertyId: b.property_id,
         checkIn: b.check_in, checkOut: b.check_out, nights: b.nights,
         totalAmount: b.total_amount, ariaFee: b.aria_fee, taxes: b.taxes, chargeAmount,
-        paymentStatus: b.payment_status,
+        paymentStatus: b.payment_status, paymentMethod: b.payment_method || 'SuiUSD',
         depositAmount: b.deposit_amount, depositStatus: b.deposit_status,
         bookingPassObjectId: b.booking_pass_object_id,
         walrusBlobId: b.walrus_blob_id,
@@ -2081,10 +2209,10 @@ fastify.get('/bookings/history', async (request, reply) => {
           subtotal: `$${b.subtotal}`,
           ariaFee: `$${b.aria_fee} (5% of subtotal only)`,
           taxes: `$${b.taxes} (${(jur.taxRate * 100).toFixed(2)}% — ${jur.taxName})`,
-          bookingTotal: `$${b.total_amount} SuiUSD`,
-          depositAmount: `$${b.deposit_amount} (refundable — no ARIA fee)`,
-          totalCharged: `$${chargeAmount} SuiUSD`,
-          totalPaid: `$${b.total_amount} SuiUSD`
+          bookingTotal: `$${b.total_amount} ${currencyLabel}`,
+          depositAmount: b.deposit_amount ? `$${b.deposit_amount} (refundable — no ARIA fee)` : null,
+          totalCharged: `$${chargeAmount} ${currencyLabel}`,
+          totalPaid: `$${b.total_amount} ${currencyLabel}`
         }
       };
     })};
@@ -2926,6 +3054,37 @@ const ABANDONED_BOOKING_TTL_MS = Number(process.env.ABANDONED_BOOKING_TTL_MS || 
 const ABANDONED_BOOKING_SWEEP_INTERVAL_MS = Number(process.env.ABANDONED_BOOKING_SWEEP_INTERVAL_MS || 5 * 60 * 1000);
 setInterval(guardedAbandonedBookingSweep, ABANDONED_BOOKING_SWEEP_INTERVAL_MS);
 setTimeout(guardedAbandonedBookingSweep, 20_000);
+
+// M6 fallback sweep: releases a Stripe-pending booking that never received
+// EITHER a checkout.session.completed OR checkout.session.expired webhook —
+// e.g. this server was down when Stripe tried to deliver it. Longer TTL than
+// the Checkout Session's own 30-minute expiry (see /payment/create-intent)
+// so this only fires when that expiry webhook itself went missing, not as
+// the normal path (that's cancelPendingCardBooking, driven by the webhook).
+const STRIPE_ABANDONED_TTL_MS = Number(process.env.STRIPE_ABANDONED_TTL_MS || 60 * 60 * 1000); // 1 hour
+async function runStripeAbandonedSweep() {
+  try {
+    const result = await pool.query(
+      `UPDATE bookings SET payment_status='cancelled', cancelled_at=NOW()
+       WHERE payment_method='stripe' AND payment_status='pending'
+       AND created_at < NOW() - ($1 || ' milliseconds')::interval`,
+      [STRIPE_ABANDONED_TTL_MS]
+    );
+    if (result.rowCount > 0) fastify.log.info({ count: result.rowCount }, 'Stripe abandoned-booking fallback sweep released stale pending bookings');
+  } catch (err) {
+    fastify.log.error({ err }, 'Stripe abandoned-booking fallback sweep query failed');
+  }
+}
+let _stripeAbandonedSweepRunning = false;
+async function guardedStripeAbandonedSweep() {
+  if (_stripeAbandonedSweepRunning) return;
+  _stripeAbandonedSweepRunning = true;
+  try { await runStripeAbandonedSweep(); }
+  catch (err) { fastify.log.error({ err }, 'Stripe abandoned-booking sweep crashed'); }
+  finally { _stripeAbandonedSweepRunning = false; }
+}
+setInterval(guardedStripeAbandonedSweep, ABANDONED_BOOKING_SWEEP_INTERVAL_MS);
+setTimeout(guardedStripeAbandonedSweep, 25_000);
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 const port = parseInt(process.env.PORT || '3001');

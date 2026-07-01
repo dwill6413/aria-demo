@@ -8,6 +8,18 @@ import { QRCodeSVG } from 'qrcode.react';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
+// M6 fix: whether a booking is actually funded/confirmed depends on the
+// payment method. For SuiUSD, payment_status is set to 'confirmed' the
+// instant the booking ROW is created — before the guest has even signed
+// anything — so deposit_status='held' (escrow verified on-chain) is the real
+// "did this guest actually pay" signal. For Stripe, there's no escrow at
+// all, so deposit_status stays null forever; payment_status only flips to
+// 'confirmed' once POST /webhooks/stripe verifies the charge. Using a single
+// depositStatus==='held' check for both (as the check-in button originally
+// did) meant a fully-paid Stripe guest could never check in and retrieve
+// their WiFi/gate code — this fixes that.
+const isBookingFunded = (b) => b.paymentMethod === 'stripe' ? b.paymentStatus === 'confirmed' : b.depositStatus === 'held';
+
 const fmtDate = (d) => new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
 const fmtDay = (d) => {
@@ -62,6 +74,9 @@ export default function Bookings() {
   const [checkInStatus, setCheckInStatus] = useState('idle'); // idle|loading|done|error
   const [checkInError, setCheckInError] = useState('');
   const [checkInResult, setCheckInResult] = useState(null); // { checkInType, instructions?, property }
+  // M6: banner for the return trip from Stripe Checkout (success_url/cancel_url
+  // in server.mjs's /payment/create-intent both point back here).
+  const [stripeBanner, setStripeBanner] = useState(null); // 'success' | 'cancelled' | null
 
   const submitCheckIn = async (b) => {
     setCheckInBooking(b);
@@ -76,11 +91,23 @@ export default function Bookings() {
         setCheckInStatus('error');
         return;
       }
-      if (data.checkInType === 'front_desk') {
-        // Open the existing BookingPass modal
+      if (data.checkInType === 'front_desk' && b.paymentMethod !== 'stripe') {
+        // Open the existing BookingPass modal — the rotating, wallet-signed QR
+        // proves the presenter holds the booking's Sui wallet. Only meaningful
+        // for a SuiUSD booking, which is the only kind that has a
+        // bookingPassObjectId (minted in the escrow PTB) to sign against.
         setCheckInBooking(null);
         setCheckInStatus('idle');
         openPass(b);
+      } else if (data.checkInType === 'front_desk') {
+        // M6: a Stripe-paid booking has no BookingPass NFT to present, so
+        // there's nothing to sign a QR against. Front-desk check-in for a
+        // card booking works the same way it does at any hotel — show your
+        // booking reference and ID at the desk — so this just surfaces that
+        // instead of a broken/empty pass modal.
+        setCheckInResult({ ...data, instructions: `Show this booking reference and a photo ID at the front desk:\n\nBooking Ref: ${b.bookingRef}\nGuest: ${user?.name || ''}` });
+        setCheckInStatus('done');
+        refreshBookings();
       } else {
         setCheckInResult(data);
         setCheckInStatus('done');
@@ -425,6 +452,26 @@ export default function Bookings() {
       .catch(() => { router.push('/'); });
   }, []);
 
+  // M6: the actual confirmation is driven by POST /webhooks/stripe (signature-
+  // verified, server-side) — this redirect is just UX feedback, not the source
+  // of truth. Stripe typically delivers the webhook before or around the same
+  // time as this redirect, but if it's still landing, the booking may briefly
+  // show "pending" here; the one-time refetch below gives it a couple seconds
+  // to catch up before the guest has to manually reload.
+  useEffect(() => {
+    if (!router.isReady) return;
+    const { stripe } = router.query;
+    if (stripe !== 'success' && stripe !== 'cancelled') return;
+    setStripeBanner(stripe);
+    router.replace('/bookings', undefined, { shallow: true });
+    if (stripe === 'success') {
+      const t = setTimeout(() => {
+        authFetch(`${API}/bookings/history`).then(r => r.json()).then(d => setBookings(d.bookings || [])).catch(() => {});
+      }, 2500);
+      return () => clearTimeout(t);
+    }
+  }, [router.isReady]);
+
   if (loading) return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#fff', color: '#222' }}>
       Loading your bookings...
@@ -525,6 +572,16 @@ export default function Bookings() {
 
       {/* Content */}
       <div style={{ maxWidth: '900px', margin: '0 auto', padding: '40px 24px' }}>
+        {stripeBanner === 'success' && (
+          <div style={{ background: '#eafaf0', border: '1px solid #c8ebd9', color: '#00913f', padding: '12px 16px', marginBottom: '20px', borderRadius: '8px', fontSize: '13px' }}>
+            ✅ Payment received. Your booking will show as confirmed as soon as Stripe's confirmation comes through — usually within a few seconds.
+          </div>
+        )}
+        {stripeBanner === 'cancelled' && (
+          <div style={{ background: '#fff8e1', border: '1px solid #ffe7a0', color: '#a66a00', padding: '12px 16px', marginBottom: '20px', borderRadius: '8px', fontSize: '13px' }}>
+            Card payment was cancelled — no charge was made and your dates weren't held. You can try again from the listing page.
+          </div>
+        )}
         <div style={{ marginBottom: '32px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '16px', flexWrap: 'wrap' }}>
           <div>
             <h1 style={{ fontSize: '24px', fontWeight: '700', margin: '0 0 8px', color: '#222' }}>My Bookings</h1>
@@ -561,7 +618,10 @@ export default function Bookings() {
                         color: b.paymentStatus === 'cancelled' ? '#d23f3f' : '#00913f',
                         fontSize: '11px', fontWeight: '600', padding: '3px 10px', borderRadius: '20px'
                       }}>
-                        {b.paymentStatus === 'cancelled' ? '✕ cancelled' : `✅ ${b.paymentStatus || 'confirmed'}`}
+                        {b.paymentStatus === 'cancelled' ? '✕ cancelled'
+                          : b.paymentStatus === 'pending' ? '⏳ awaiting payment confirmation'
+                          : b.paymentStatus === 'failed' ? '✕ payment failed'
+                          : `✅ ${b.paymentStatus || 'confirmed'}`}
                       </span>
                       {b.depositAmount && b.paymentStatus !== 'cancelled' && (
                         // Bug fix: this used to render "🔒 Deposit held" for ANY
@@ -596,9 +656,9 @@ export default function Bookings() {
                   </div>
                   <div style={{ textAlign: 'right' }}>
                     <div style={{ fontSize: '20px', fontWeight: '700', color: b.paymentStatus === 'cancelled' ? '#999' : '#00913f', textDecoration: b.paymentStatus === 'cancelled' ? 'line-through' : 'none' }}>
-                      {b.chargeAmount ? `$${b.chargeAmount} SuiUSD` : b.breakdown?.totalPaid || `$${b.totalAmount}`}
+                      {b.chargeAmount ? `$${b.chargeAmount} ${b.paymentMethod === 'stripe' ? 'USD' : 'SuiUSD'}` : b.breakdown?.totalPaid || `$${b.totalAmount}`}
                     </div>
-                    <div style={{ fontSize: '11px', color: '#999', marginTop: '2px' }}>{b.paymentMethod || 'SuiUSD'}</div>
+                    <div style={{ fontSize: '11px', color: '#999', marginTop: '2px' }}>{b.paymentMethod === 'stripe' ? '💳 Card (Stripe)' : (b.paymentMethod || 'SuiUSD')}</div>
                   </div>
                 </div>
 
@@ -646,7 +706,7 @@ export default function Bookings() {
                     )}
                     {b.chargeAmount && (
                       <div className="bk-breakdown-row" style={{ display: 'flex', justifyContent: 'space-between', fontWeight: '700' }}>
-                        <span>Total charged</span><span style={{ color: '#222' }}>${b.chargeAmount} SuiUSD</span>
+                        <span>Total charged</span><span style={{ color: '#222' }}>${b.chargeAmount} {b.paymentMethod === 'stripe' ? 'USD' : 'SuiUSD'}</span>
                       </div>
                     )}
                   </div>
@@ -683,22 +743,31 @@ export default function Bookings() {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
                   <div style={{ fontSize: '11px', color: '#999', fontFamily: 'monospace' }}>Ref: {b.bookingRef}</div>
                   <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                    {b.paymentStatus !== 'cancelled' && b.depositStatus === 'pending' && (
+                    {/* M6: explicit paymentMethod guard added as defense-in-depth — these
+                        buttons are Sui-escrow-specific (sign a PTB, present a BookingPass NFT)
+                        and shouldn't apply to a card-paid booking, which already can't reach
+                        depositStatus 'pending'/'held' at all since it's stored as NULL
+                        (see createPendingCardBooking). */}
+                    {b.paymentMethod !== 'stripe' && b.paymentStatus !== 'cancelled' && b.depositStatus === 'pending' && (
                       <button
                         onClick={() => handleResume(b.bookingRef)}
                         style={{ background: '#00913f', border: 'none', color: '#fff', fontSize: '12px', padding: '6px 14px', borderRadius: '6px', cursor: 'pointer', fontWeight: '700' }}>
                         ✍️ Complete payment & sign
                       </button>
                     )}
-                    {b.paymentStatus !== 'cancelled' && b.depositStatus === 'held' && (
+                    {b.paymentMethod !== 'stripe' && b.paymentStatus !== 'cancelled' && b.depositStatus === 'held' && (
                       <button
                         onClick={() => openPass(b)}
                         style={{ background: 'transparent', border: '1px solid #e0c8fa', color: '#8b3dff', fontSize: '12px', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontWeight: '600' }}>
                         🎫 Check-in Pass
                       </button>
                     )}
-                    {/* P4: Check In button — active bookings with held deposit, within 2h grace window */}
-                    {b.paymentStatus !== 'cancelled' && b.depositStatus === 'held' && (() => {
+                    {/* P4: Check In button — active, funded bookings, within 2h grace window.
+                        M6: uses isBookingFunded() (payment-method-aware) instead of a bare
+                        depositStatus==='held' check, which previously made this button
+                        impossible to see for a fully-paid Stripe booking (deposit_status is
+                        always null on that path — see isBookingFunded's comment). */}
+                    {b.paymentStatus !== 'cancelled' && isBookingFunded(b) && (() => {
                       const nowMs = Date.now();
                       const checkInMs = new Date(b.checkIn).getTime();
                       const checkOutMs = new Date(b.checkOut).getTime();

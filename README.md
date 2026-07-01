@@ -134,8 +134,12 @@ FRONTEND_URL=http://localhost:3000
 # Email
 RESEND_API_KEY=your_resend_api_key
 
-# Payments
+# Payments (card fallback to SuiUSD — hosted Stripe Checkout, see M6 in
+# ARIA_ROADMAP.md). STRIPE_WEBHOOK_SECRET comes from the Stripe Dashboard's
+# webhook endpoint config, pointed at POST /webhooks/stripe — required for
+# card bookings to ever confirm; the route safely rejects all events without it.
 STRIPE_SECRET_KEY=your_stripe_secret_key
+STRIPE_WEBHOOK_SECRET=your_stripe_webhook_signing_secret
 
 # AI
 XAI_API_KEY=your_xai_api_key
